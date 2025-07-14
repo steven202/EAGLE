@@ -160,7 +160,7 @@ def get_model_answers(
     model = EaModel.from_pretrained(
         base_model_path=base_model_path,
         ea_model_path=ea_model_path,
-        Type="Mixtral",
+        # Type="Mixtral",
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
         # load_in_8bit=True,

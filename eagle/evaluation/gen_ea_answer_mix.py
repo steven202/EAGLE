@@ -98,7 +98,7 @@ def get_model_answers(
     model = EaModel.from_pretrained(
         base_model_path=base_model_path,
         ea_model_path=ea_model_path,
-        Type="Mixtral",
+        # Type="Mixtral",
         total_token=args.total_token,
         depth=args.depth,
         top_k=args.top_k,
