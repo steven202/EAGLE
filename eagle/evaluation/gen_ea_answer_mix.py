@@ -369,7 +369,10 @@ if __name__ == "__main__":
         type=str,
         default="mc_sim_7b_63",
     )
-
+    parser.add_argument(
+        "--use_eagle3",
+        action="store_true"
+    )
     args = parser.parse_args()
 
     args.model_id = args.model_id + "-temperature-" + str(args.temperature)

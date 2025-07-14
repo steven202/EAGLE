@@ -370,7 +370,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--use-eagle3",
+        "--use_eagle3",
         action="store_true"
     )
 
