@@ -17,10 +17,10 @@ from fastchat.llm_judge.common import load_questions
 from fastchat.model import get_conversation_template
 
 #try:
-from model.utils import *
-from model.ea_model import EaModel
-from model.kv_cache import initialize_past_key_values
-from model.choices import *
+from eagle.model.utils import *
+from eagle.model.ea_model import EaModel
+from eagle.model.kv_cache import initialize_past_key_values
+from eagle.model.choices import *
 
 
 
