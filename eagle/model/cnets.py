@@ -543,9 +543,15 @@ class Model(nn.Module):
         for param in self.embed_tokens.parameters():
             param.requires_grad = False
 
-    def init_tree(self):
-        self.tree_mask_init = torch.eye(self.top_k, device=self.embed_tokens.weight.device)[None, None]
-        self.position_ids = torch.zeros(self.top_k, device=self.embed_tokens.weight.device, dtype=torch.long)
+    def init_tree(self, top_k=None):
+        # Allow dynamic top_k during runtime
+        if top_k is not None:
+            self.current_top_k = top_k
+        else:
+            self.current_top_k = self.top_k
+            
+        self.tree_mask_init = torch.eye(self.current_top_k, device=self.embed_tokens.weight.device)[None, None]
+        self.position_ids = torch.zeros(self.current_top_k, device=self.embed_tokens.weight.device, dtype=torch.long)
         self.tree_mask_init = self.tree_mask_init.to(self.embed_tokens.weight.device)
 
     def reset(self):
@@ -667,12 +673,19 @@ class Model(nn.Module):
         self.stable_kv = None
 
     @torch.no_grad()
-    def topK_genrate(self, hidden_states, input_ids, head, logits_processor):
+    def topK_genrate(self, hidden_states, input_ids, head, logits_processor, 
+                     total_tokens=None, depth=None, top_k=None):
 
         input_ids = input_ids.to(hidden_states.device)
-        total_tokens = self.total_tokens
-        depth = self.depth
-        top_k = self.top_k
+        
+        # Use dynamic parameters if provided, otherwise use default values
+        total_tokens = total_tokens if total_tokens is not None else self.total_tokens
+        depth = depth if depth is not None else self.depth
+        top_k = top_k if top_k is not None else self.top_k
+        
+        # Reinitialize tree structure if top_k changed
+        if not hasattr(self, 'current_top_k') or self.current_top_k != top_k:
+            self.init_tree(top_k)
 
         sample_token = input_ids[:, -1]
 

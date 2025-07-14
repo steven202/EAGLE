@@ -201,10 +201,25 @@ class EaModel(nn.Module):
             max_length=2048,
             log=False,
             is_llama3=False,
-
+            total_tokens=None,
+            depth=None,
+            tree_top_k=None,
     ):
         if is_llama3:
             stop_token_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+
+        # Store original parameters for restoration later
+        original_total_tokens = self.ea_layer.total_tokens
+        original_depth = self.ea_layer.depth
+        original_top_k = self.ea_layer.top_k
+        
+        # Temporarily update parameters if provided
+        if total_tokens is not None:
+            self.ea_layer.total_tokens = total_tokens - 1  # Adjust as in line 163
+        if depth is not None:
+            self.ea_layer.depth = depth
+        if tree_top_k is not None:
+            self.ea_layer.top_k = tree_top_k
 
 
         if temperature > 1e-5:
@@ -239,7 +254,7 @@ class EaModel(nn.Module):
         reset_tree_mode(self)
         # prefill
         draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
-            input_ids, self, past_key_values, logits_processor
+            input_ids, self, past_key_values, logits_processor, total_tokens, depth, tree_top_k
         )
         new_token = 0
         max_length = max_length - self.ea_layer.total_tokens - 10
@@ -292,6 +307,12 @@ class EaModel(nn.Module):
                 break
             if input_ids.shape[1] > max_length:
                 break
+        
+        # Restore original parameters
+        self.ea_layer.total_tokens = original_total_tokens
+        self.ea_layer.depth = original_depth
+        self.ea_layer.top_k = original_top_k
+        
         if not log:
             return input_ids
         else:
