@@ -175,46 +175,33 @@ class OnlineTreePolicy:
     
     def _learn_from_batch(self):
         """Learn from a batch of experiences using DQN"""
-        try:
-            batch = random.sample(self.memory, self.batch_size)
-            
-            # Convert states to numpy array first, then to tensor (more efficient)
-            state_data = np.array([exp['state'].detach().numpy() for exp in batch])
-            states = torch.FloatTensor(state_data).to(self.device)  # No requires_grad needed for inputs
-            actions = torch.LongTensor([exp['action'] for exp in batch]).to(self.device)
-            rewards = torch.FloatTensor([exp['reward'] for exp in batch]).to(self.device)
-            
-            # Ensure Q-network is in training mode
-            self.q_network.train()
-            
-            # Current Q-values (Q-network parameters will have gradients automatically)
-            current_q_values = self.q_network(states).gather(1, actions.unsqueeze(1))
-            
-            # Target Q-values (detached, no gradients needed)
-            with torch.no_grad():
-                target_q_values = rewards.unsqueeze(1)
-            
-            # Compute loss
-            loss = nn.MSELoss()(current_q_values, target_q_values)
-            
-            # Check if loss requires grad
-            if not loss.requires_grad:
-                print("Warning: Loss does not require gradients, skipping update")
-                return
-            
-            # Optimize
-            self.optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0)
-            self.optimizer.step()
-            
-            if self.step_count % 50 == 0:
-                avg_reward = np.mean(self.reward_history[-50:]) if self.reward_history else 0
-                print(f"Step {self.step_count}: Loss={loss.item():.4f}, Avg Reward={avg_reward:.4f}")
-                
-        except Exception as e:
-            print(f"Warning: Online learning failed with error: {e}")
-            print("Continuing without policy update...")
+        batch = random.sample(self.memory, self.batch_size)
+        
+        # Convert states to numpy array first, then to tensor (more efficient)
+        state_data = np.array([exp['state'].detach().numpy() for exp in batch])
+        states = torch.FloatTensor(state_data).to(self.device)  # No requires_grad needed for inputs
+        actions = torch.LongTensor([exp['action'] for exp in batch]).to(self.device)
+        rewards = torch.FloatTensor([exp['reward'] for exp in batch]).to(self.device)
+        
+        # Current Q-values (Q-network parameters will have gradients automatically)
+        current_q_values = self.q_network(states).gather(1, actions.unsqueeze(1))
+        
+        # Target Q-values (detached, no gradients needed)
+        with torch.no_grad():
+            target_q_values = rewards.unsqueeze(1)
+        
+        # Compute loss
+        loss = nn.MSELoss()(current_q_values, target_q_values)
+        
+        # Optimize
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0)
+        self.optimizer.step()
+        
+        if self.step_count % 50 == 0:
+            avg_reward = np.mean(self.reward_history[-50:]) if self.reward_history else 0
+            print(f"Step {self.step_count}: Loss={loss.item():.4f}, Avg Reward={avg_reward:.4f}")
     
     def get_performance_stats(self):
         """Get performance statistics"""

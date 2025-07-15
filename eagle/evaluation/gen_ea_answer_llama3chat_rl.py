@@ -90,7 +90,6 @@ def run_eval(
         ray.get(ans_handles)
 
 
-@torch.inference_mode()
 def get_model_answers(
         base_model_path,
         ea_model_path,
@@ -196,7 +195,7 @@ def get_model_answers(
             full_context = " ".join([msg["content"] for msg in messages])
             
             if online_policy is not None:
-                # Online RL: predict and learn in real-time
+                # Online RL: predict parameters (inference mode during warmup)
                 predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                     full_context, training_mode=False  # No exploration during warmup
                 )
@@ -215,15 +214,17 @@ def get_model_answers(
             torch.cuda.synchronize()
             start_time = time.time()
 
-            output_ids, new_token, idx = model.eagenerate(
-                torch.as_tensor(input_ids).cuda(),
-                temperature=temperature,
-                log=True,
-                is_llama3=True,
-                total_tokens=predicted_total_tokens,
-                depth=predicted_depth,
-                tree_top_k=predicted_top_k,
-            )
+            # Use no_grad for model inference to save memory and computation
+            with torch.no_grad():
+                output_ids, new_token, idx = model.eagenerate(
+                    torch.as_tensor(input_ids).cuda(),
+                    temperature=temperature,
+                    log=True,
+                    is_llama3=True,
+                    total_tokens=predicted_total_tokens,
+                    depth=predicted_depth,
+                    tree_top_k=predicted_top_k,
+                )
             torch.cuda.synchronize()
             total_time = time.time() - start_time
             output_ids = output_ids[0][len(input_ids[0]):]
@@ -300,11 +301,19 @@ def get_model_answers(
                 full_context = " ".join([msg["content"] for msg in messages])
                 
                 if online_policy is not None:
-                    # Online RL: predict and learn in real-time
-                    predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                        full_context, training_mode=True  # Enable exploration during training
-                    )
-                    print(f"Online RL predicted params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                    # Online RL: predict parameters with appropriate training mode
+                    if args.online_inference_only:
+                        # Inference-only mode: no training, no exploration
+                        predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                            full_context, training_mode=False
+                        )
+                        print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                    else:
+                        # Training mode: enable exploration and learning
+                        predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                            full_context, training_mode=True
+                        )
+                        print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                 elif rl_policy is not None:
                     # Offline RL policy
                     predicted_total_tokens, predicted_depth, predicted_top_k = rl_policy.predict_parameters(full_context)
@@ -319,15 +328,17 @@ def get_model_answers(
                 torch.cuda.synchronize()
                 start_time = time.time()
 
-                output_ids, new_token, idx = model.eagenerate(
-                    torch.as_tensor(input_ids).cuda(),
-                    temperature=temperature,
-                    log=True,
-                    is_llama3=True,
-                    total_tokens=predicted_total_tokens,
-                    depth=predicted_depth,
-                    tree_top_k=predicted_top_k,
-                )
+                # Use no_grad for model inference to save memory and computation
+                with torch.no_grad():
+                    output_ids, new_token, idx = model.eagenerate(
+                        torch.as_tensor(input_ids).cuda(),
+                        temperature=temperature,
+                        log=True,
+                        is_llama3=True,
+                        total_tokens=predicted_total_tokens,
+                        depth=predicted_depth,
+                        tree_top_k=predicted_top_k,
+                    )
                 torch.cuda.synchronize()
                 total_time = time.time() - start_time
                 output_ids = output_ids[0][len(input_ids[0]):]
@@ -361,8 +372,8 @@ def get_model_answers(
                         output = output.replace(special_token, "")
                 output = output.strip()
 
-                # Online RL: Update policy with reward from this generation
-                if online_policy is not None:
+                # Online RL: Update policy with reward from this generation (if training enabled)
+                if online_policy is not None and not args.online_inference_only:
                     # Convert tensor values to Python scalars
                     new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
                     
@@ -428,18 +439,27 @@ def get_model_answers(
             }
             fout.write(json.dumps(ans_json) + "\n")
 
-    # Save online RL policy if used
+    # Save online RL policy if used and training was enabled
     if online_policy is not None:
-        save_path = args.online_policy_save_path or "online_tree_policy_trained.pth"
-        online_policy.save(save_path)
-        
-        # Print final statistics
-        final_stats = online_policy.get_performance_stats()
-        print(f"\n=== Online RL Training Complete ===")
-        print(f"Total episodes: {final_stats.get('total_episodes', 0)}")
-        print(f"Final average reward: {final_stats.get('avg_reward_recent', 0):.4f}")
-        print(f"Most used parameters: {final_stats.get('most_used_params', [])}")
-        print(f"Policy saved to: {save_path}")
+        if args.online_inference_only:
+            # Inference-only mode: just show statistics
+            final_stats = online_policy.get_performance_stats()
+            print(f"\n=== Online RL Inference Complete ===")
+            print(f"Used pre-trained policy for parameter optimization")
+            if final_stats.get('most_used_params'):
+                print(f"Most used parameters: {final_stats.get('most_used_params', [])}")
+        else:
+            # Training mode: save updated policy
+            save_path = args.online_policy_save_path or "online_tree_policy_trained.pth"
+            online_policy.save(save_path)
+            
+            # Print final statistics
+            final_stats = online_policy.get_performance_stats()
+            print(f"\n=== Online RL Training Complete ===")
+            print(f"Total episodes: {final_stats.get('total_episodes', 0)}")
+            print(f"Final average reward: {final_stats.get('avg_reward_recent', 0):.4f}")
+            print(f"Most used parameters: {final_stats.get('most_used_params', [])}")
+            print(f"Policy saved to: {save_path}")
 
     # Save RL training data if collected
     if args.collect_rl_data and rl_data_entries:
@@ -579,6 +599,59 @@ if __name__ == "__main__":
         default="rl_training_data.jsonl",
         help="File to save RL training data"
     )
+    
+    # Online RL arguments
+    parser.add_argument(
+        "--use-online-rl",
+        action="store_true",
+        help="Use online RL for real-time parameter optimization"
+    )
+    parser.add_argument(
+        "--online-policy-path",
+        type=str,
+        help="Path to load existing online RL policy (optional)"
+    )
+    parser.add_argument(
+        "--online-policy-save-path",
+        type=str,
+        default="online_tree_policy_trained.pth",
+        help="Path to save trained online RL policy"
+    )
+    parser.add_argument(
+        "--online-lr",
+        type=float,
+        default=3e-4,
+        help="Learning rate for online RL policy"
+    )
+    parser.add_argument(
+        "--online-epsilon-start",
+        type=float,
+        default=0.9,
+        help="Initial exploration rate for online RL"
+    )
+    parser.add_argument(
+        "--online-epsilon-end",
+        type=float,
+        default=0.05,
+        help="Final exploration rate for online RL"
+    )
+    parser.add_argument(
+        "--online-memory-size",
+        type=int,
+        default=1000,
+        help="Experience replay memory size for online RL"
+    )
+    parser.add_argument(
+        "--online-batch-size",
+        type=int,
+        default=32,
+        help="Batch size for online RL training"
+    )
+    parser.add_argument(
+        "--online-inference-only",
+        action="store_true",
+        help="Use online RL policy for inference only (no training/learning)"
+    )
 
     args = parser.parse_args()
 
@@ -586,8 +659,16 @@ if __name__ == "__main__":
         print(f"{k}={v}")
 
     # Print helpful information about RL vs fixed parameters
-    if args.use_rl_policy:
-        print("\n🤖 RL Policy Mode: Tree parameters will be predicted dynamically by RL policy")
+    if args.use_online_rl:
+        print("\n🚀 Online RL Mode: Real-time learning and parameter optimization")
+        print(f"   Learning rate: {args.online_lr}")
+        print(f"   Exploration: {args.online_epsilon_start} → {args.online_epsilon_end}")
+        print(f"   Memory size: {args.online_memory_size}")
+        print(f"   Policy will be saved to: {args.online_policy_save_path}")
+        if args.online_policy_path:
+            print(f"   Loading existing policy from: {args.online_policy_path}")
+    elif args.use_rl_policy:
+        print("\n🤖 Offline RL Policy Mode: Tree parameters will be predicted dynamically by RL policy")
         print(f"   Fallback parameters: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
         print(f"   RL policy path: {args.rl_policy_path}")
     else:
