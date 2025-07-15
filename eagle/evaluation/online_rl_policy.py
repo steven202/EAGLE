@@ -27,10 +27,10 @@ class OnlineTreePolicy:
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Parameter bins for discrete actions
-        self.total_tokens_bins = [55, 60, 65, 70]
-        self.depth_bins = [4, 5, 6]
-        self.top_k_bins = [8, 10, 12]
+        # Parameter bins for discrete actions - optimized ranges
+        self.total_tokens_bins = [55, 60, 65, 70]  # More focused range
+        self.depth_bins = [4, 5, 6]  # Reasonable depth range  
+        self.top_k_bins = [8, 10, 12]  # Good top_k options
         
         # Action space dimensions
         self.n_total_tokens = len(self.total_tokens_bins)
@@ -75,8 +75,8 @@ class OnlineTreePolicy:
         print(f"  - Device: {self.device}")
     
     def _build_network(self):
-        """Build Q-network architecture"""
-        return nn.Sequential(
+        """Build Q-network architecture with better initialization"""
+        network = nn.Sequential(
             nn.Linear(self.state_dim, 256),
             nn.ReLU(),
             nn.Dropout(0.2),
@@ -87,6 +87,14 @@ class OnlineTreePolicy:
             nn.ReLU(),
             nn.Linear(64, self.total_actions)
         )
+        
+        # Better weight initialization to encourage exploration
+        for layer in network:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.constant_(layer.bias, 0.1)  # Small positive bias
+        
+        return network
     
     def _encode_state(self, context):
         """Encode conversation context using SBERT"""
@@ -118,18 +126,20 @@ class OnlineTreePolicy:
             return random.randint(0, self.total_actions - 1)
     
     def predict_parameters(self, context, training_mode=True):
-        """Predict parameters using epsilon-greedy policy"""
+        """Predict parameters using epsilon-greedy policy with enhanced exploration"""
         state = self._encode_state(context)
         
-        # Epsilon-greedy action selection
+        # Enhanced epsilon-greedy action selection
         if training_mode and random.random() < self.epsilon:
             # Exploration: random action
             action = random.randint(0, self.total_actions - 1)
+            exploration_used = True
         else:
             # Exploitation: best action from Q-network
             with torch.no_grad():
                 q_values = self.q_network(state.unsqueeze(0))
                 action = q_values.argmax().item()
+            exploration_used = False
         
         # Convert action to parameters
         total_tokens, depth, top_k = self._action_to_params(action)
@@ -139,6 +149,14 @@ class OnlineTreePolicy:
             self.last_state = state
             self.last_action = action
             self.last_params = (total_tokens, depth, top_k)
+            self.last_exploration = exploration_used
+            
+            # Debug print for training mode
+            mode_str = "EXPLORE" if exploration_used else "EXPLOIT"
+            print(f"Online RL {mode_str} (ε={self.epsilon:.3f}): total_tokens={total_tokens}, depth={depth}, top_k={top_k}")
+        else:
+            # Inference mode - just use best action
+            print(f"Online RL INFERENCE: total_tokens={total_tokens}, depth={depth}, top_k={top_k}")
         
         return total_tokens, depth, top_k
     
@@ -160,18 +178,37 @@ class OnlineTreePolicy:
         self.reward_history.append(reward)
         self.parameter_history.append(self.last_params)
         
+        # Debug info for learning
+        explore_str = "EXPLORE" if hasattr(self, 'last_exploration') and self.last_exploration else "EXPLOIT"
+        print(f"  → Reward: {reward:.3f} for {self.last_params} ({explore_str})")
+        
         # Learn from experience if we have enough samples
         if len(self.memory) >= self.batch_size:
             self._learn_from_batch()
+            print(f"  → Policy updated! Memory: {len(self.memory)}/{self.memory.maxlen}")
         
         # Update exploration rate
+        old_epsilon = self.epsilon
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+        if abs(old_epsilon - self.epsilon) > 0.001:
+            print(f"  → Exploration decreased: {old_epsilon:.3f} → {self.epsilon:.3f}")
         
         # Update target network periodically
         self.step_count += 1
         if self.step_count % self.target_update_freq == 0:
             self.target_network.load_state_dict(self.q_network.state_dict())
             print(f"Step {self.step_count}: Updated target network, epsilon={self.epsilon:.3f}")
+            
+        # Show statistics every 10 steps
+        if self.step_count % 10 == 0:
+            recent_rewards = self.reward_history[-10:]
+            avg_reward = np.mean(recent_rewards)
+            print(f"Step {self.step_count}: Recent avg reward: {avg_reward:.3f}, ε={self.epsilon:.3f}")
+            
+            # Show parameter diversity
+            recent_params = self.parameter_history[-10:]
+            unique_params = len(set(recent_params))
+            print(f"  → Parameter diversity: {unique_params}/10 unique combinations")
     
     def _learn_from_batch(self):
         """Learn from a batch of experiences using DQN"""

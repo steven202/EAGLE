@@ -652,6 +652,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Use online RL policy for inference only (no training/learning)"
     )
+    parser.add_argument(
+        "--online-multi-dataset",
+        action="store_true",
+        help="Train online RL on multiple datasets for better diversity"
+    )
+    parser.add_argument(
+        "--online-dataset-list",
+        type=str,
+        nargs='+',
+        default=["mt_bench", "alpaca", "gsm8k", "humaneval", "qa", "sum"],
+        help="List of datasets to use for multi-dataset online RL training"
+    )
 
     args = parser.parse_args()
 
@@ -667,6 +679,9 @@ if __name__ == "__main__":
         print(f"   Policy will be saved to: {args.online_policy_save_path}")
         if args.online_policy_path:
             print(f"   Loading existing policy from: {args.online_policy_path}")
+        if args.online_multi_dataset:
+            print(f"   Multi-dataset training enabled: {args.online_dataset_list}")
+            print(f"   Total training samples: ~{len(args.online_dataset_list) * 80}")
     elif args.use_rl_policy:
         print("\n🤖 Offline RL Policy Mode: Tree parameters will be predicted dynamically by RL policy")
         print(f"   Fallback parameters: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
