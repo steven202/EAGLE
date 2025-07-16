@@ -307,13 +307,13 @@ def get_model_answers(
                         predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                             full_context, training_mode=False
                         )
-                        print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                        # print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                     else:
                         # Training mode: enable exploration and learning
                         predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                             full_context, training_mode=True
                         )
-                        print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                        # print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                 elif rl_policy is not None:
                     # Offline RL policy
                     predicted_total_tokens, predicted_depth, predicted_top_k = rl_policy.predict_parameters(full_context)
@@ -661,7 +661,7 @@ if __name__ == "__main__":
         "--online-dataset-list",
         type=str,
         nargs='+',
-        default=["mt_bench", "alpaca", "gsm8k", "humaneval", "qa", "sum"],
+        default=["alpaca", "gsm8k", "humaneval", "qa", "sum", "mt_bench", ],
         help="List of datasets to use for multi-dataset online RL training"
     )
 
@@ -694,32 +694,76 @@ if __name__ == "__main__":
     args.model_id = args.model_id + "-temperature-" + str(args.temperature)
     if args.num_gpus_total // args.num_gpus_per_model > 1:
         import ray
-
         ray.init()
 
-    question_file = f"{parent_dir}/data/{args.bench_name}/question.jsonl"
-    if args.answer_file:
-        answer_file = args.answer_file
+    # Multi-dataset training for online RL
+    if args.use_online_rl and args.online_multi_dataset and not args.online_inference_only:
+        print(f"\n🔄 Starting multi-dataset online RL training...")
+        print(f"Datasets: {args.online_dataset_list}")
+        
+        for dataset_idx, dataset_name in enumerate(args.online_dataset_list):
+            print(f"\n--- Training Round {dataset_idx + 1}/{len(args.online_dataset_list)}: {dataset_name} ---")
+            
+            question_file = f"{parent_dir}/data/{dataset_name}/question.jsonl"
+            if not os.path.exists(question_file):
+                print(f"Warning: {question_file} does not exist, skipping...")
+                continue
+                
+            if args.answer_file:
+                answer_file = f"{args.answer_file}_{dataset_name}"
+            else:
+                answer_file = f"{dataset_name}/{args.model_id}_round_{dataset_idx + 1}.jsonl"
+
+            print(f"Training on: {question_file}")
+            print(f"Output to: {answer_file}")
+
+            run_eval(
+                args.base_model_path,
+                args.ea_model_path,
+                f"{args.model_id}_round_{dataset_idx + 1}",
+                question_file,
+                args.question_begin,
+                args.question_end,
+                answer_file,
+                args.max_new_token,
+                args.num_choices,
+                args.num_gpus_per_model,
+                args.num_gpus_total,
+                args.max_gpu_memory,
+                args.temperature,
+                args
+            )
+
+            print(f"✓ Completed training round {dataset_idx + 1}")
+        
+        print(f"\n🎉 Multi-dataset online RL training complete!")
+        print(f"Policy saved to: {args.online_policy_save_path}")
+        
     else:
-        answer_file = f"{args.bench_name}/{args.model_id}.jsonl"
+        # Single dataset training/inference
+        question_file = f"{parent_dir}/data/{args.bench_name}/question.jsonl"
+        if args.answer_file:
+            answer_file = args.answer_file
+        else:
+            answer_file = f"{args.bench_name}/{args.model_id}.jsonl"
 
-    print(f"Output to {answer_file}")
+        print(f"Output to {answer_file}")
 
-    run_eval(
-        args.base_model_path,
-        args.ea_model_path,
-        args.model_id,
-        question_file,
-        args.question_begin,
-        args.question_end,
-        answer_file,
-        args.max_new_token,
-        args.num_choices,
-        args.num_gpus_per_model,
-        args.num_gpus_total,
-        args.max_gpu_memory,
-        args.temperature,
-        args
-    )
+        run_eval(
+            args.base_model_path,
+            args.ea_model_path,
+            args.model_id,
+            question_file,
+            args.question_begin,
+            args.question_end,
+            answer_file,
+            args.max_new_token,
+            args.num_choices,
+            args.num_gpus_per_model,
+            args.num_gpus_total,
+            args.max_gpu_memory,
+            args.temperature,
+            args
+        )
 
-    reorg_answer_file(answer_file)
+        reorg_answer_file(answer_file)

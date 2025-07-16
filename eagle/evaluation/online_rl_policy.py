@@ -41,7 +41,7 @@ class OnlineTreePolicy:
         # Initialize SBERT for state encoding
         print("Loading SBERT model for state representation...")
         self.sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.state_dim = 384  # SBERT embedding dimension
+        self.state_dim = 384 + 6  # SBERT embedding (384) + engineered features (6)
         
         # Initialize Q-network and target network
         self.q_network = self._build_network().to(self.device)
@@ -97,9 +97,30 @@ class OnlineTreePolicy:
         return network
     
     def _encode_state(self, context):
-        """Encode conversation context using SBERT"""
+        """Encode conversation context using SBERT with enhanced features"""
+        # Basic SBERT embedding
         embedding = self.sbert_model.encode(context)
-        return torch.FloatTensor(embedding).to(self.device)
+        
+        # Add simple context features for better state representation
+        context_lower = context.lower()
+        
+        # Feature engineering for better state representation
+        features = []
+        
+        # Length-based features
+        features.append(min(len(context) / 1000.0, 1.0))  # Normalized length
+        features.append(min(len(context.split()) / 100.0, 1.0))  # Normalized word count
+        
+        # Content type features
+        features.append(1.0 if any(word in context_lower for word in ['math', 'calculate', 'solve', 'equation']) else 0.0)
+        features.append(1.0 if any(word in context_lower for word in ['code', 'program', 'function', 'algorithm']) else 0.0)
+        features.append(1.0 if any(word in context_lower for word in ['explain', 'describe', 'what is', 'how to']) else 0.0)
+        features.append(1.0 if any(word in context_lower for word in ['write', 'create', 'generate', 'make']) else 0.0)
+        
+        # Combine SBERT embedding with engineered features
+        enhanced_embedding = np.concatenate([embedding, features])
+        
+        return torch.FloatTensor(enhanced_embedding).to(self.device)
     
     def _action_to_params(self, action):
         """Convert discrete action to parameter values"""
@@ -297,28 +318,46 @@ class OnlineTreePolicy:
 
 def calculate_online_reward(generation_time, new_tokens, total_tokens, depth, top_k):
     """
-    Calculate reward for online learning
-    Focuses on speed (tokens/second) with penalties for extreme parameters
+    Enhanced reward calculation for online learning with better diversity incentives
     """
     if generation_time <= 0 or new_tokens <= 0:
         return -1.0
     
-    # Primary reward: tokens per second (normalized)
+    # Primary reward: tokens per second (normalized and enhanced)
     tokens_per_second = new_tokens / generation_time
-    speed_reward = min(tokens_per_second / 100.0, 1.0)  # Normalize to [0,1]
+    speed_reward = min(tokens_per_second / 80.0, 1.5)  # Allow bonus above 1.0
     
-    # Efficiency penalty for using too many resources unnecessarily
+    # Efficiency scoring based on parameter combinations
+    efficiency_score = 0.0
+    
+    # Reward balanced parameter choices
+    if 55 <= total_tokens <= 65:  # Sweet spot for total tokens
+        efficiency_score += 0.1
+    if 4 <= depth <= 6:  # Good depth range
+        efficiency_score += 0.1
+    if 8 <= top_k <= 12:  # Reasonable top_k
+        efficiency_score += 0.1
+    
+    # Penalty for extreme parameters that waste resources
     resource_penalty = 0.0
-    if total_tokens > 65:  # Penalize excessive token budgets
-        resource_penalty += 0.1
-    if depth > 5:  # Penalize excessive depth
-        resource_penalty += 0.1
-    if top_k > 10:  # Penalize excessive top_k
+    if total_tokens > 70:  # Too many tokens
+        resource_penalty += 0.2
+    if depth > 6:  # Too deep
+        resource_penalty += 0.2
+    if top_k > 12:  # Too wide
         resource_penalty += 0.1
     
-    # Bonus for good performance
-    if tokens_per_second > 50:  # Bonus for fast generation
-        speed_reward += 0.2
+    # Bonus for high performance
+    performance_bonus = 0.0
+    if tokens_per_second > 60:  # Very fast generation
+        performance_bonus += 0.3
+    elif tokens_per_second > 40:  # Good performance
+        performance_bonus += 0.1
     
-    final_reward = speed_reward - resource_penalty
-    return max(final_reward, -1.0)  # Clamp to reasonable range
+    # Quality incentive (longer outputs often mean more complete answers)
+    quality_bonus = min(new_tokens / 50.0, 0.2)  # Bonus for longer responses
+    
+    final_reward = speed_reward + efficiency_score + performance_bonus + quality_bonus - resource_penalty
+    
+    # Ensure reward stays in reasonable range but allow positive values
+    return max(final_reward, -1.0)
