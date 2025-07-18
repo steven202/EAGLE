@@ -411,7 +411,7 @@ def get_model_answers(
                         predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                             full_context, training_mode=False
                         )
-                        # print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                        print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                     else:
                         # Training mode: enable exploration and learning
                         predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(

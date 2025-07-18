@@ -143,23 +143,23 @@ class OnlineTreePolicy:
         print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
         
         # Show some example valid/invalid combinations
-        print(f"  - Example valid: tt≤k^(d-1)")
-        for i, action in enumerate(self.valid_actions[:3]):
-            tt, d, k = self._action_to_params(action)
-            max_tt = k**(d-1)
-            print(f"    • tt={tt}, d={d}, k={k} → max_tt={max_tt} ✓")
+        print(f"valid: tt≤k^(d-1)")
+        # for i, action in enumerate(self.valid_actions[:3]):
+        #     tt, d, k = self._action_to_params(action)
+        #     max_tt = k**(d-1)
+        #     print(f"    • tt={tt}, d={d}, k={k} → max_tt={max_tt} ✓")
         
-        if len(self.valid_actions) < self.total_actions:
-            print(f"  - Example invalid:")
-            invalid_count = 0
-            for action in range(self.total_actions):
-                if action not in self.valid_actions:
-                    tt, d, k = self._action_to_params(action)
-                    max_tt = k**(d-1)
-                    print(f"    • tt={tt}, d={d}, k={k} → max_tt={max_tt} ✗")
-                    invalid_count += 1
-                    if invalid_count >= 2:  # Show max 2 examples
-                        break
+        # if len(self.valid_actions) < self.total_actions:
+        #     print(f"  - Example invalid:")
+        #     invalid_count = 0
+        #     for action in range(self.total_actions):
+        #         if action not in self.valid_actions:
+        #             tt, d, k = self._action_to_params(action)
+        #             max_tt = k**(d-1)
+        #             print(f"    • tt={tt}, d={d}, k={k} → max_tt={max_tt} ✗")
+        #             invalid_count += 1
+        #             if invalid_count >= 2:  # Show max 2 examples
+        #                 break
     
     def _build_network(self):
         """Build Q-network architecture with better initialization"""
@@ -391,21 +391,25 @@ class OnlineTreePolicy:
         self._cleanup_old_checkpoints()
         
         # Log checkpoint to wandb if enabled
-        if self.use_wandb:
-            artifact = wandb.Artifact(
-                name=f"training_checkpoint_{self.step_count}",
-                type="checkpoint",
-                description=f"Training checkpoint at step {self.step_count}"
-            )
-            artifact.add_file(checkpoint_path)
-            artifact.metadata = {
-                "step_count": self.step_count,
-                "questions_processed": self.questions_processed,
-                "epsilon": self.epsilon,
-                "avg_reward_recent": np.mean(self.reward_history[-10:]) if len(self.reward_history) >= 10 else np.mean(self.reward_history) if self.reward_history else 0
-            }
-            wandb.log_artifact(artifact)
-            print(f"🔗 Checkpoint logged to wandb: {artifact.name}")
+        if self.use_wandb and wandb.run is not None:
+            try:
+                artifact = wandb.Artifact(
+                    name=f"training_checkpoint_{self.step_count}",
+                    type="checkpoint",
+                    description=f"Training checkpoint at step {self.step_count}"
+                )
+                artifact.add_file(checkpoint_path)
+                artifact.metadata = {
+                    "step_count": self.step_count,
+                    "questions_processed": self.questions_processed,
+                    "epsilon": self.epsilon,
+                    "avg_reward_recent": np.mean(self.reward_history[-10:]) if len(self.reward_history) >= 10 else np.mean(self.reward_history) if self.reward_history else 0
+                }
+                wandb.log_artifact(artifact)
+                print(f"🔗 Checkpoint logged to wandb: {artifact.name}")
+            except Exception as e:
+                print(f"⚠️  Failed to log checkpoint artifact to wandb: {e}")
+                print("   Checkpoint still saved locally successfully")
         
         return checkpoint_path
     
@@ -639,43 +643,32 @@ class OnlineTreePolicy:
         print(f"✅ Final trained policy saved to {path} (with {len(self.valid_actions)} valid actions)")
         
         # Save as wandb artifact
-        if self.use_wandb:
-            artifact = wandb.Artifact(
-                name="final_online_rl_policy",
-                type="model",
-                description="Final trained EAGLE Online RL Policy with constraint validation"
-            )
-            artifact.add_file(path)
-            
-            # Add metadata
-            artifact.metadata = {
-                "final_epsilon": self.epsilon,
-                "total_steps": self.step_count,
-                "questions_processed": self.questions_processed,
-                "final_avg_reward": np.mean(self.reward_history[-50:]) if len(self.reward_history) >= 50 else np.mean(self.reward_history),
-                "parameter_diversity": len(set(self.parameter_history[-100:])) if len(self.parameter_history) >= 100 else len(set(self.parameter_history)),
-                "valid_actions": len(self.valid_actions),
-                "total_actions": self.total_actions,
-                "training_seed": self.training_seed
-            }
-            
-            wandb.log_artifact(artifact)
-            print(f"🔗 Final policy saved as wandb artifact: {artifact.name}")
-            
-            artifact.add_file(path)
-            
-            # Add metadata
-            artifact.metadata = {
-                "final_epsilon": self.epsilon,
-                "total_steps": self.step_count,
-                "final_avg_reward": np.mean(self.reward_history[-50:]) if len(self.reward_history) >= 50 else np.mean(self.reward_history),
-                "parameter_diversity": len(set(self.parameter_history[-100:])) if len(self.parameter_history) >= 100 else len(set(self.parameter_history)),
-                "valid_actions": len(self.valid_actions),
-                "total_actions": self.total_actions
-            }
-            
-            wandb.log_artifact(artifact)
-            print(f"🔗 Policy saved as wandb artifact: {artifact.name}")
+        if self.use_wandb and wandb.run is not None:
+            try:
+                artifact = wandb.Artifact(
+                    name="final_online_rl_policy",
+                    type="model",
+                    description="Final trained EAGLE Online RL Policy with constraint validation"
+                )
+                artifact.add_file(path)
+                
+                # Add metadata
+                artifact.metadata = {
+                    "final_epsilon": self.epsilon,
+                    "total_steps": self.step_count,
+                    "questions_processed": self.questions_processed,
+                    "final_avg_reward": np.mean(self.reward_history[-50:]) if len(self.reward_history) >= 50 else np.mean(self.reward_history),
+                    "parameter_diversity": len(set(self.parameter_history[-100:])) if len(self.parameter_history) >= 100 else len(set(self.parameter_history)),
+                    "valid_actions": len(self.valid_actions),
+                    "total_actions": self.total_actions,
+                    "training_seed": self.training_seed
+                }
+                
+                wandb.log_artifact(artifact)
+                print(f"🔗 Final policy saved as wandb artifact: {artifact.name}")
+            except Exception as e:
+                print(f"⚠️  Failed to log final policy artifact to wandb: {e}")
+                print("   Policy still saved locally successfully")
     
     def load(self, path):
         """Load a trained policy with valid actions (supports both checkpoints and final models)"""
