@@ -38,12 +38,14 @@ try:
     from ..model.utils import *
     from .rl_tree_policy import RLTreePolicy, calculate_real_reward
     from .online_rl_policy import OnlineTreePolicy, calculate_online_reward
+    from .continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
 except:
     from eagle.model.ea_model import EaModel
     from eagle.model.kv_cache import initialize_past_key_values
     from eagle.model.utils import *
     from eagle.evaluation.rl_tree_policy import RLTreePolicy, calculate_real_reward
     from eagle.evaluation.online_rl_policy import OnlineTreePolicy, calculate_online_reward
+    from eagle.evaluation.continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
 
 
 
@@ -164,19 +166,40 @@ def get_model_answers(
         checkpoint_dir = args.checkpoint_dir if hasattr(args, 'checkpoint_dir') and args.checkpoint_dir else "checkpoints"
         
         wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
-        online_policy = OnlineTreePolicy(
-            learning_rate=args.online_lr,
-            epsilon_start=args.online_epsilon_start,
-            epsilon_end=args.online_epsilon_end,
-            memory_size=args.online_memory_size,
-            batch_size=args.online_batch_size,
-            use_wandb=(not args.online_inference_only and not args.no_wandb),  # Only log during training
-            wandb_project=args.wandb_project,
-            wandb_run_name=wandb_run_name,
-            checkpoint_dir=checkpoint_dir,
-            checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
-            max_checkpoints=getattr(args, 'max_checkpoints', 3)
-        )
+        
+        # Choose between discrete and continuous action space
+        if getattr(args, 'continuous_action_space', False):
+            print("🔄 Using Continuous Action Space for maximum flexibility")
+            online_policy = ContinuousOnlineTreePolicy(
+                learning_rate=args.online_lr,
+                epsilon_start=args.online_epsilon_start,
+                epsilon_end=args.online_epsilon_end,
+                memory_size=args.online_memory_size,
+                batch_size=args.online_batch_size,
+                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                wandb_project=args.wandb_project,
+                wandb_run_name=wandb_run_name,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
+                max_checkpoints=getattr(args, 'max_checkpoints', 3)
+            )
+            reward_function = calculate_continuous_online_reward
+        else:
+            print("🎯 Using Discrete Action Space (116 valid combinations)")
+            online_policy = OnlineTreePolicy(
+                learning_rate=args.online_lr,
+                epsilon_start=args.online_epsilon_start,
+                epsilon_end=args.online_epsilon_end,
+                memory_size=args.online_memory_size,
+                batch_size=args.online_batch_size,
+                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                wandb_project=args.wandb_project,
+                wandb_run_name=wandb_run_name,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
+                max_checkpoints=getattr(args, 'max_checkpoints', 3)
+            )
+            reward_function = calculate_online_reward
         
         # Resume mechanism: check for existing checkpoint first, then explicit policy
         resumed = False
@@ -243,11 +266,6 @@ def get_model_answers(
 
     cuda_visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
     print('CUDA VISIBLE DEVICES:', cuda_visible_devices)
-
-    # Check if there are questions to process
-    if not questions:
-        print("No questions to process (all questions may have been completed in previous runs)")
-        return
 
     question = questions[0]
 
@@ -515,8 +533,8 @@ def get_model_answers(
                     # Convert tensor values to Python scalars
                     new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
                     
-                    # Calculate reward for online learning
-                    online_reward = calculate_online_reward(
+                    # Calculate reward for online learning (use appropriate reward function)
+                    online_reward = reward_function(
                         total_time, new_token_scalar, predicted_total_tokens, 
                         predicted_depth, predicted_top_k
                     )
@@ -629,8 +647,6 @@ def get_model_answers(
             if final_stats.get('total_episodes', 0) > 0:
                 param_count = len(final_stats.get('most_used_params', []))
                 print(f"Parameter combinations explored: {param_count}")
-                print(f"Exploration efficiency: {param_count}/{len(online_policy.valid_actions)} valid actions used ({param_count/len(online_policy.valid_actions)*100:.1f}%)")
-                
                 # Final wandb summary
                 if online_policy.use_wandb:
                     import wandb
@@ -639,12 +655,8 @@ def get_model_answers(
                         "total_episodes": final_stats.get('total_episodes', 0),
                         "final_epsilon": online_policy.epsilon,
                         "parameter_combinations_used": param_count,
-                        "exploration_efficiency": param_count/len(online_policy.valid_actions)*100,
                         "questions_processed": len(questions),
-                        "valid_actions": len(online_policy.valid_actions),
-                        "total_actions": online_policy.total_actions
                     })
-                    print("🔗 Final results logged to wandb")
                     wandb.finish()
             
             # Print final statistics
@@ -900,6 +912,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable automatic resume and start fresh training"
     )
+    parser.add_argument(
+        "--continuous-action-space",
+        action="store_true",
+        help="Use continuous action space instead of discrete bins for more flexibility"
+    )
 
     args = parser.parse_args()
 
@@ -908,7 +925,8 @@ if __name__ == "__main__":
 
     # Print helpful information about RL vs fixed parameters
     if args.use_online_rl:
-        print("\n🚀 Online RL Mode: Real-time learning and parameter optimization")
+        action_space_type = "Continuous" if getattr(args, 'continuous_action_space', False) else "Discrete"
+        print(f"\n🚀 Online RL Mode: Real-time learning and parameter optimization ({action_space_type} Action Space)")
         print(f"   Learning rate: {args.online_lr}")
         print(f"   Exploration: {args.online_epsilon_start} → {args.online_epsilon_end}")
         print(f"   Memory size: {args.online_memory_size}")
@@ -916,6 +934,10 @@ if __name__ == "__main__":
         print(f"   Resume capability: {not args.no_resume} (checkpoints every {args.checkpoint_freq} steps)")
         print(f"   Checkpoint directory: {args.checkpoint_dir}")
         print(f"   Training seed: {args.training_seed}")
+        if getattr(args, 'continuous_action_space', False):
+            print(f"   Action Space: Continuous (total_tokens: 16-128, depth: 2-8, top_k: 2-32)")
+        else:
+            print(f"   Action Space: Discrete (116 valid combinations from 5×5×5 bins)")
         if not args.online_inference_only:
             print(f"   Training: Questions repeated {args.online_repeat_factor}x and shuffled")
         else:
