@@ -39,6 +39,7 @@ try:
     from .rl_tree_policy import RLTreePolicy, calculate_real_reward
     from .online_rl_policy import OnlineTreePolicy, calculate_online_reward
     from .continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
+    from .ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
 except:
     from eagle.model.ea_model import EaModel
     from eagle.model.kv_cache import initialize_past_key_values
@@ -46,6 +47,7 @@ except:
     from eagle.evaluation.rl_tree_policy import RLTreePolicy, calculate_real_reward
     from eagle.evaluation.online_rl_policy import OnlineTreePolicy, calculate_online_reward
     from eagle.evaluation.continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
+    from eagle.evaluation.ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
 
 
 
@@ -167,9 +169,27 @@ def get_model_answers(
         
         wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
         
-        # Choose between discrete and continuous action space
-        if getattr(args, 'continuous_action_space', False):
-            print("🔄 Using Continuous Action Space for maximum flexibility")
+        # Choose between PPO, continuous, and discrete action space
+        if getattr(args, 'use_ppo', False):
+            print("🚀 Using PPO Algorithm for stable and efficient learning")
+            online_policy = PPOOnlineTreePolicy(
+                learning_rate=args.online_lr,
+                n_steps=getattr(args, 'ppo_n_steps', 2048),
+                batch_size=getattr(args, 'ppo_batch_size', 64),
+                n_epochs=getattr(args, 'ppo_n_epochs', 10),
+                gamma=getattr(args, 'ppo_gamma', 0.99),
+                gae_lambda=getattr(args, 'ppo_gae_lambda', 0.95),
+                clip_range=getattr(args, 'ppo_clip_range', 0.2),
+                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                wandb_project=args.wandb_project,
+                wandb_run_name=wandb_run_name,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
+                max_checkpoints=getattr(args, 'max_checkpoints', 3)
+            )
+            reward_function = calculate_ppo_online_reward
+        elif getattr(args, 'continuous_action_space', False):
+            print("🔄 Using Continuous Action Space (Actor-Critic) for maximum flexibility")
             online_policy = ContinuousOnlineTreePolicy(
                 learning_rate=args.online_lr,
                 epsilon_start=args.online_epsilon_start,
@@ -612,9 +632,18 @@ def get_model_answers(
             # Progress update with checkpoint info
             if question_count % 10 == 0:
                 resume_info = online_policy.get_resume_info()
-                print(f"📊 Progress: {question_count}/{len(questions)} questions, "
-                      f"Step: {resume_info['step_count']}, "
-                      f"Epsilon: {resume_info['epsilon']:.3f}")
+                progress_msg = (f"📊 Progress: {question_count}/{len(questions)} questions, "
+                               f"Step: {resume_info['step_count']}")
+                
+                # Add policy-specific metrics
+                if 'epsilon' in resume_info:
+                    # DQN-based policies (discrete/continuous Actor-Critic)
+                    progress_msg += f", Epsilon: {resume_info['epsilon']:.3f}"
+                elif 'ppo_updates' in resume_info:
+                    # PPO-based policies
+                    progress_msg += f", PPO Updates: {resume_info['ppo_updates']}"
+                
+                print(progress_msg)
                 
                 if online_policy.should_save_checkpoint():
                     print(f"   💾 Checkpoint will be saved at step {resume_info['step_count']}")
@@ -650,13 +679,23 @@ def get_model_answers(
                 # Final wandb summary
                 if online_policy.use_wandb:
                     import wandb
-                    wandb.run.summary.update({
+                    summary_data = {
                         "final_avg_reward": final_stats.get('avg_reward_recent', 0),
                         "total_episodes": final_stats.get('total_episodes', 0),
-                        "final_epsilon": online_policy.epsilon,
                         "parameter_combinations_used": param_count,
                         "questions_processed": len(questions),
-                    })
+                    }
+                    
+                    # Add policy-specific metrics
+                    if hasattr(online_policy, 'epsilon'):
+                        # DQN-based policies (discrete/continuous Actor-Critic)
+                        summary_data["final_epsilon"] = online_policy.epsilon
+                    elif hasattr(online_policy, 'ppo_updates'):
+                        # PPO-based policies
+                        summary_data["ppo_updates"] = online_policy.ppo_updates
+                        summary_data["policy_type"] = "ppo"
+                    
+                    wandb.run.summary.update(summary_data)
                     wandb.finish()
             
             # Print final statistics
@@ -917,6 +956,49 @@ if __name__ == "__main__":
         action="store_true",
         help="Use continuous action space instead of discrete bins for more flexibility"
     )
+    
+    # PPO-specific arguments
+    parser.add_argument(
+        "--use-ppo",
+        action="store_true",
+        help="Use PPO (Proximal Policy Optimization) algorithm for stable continuous learning"
+    )
+    parser.add_argument(
+        "--ppo-n-steps",
+        type=int,
+        default=2048,
+        help="Number of steps to run for each environment per update for PPO"
+    )
+    parser.add_argument(
+        "--ppo-batch-size",
+        type=int,
+        default=64,
+        help="Minibatch size for PPO updates"
+    )
+    parser.add_argument(
+        "--ppo-n-epochs",
+        type=int,
+        default=10,
+        help="Number of epochs when optimizing the surrogate loss for PPO"
+    )
+    parser.add_argument(
+        "--ppo-gamma",
+        type=float,
+        default=0.99,
+        help="Discount factor for PPO"
+    )
+    parser.add_argument(
+        "--ppo-gae-lambda",
+        type=float,
+        default=0.95,
+        help="Factor for trade-off of bias vs variance for Generalized Advantage Estimator"
+    )
+    parser.add_argument(
+        "--ppo-clip-range",
+        type=float,
+        default=0.2,
+        help="Clipping parameter for PPO surrogate loss"
+    )
 
     args = parser.parse_args()
 
@@ -925,16 +1007,32 @@ if __name__ == "__main__":
 
     # Print helpful information about RL vs fixed parameters
     if args.use_online_rl:
-        action_space_type = "Continuous" if getattr(args, 'continuous_action_space', False) else "Discrete"
-        print(f"\n🚀 Online RL Mode: Real-time learning and parameter optimization ({action_space_type} Action Space)")
+        if getattr(args, 'use_ppo', False):
+            action_space_type = "PPO (Continuous)"
+        elif getattr(args, 'continuous_action_space', False):
+            action_space_type = "Continuous (Actor-Critic)"
+        else:
+            action_space_type = "Discrete (DQN)"
+            
+        print(f"\n🚀 Online RL Mode: Real-time learning and parameter optimization ({action_space_type})")
         print(f"   Learning rate: {args.online_lr}")
-        print(f"   Exploration: {args.online_epsilon_start} → {args.online_epsilon_end}")
-        print(f"   Memory size: {args.online_memory_size}")
+        
+        if getattr(args, 'use_ppo', False):
+            print(f"   PPO n_steps: {getattr(args, 'ppo_n_steps', 2048)}")
+            print(f"   PPO batch_size: {getattr(args, 'ppo_batch_size', 64)}")
+            print(f"   PPO n_epochs: {getattr(args, 'ppo_n_epochs', 10)}")
+            print(f"   PPO gamma: {getattr(args, 'ppo_gamma', 0.99)}")
+            print(f"   PPO clip_range: {getattr(args, 'ppo_clip_range', 0.2)}")
+        else:
+            print(f"   Exploration: {args.online_epsilon_start} → {args.online_epsilon_end}")
+            print(f"   Memory size: {args.online_memory_size}")
+        
         print(f"   Policy will be saved to: {args.online_policy_save_path}")
         print(f"   Resume capability: {not args.no_resume} (checkpoints every {args.checkpoint_freq} steps)")
         print(f"   Checkpoint directory: {args.checkpoint_dir}")
         print(f"   Training seed: {args.training_seed}")
-        if getattr(args, 'continuous_action_space', False):
+        
+        if getattr(args, 'use_ppo', False) or getattr(args, 'continuous_action_space', False):
             print(f"   Action Space: Continuous (total_tokens: 16-128, depth: 2-8, top_k: 2-32)")
         else:
             print(f"   Action Space: Discrete (116 valid combinations from 5×5×5 bins)")
