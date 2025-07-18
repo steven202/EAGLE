@@ -246,9 +246,7 @@ def get_model_answers(
 
     # Check if there are questions to process
     if not questions:
-        print("⚠️  No questions to process (all questions may have been completed in previous runs)")
-        print("   This can happen when resuming from a checkpoint where all questions were already processed.")
-        print("   Training is complete - no further action needed.")
+        print("No questions to process (all questions may have been completed in previous runs)")
         return
 
     question = questions[0]
