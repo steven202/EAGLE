@@ -32,7 +32,8 @@ python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --temperature 0.0 \
     --use_eagle3 \
     --max-new-token 512 \
-    --num-choices 1 #\
+    --num-choices 1 \
+    --no-resume
     # --question-begin 0 \
     # --question-end 40
 
@@ -71,4 +72,6 @@ python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
 # echo "- Constraint safety: 116/125 valid combinations (92.8%)"
 
 python eagle/evaluation/speed.py   --ea-file "mt_bench/eagle-constraint-test-results.jsonl"   --baseline-file "mt_bench/LLaMA3.1-8B_eagle3.jsonl"   --tokenizer-path "meta-llama/Llama-3.1-8B-Instruct"
-# Speed ratio (EAGLE/Baseline): 0.9777922787100434 times faster
+# Speed ratio (EAGLE/Baseline): 0.9777922787100434 times faster 
+python eagle/evaluation/speed.py   --ea-file "mt_bench/LLaMA3.1-8B_eagle3.jsonl"   --baseline-file "mt_bench/LLaMA3.1-8B_baseline.jsonl"   --tokenizer-path "meta-llama/Llama-3.1-8B-Instruct"
+python eagle/evaluation/speed.py   --ea-file "mt_bench/eagle-constraint-test-results.jsonl"   --baseline-file "mt_bench/LLaMA3.1-8B_baseline.jsonl"   --tokenizer-path "meta-llama/Llama-3.1-8B-Instruct"

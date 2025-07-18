@@ -754,27 +754,11 @@ class OnlineTreePolicy:
 def calculate_online_reward(generation_time, new_tokens, total_tokens, depth, top_k):
     """
     Calculate reward for online learning
-    Focuses on speed (tokens/second) with penalties for extreme parameters
+    Simple reward: directly use speed (tokens/second) as reward
     """
     if generation_time <= 0 or new_tokens <= 0:
-        return -1.0
+        return 0.0
     
-    # Primary reward: tokens per second (normalized)
+    # Reward is simply tokens per second
     tokens_per_second = new_tokens / generation_time
-    speed_reward = min(tokens_per_second / 100.0, 1.0)  # Normalize to [0,1]
-    
-    # Efficiency penalty for using too many resources unnecessarily
-    resource_penalty = 0.0
-    if total_tokens > 65:  # Penalize excessive token budgets
-        resource_penalty += 0.1
-    if depth > 5:  # Penalize excessive depth
-        resource_penalty += 0.1
-    if top_k > 10:  # Penalize excessive top_k
-        resource_penalty += 0.1
-    
-    # Bonus for good performance
-    if tokens_per_second > 50:  # Bonus for fast generation
-        speed_reward += 0.2
-    
-    final_reward = speed_reward - resource_penalty
-    return max(final_reward, -1.0)  # Clamp to reasonable range
+    return tokens_per_second
