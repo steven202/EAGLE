@@ -754,7 +754,14 @@ class Model(nn.Module):
 
         scores_list = torch.cat(scores_list, dim=0).view(-1)
         ss_token_list = torch.cat(ss_token, dim=0).view(-1)
-        top_scores = torch.topk(scores_list, total_tokens, dim=-1)
+        
+        # Safety check: ensure total_tokens doesn't exceed available candidates
+        available_candidates = scores_list.size(0)
+        safe_total_tokens = min(total_tokens, available_candidates)
+        # if safe_total_tokens < total_tokens:
+        #     print(f"WARNING: Requested total_tokens={total_tokens} exceeds available candidates={available_candidates}. Using {safe_total_tokens} instead.")
+        
+        top_scores = torch.topk(scores_list, safe_total_tokens, dim=-1)
         top_scores_index = top_scores.indices
         top_scores_index = torch.sort(top_scores_index).values
 
@@ -768,9 +775,9 @@ class Model(nn.Module):
         mask_index = mask_index + 1
         mask_index_list = mask_index.tolist()
         # with Timer("mask"):
-        tree_mask = torch.eye(total_tokens + 1).bool()
+        tree_mask = torch.eye(safe_total_tokens + 1).bool()
         tree_mask[:, 0] = True
-        for i in range(total_tokens):
+        for i in range(safe_total_tokens):
             tree_mask[i + 1].add_(tree_mask[mask_index_list[i]])
 
 
@@ -786,7 +793,7 @@ class Model(nn.Module):
         max_depth = torch.max(tree_position_ids) + 1
         noleaf_index = torch.unique(mask_index).tolist()
         noleaf_num = len(noleaf_index) - 1
-        leaf_num = total_tokens - noleaf_num
+        leaf_num = safe_total_tokens - noleaf_num
 
         retrieve_indices = torch.zeros(leaf_num, max_depth.item(), dtype=torch.long) - 1
         retrieve_indices = retrieve_indices.tolist()
@@ -794,7 +801,7 @@ class Model(nn.Module):
         rid = 0
         position_ids_list = tree_position_ids.tolist()
 
-        for i in range(total_tokens + 1):
+        for i in range(safe_total_tokens + 1):
             if i not in noleaf_index:
                 cid = i
                 depth = position_ids_list[i]
@@ -804,7 +811,7 @@ class Model(nn.Module):
                 rid += 1
 
         if logits_processor is not None:
-            maxitem = total_tokens + 5
+            maxitem = safe_total_tokens + 5
 
             def custom_sort(lst):
                 # sort_keys=[len(list)]

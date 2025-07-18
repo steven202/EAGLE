@@ -1,7 +1,21 @@
 """Generate answers with local models.
 
 Usage:
-python3 gen_model_answer.py --model-path lmsys/fastchat-t5-3b-v1.0 --model-id fastchat-t5-3b-v1.0
+python    # Enhanced question handling for online RL training vs inference
+    if args.use_online_rl and not args.online_inference_only:
+        # Training mode: repeat and shuffle questions for diverse training data
+        original_count = len(questions)
+        repeat_factor = args.online_repeat_factor
+        questions = questions * repeat_factor
+        
+        # Shuffle the repeated questions for diverse training order
+        import random
+        random.shuffle(questions)
+        
+        print(f"🔄 Online RL Training Mode: Expanded {original_count} → {len(questions)} questions (repeat={repeat_factor}, shuffled)")
+    else:
+        # Inference mode or non-online-rl: keep original order
+        print(f"📋 Standard Mode: Using {len(questions)} questions in original order")wer.py --model-path lmsys/fastchat-t5-3b-v1.0 --model-id fastchat-t5-3b-v1.0
 """
 import argparse
 import json
@@ -50,8 +64,25 @@ def run_eval(
         args
 ):
     questions = load_questions(question_file, question_begin, question_end)
-    # random shuffle the questions to balance the loading
-    # random.shuffle(questions)
+    
+    # Enhanced question handling for online RL training vs inference with resume support
+    if args.use_online_rl and not args.online_inference_only:
+        # Training mode: repeat and shuffle questions for diverse training data
+        original_count = len(questions)
+        repeat_factor = args.online_repeat_factor  # Repeat questions for more training data
+        questions = questions * repeat_factor
+        
+        # Use seed-based shuffling for reproducible training order (needed for resume)
+        import random
+        training_seed = args.training_seed if hasattr(args, 'training_seed') and args.training_seed else 42
+        random.seed(training_seed)
+        random.shuffle(questions)
+        
+        print(f"🔄 Online RL Training Mode: Expanded {original_count} → {len(questions)} questions (repeat={repeat_factor}, seed={training_seed})")
+    else:
+        # Inference mode or non-online-rl: keep original order
+        print(f"📋 Standard Mode: Using {len(questions)} questions in original order")
+    
     shuffled_ids = [q["question_id"] for q in questions]
     # with open(f"data/{args.bench_name}/model_ids/{args.model_id}.shuffled_ids", "w") as fout:
     #     json.dump(shuffled_ids, fout)
@@ -126,22 +157,71 @@ def get_model_answers(
     rl_data_entries = []
     
     if args.use_online_rl:
-        # Initialize online RL policy for real-time learning
+        # Initialize online RL policy for real-time learning with resume support
         print("Initializing Online RL Policy for real-time learning...")
+        
+        # Setup checkpoint directory
+        checkpoint_dir = args.checkpoint_dir if hasattr(args, 'checkpoint_dir') and args.checkpoint_dir else "checkpoints"
+        
+        wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
         online_policy = OnlineTreePolicy(
             learning_rate=args.online_lr,
             epsilon_start=args.online_epsilon_start,
             epsilon_end=args.online_epsilon_end,
             memory_size=args.online_memory_size,
-            batch_size=args.online_batch_size
+            batch_size=args.online_batch_size,
+            use_wandb=(not args.online_inference_only and not args.no_wandb),  # Only log during training
+            wandb_project=args.wandb_project,
+            wandb_run_name=wandb_run_name,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
+            max_checkpoints=getattr(args, 'max_checkpoints', 3)
         )
         
-        # Try to load existing policy if specified
-        if args.online_policy_path and os.path.exists(args.online_policy_path):
-            online_policy.load(args.online_policy_path)
-            print(f"Loaded existing online policy from {args.online_policy_path}")
-        else:
-            print("Starting with fresh online policy")
+        # Resume mechanism: check for existing checkpoint first, then explicit policy
+        resumed = False
+        if not args.online_inference_only:  # Only try to resume during training
+            # Try to resume from latest checkpoint first (unless disabled)
+            if getattr(args, 'resume_training', True) and not getattr(args, 'no_resume', False):
+                if online_policy.load_checkpoint():
+                    print("✅ Resumed training from latest checkpoint")
+                    resumed = True
+                    
+                    # Set the training seed for reproducible continuation
+                    if online_policy.training_seed:
+                        training_seed = online_policy.training_seed
+                        import random
+                        random.seed(training_seed)
+                        # Re-shuffle questions with same seed to get same order
+                        random.shuffle(questions)
+                        
+                        # Skip already processed questions
+                        questions_to_skip = online_policy.questions_processed
+                        if questions_to_skip > 0 and questions_to_skip < len(questions):
+                            questions = questions[questions_to_skip:]
+                            print(f"📋 Resuming from question {questions_to_skip+1}/{len(questions) + questions_to_skip}")
+                        elif questions_to_skip >= len(questions):
+                            print("⚠️  All questions already processed in checkpoint")
+                            questions = []
+                    else:
+                        print("⚠️  No training seed in checkpoint, shuffling with default seed")
+                        training_seed = getattr(args, 'training_seed', 42)
+                        online_policy.set_training_seed(training_seed)
+                        random.shuffle(questions)
+        
+        # Fallback to explicit policy path if no checkpoint resume
+        if not resumed:
+            if args.online_policy_path and os.path.exists(args.online_policy_path):
+                online_policy.load(args.online_policy_path)
+                print(f"Loaded existing online policy from {args.online_policy_path}")
+            else:
+                print("Starting with fresh online policy")
+                
+            # Set training seed for fresh start
+            if not args.online_inference_only:
+                training_seed = getattr(args, 'training_seed', 42)
+                online_policy.set_training_seed(training_seed)
+                # Questions already shuffled above with this seed
             
     elif args.use_rl_policy:
         # Use traditional offline RL policy
@@ -215,16 +295,39 @@ def get_model_answers(
             start_time = time.time()
 
             # Use no_grad for model inference to save memory and computation
-            with torch.no_grad():
-                output_ids, new_token, idx = model.eagenerate(
-                    torch.as_tensor(input_ids).cuda(),
-                    temperature=temperature,
-                    log=True,
-                    is_llama3=True,
-                    total_tokens=predicted_total_tokens,
-                    depth=predicted_depth,
-                    tree_top_k=predicted_top_k,
-                )
+            try:
+                with torch.no_grad():
+                    output_ids, new_token, idx = model.eagenerate(
+                        torch.as_tensor(input_ids).cuda(),
+                        temperature=temperature,
+                        log=True,
+                        is_llama3=True,
+                        total_tokens=predicted_total_tokens,
+                        depth=predicted_depth,
+                        tree_top_k=predicted_top_k,
+                    )
+            except RuntimeError as e:
+                if "selected index k out of range" in str(e):
+                    print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
+                    print(f"   Falling back to conservative warmup parameters...")
+                    
+                    # Use very safe parameters for warmup
+                    safe_total_tokens = 32
+                    safe_depth = 3
+                    safe_top_k = 4
+                    
+                    with torch.no_grad():
+                        output_ids, new_token, idx = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            is_llama3=True,
+                            total_tokens=safe_total_tokens,
+                            depth=safe_depth,
+                            tree_top_k=safe_top_k,
+                        )
+                else:
+                    raise e  # Re-raise if it's a different error
             torch.cuda.synchronize()
             total_time = time.time() - start_time
             output_ids = output_ids[0][len(input_ids[0]):]
@@ -271,7 +374,8 @@ def get_model_answers(
     print('Warmup done')
 
     # questions=questions[6:]
-    for question in tqdm(questions):
+    question_count = 0
+    for question in tqdm(questions, desc="Processing questions"):
 
         choices = []
         for i in range(num_choices):
@@ -313,7 +417,7 @@ def get_model_answers(
                         predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                             full_context, training_mode=True
                         )
-                        # print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                        print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                 elif rl_policy is not None:
                     # Offline RL policy
                     predicted_total_tokens, predicted_depth, predicted_top_k = rl_policy.predict_parameters(full_context)
@@ -329,16 +433,45 @@ def get_model_answers(
                 start_time = time.time()
 
                 # Use no_grad for model inference to save memory and computation
-                with torch.no_grad():
-                    output_ids, new_token, idx = model.eagenerate(
-                        torch.as_tensor(input_ids).cuda(),
-                        temperature=temperature,
-                        log=True,
-                        is_llama3=True,
-                        total_tokens=predicted_total_tokens,
-                        depth=predicted_depth,
-                        tree_top_k=predicted_top_k,
-                    )
+                try:
+                    with torch.no_grad():
+                        output_ids, new_token, idx = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            is_llama3=True,
+                            total_tokens=predicted_total_tokens,
+                            depth=predicted_depth,
+                            tree_top_k=predicted_top_k,
+                        )
+                except RuntimeError as e:
+                    if "selected index k out of range" in str(e):
+                        print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
+                        print(f"   Error: {e}")
+                        print(f"   Falling back to safe parameters...")
+                        
+                        # Fall back to conservative safe parameters
+                        safe_total_tokens = min(32, predicted_top_k ** (predicted_depth - 1))
+                        safe_depth = max(3, min(predicted_depth, 4))  
+                        safe_top_k = max(4, min(predicted_top_k, 8))
+                        
+                        print(f"   Using safe params: tt={safe_total_tokens}, d={safe_depth}, k={safe_top_k}")
+                        
+                        with torch.no_grad():
+                            output_ids, new_token, idx = model.eagenerate(
+                                torch.as_tensor(input_ids).cuda(),
+                                temperature=temperature,
+                                log=True,
+                                is_llama3=True,
+                                total_tokens=safe_total_tokens,
+                                depth=safe_depth,
+                                tree_top_k=safe_top_k,
+                            )
+                        
+                        # Update predicted parameters for reward calculation
+                        predicted_total_tokens, predicted_depth, predicted_top_k = safe_total_tokens, safe_depth, safe_top_k
+                    else:
+                        raise e  # Re-raise if it's a different error
                 torch.cuda.synchronize()
                 total_time = time.time() - start_time
                 output_ids = output_ids[0][len(input_ids[0]):]
@@ -383,8 +516,8 @@ def get_model_answers(
                         predicted_depth, predicted_top_k
                     )
                     
-                    # Update policy with this experience
-                    online_policy.update_policy(online_reward)
+                    # Update policy with this experience (including timing info for wandb)
+                    online_policy.update_policy(online_reward, total_time, new_token_scalar)
                     
                     # Print learning progress periodically
                     if online_policy.step_count % 20 == 0:
@@ -392,6 +525,15 @@ def get_model_answers(
                         print(f"Online RL Update: Reward={online_reward:.3f}, "
                               f"Avg Recent Reward={stats.get('avg_reward_recent', 0):.3f}, "
                               f"Tokens/sec={new_token_scalar/total_time:.1f}")
+                        
+                        # Additional wandb logging for progress tracking
+                        if online_policy.use_wandb:
+                            import wandb
+                            wandb.log({
+                                "progress_reward": online_reward,
+                                "progress_tokens_per_sec": new_token_scalar/total_time,
+                                "progress_step": online_policy.step_count
+                            })
 
                 # Collect RL training data if requested
                 if args.collect_rl_data:
@@ -439,6 +581,21 @@ def get_model_answers(
             }
             fout.write(json.dumps(ans_json) + "\n")
 
+        # Track question completion for online RL resume mechanism
+        question_count += 1
+        if online_policy is not None and not args.online_inference_only:
+            online_policy.increment_questions_processed()
+            
+            # Progress update with checkpoint info
+            if question_count % 10 == 0:
+                resume_info = online_policy.get_resume_info()
+                print(f"📊 Progress: {question_count}/{len(questions)} questions, "
+                      f"Step: {resume_info['step_count']}, "
+                      f"Epsilon: {resume_info['epsilon']:.3f}")
+                
+                if online_policy.should_save_checkpoint():
+                    print(f"   💾 Checkpoint will be saved at step {resume_info['step_count']}")
+
     # Save online RL policy if used and training was enabled
     if online_policy is not None:
         if args.online_inference_only:
@@ -446,12 +603,44 @@ def get_model_answers(
             final_stats = online_policy.get_performance_stats()
             print(f"\n=== Online RL Inference Complete ===")
             print(f"Used pre-trained policy for parameter optimization")
+            print(f"Questions processed: {len(questions)} (original order)")
             if final_stats.get('most_used_params'):
                 print(f"Most used parameters: {final_stats.get('most_used_params', [])}")
         else:
-            # Training mode: save updated policy
+            # Training mode: save updated policy with enhanced statistics
             save_path = args.online_policy_save_path or "online_tree_policy_trained.pth"
             online_policy.save(save_path)
+            
+            # Print comprehensive training statistics
+            final_stats = online_policy.get_performance_stats()
+            print(f"\n=== Online RL Training Complete ===")
+            print(f"Questions processed: {len(questions)} (repeated & shuffled for training)")
+            print(f"Total episodes: {final_stats.get('total_episodes', 0)}")
+            print(f"Final average reward: {final_stats.get('avg_reward_recent', 0):.4f}")
+            print(f"Most used parameters: {final_stats.get('most_used_params', [])}")
+            print(f"Policy saved to: {save_path}")
+            
+            # Show parameter exploration diversity
+            if final_stats.get('total_episodes', 0) > 0:
+                param_count = len(final_stats.get('most_used_params', []))
+                print(f"Parameter combinations explored: {param_count}")
+                print(f"Exploration efficiency: {param_count}/{len(online_policy.valid_actions)} valid actions used ({param_count/len(online_policy.valid_actions)*100:.1f}%)")
+                
+                # Final wandb summary
+                if online_policy.use_wandb:
+                    import wandb
+                    wandb.run.summary.update({
+                        "final_avg_reward": final_stats.get('avg_reward_recent', 0),
+                        "total_episodes": final_stats.get('total_episodes', 0),
+                        "final_epsilon": online_policy.epsilon,
+                        "parameter_combinations_used": param_count,
+                        "exploration_efficiency": param_count/len(online_policy.valid_actions)*100,
+                        "questions_processed": len(questions),
+                        "valid_actions": len(online_policy.valid_actions),
+                        "total_actions": online_policy.total_actions
+                    })
+                    print("🔗 Final results logged to wandb")
+                    wandb.finish()
             
             # Print final statistics
             final_stats = online_policy.get_performance_stats()
@@ -604,7 +793,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use-online-rl",
         action="store_true",
-        help="Use online RL for real-time parameter optimization"
+        help="Use online RL for real-time parameter optimization (training mode repeats & shuffles questions)"
     )
     parser.add_argument(
         "--online-policy-path",
@@ -653,16 +842,58 @@ if __name__ == "__main__":
         help="Use online RL policy for inference only (no training/learning)"
     )
     parser.add_argument(
-        "--online-multi-dataset",
-        action="store_true",
-        help="Train online RL on multiple datasets for better diversity"
+        "--online-repeat-factor",
+        type=int,
+        default=5,
+        help="Number of times to repeat questions during online RL training (inference mode ignores this)"
     )
     parser.add_argument(
-        "--online-dataset-list",
+        "--wandb-project",
         type=str,
-        nargs='+',
-        default=["alpaca", "gsm8k", "humaneval", "qa", "sum", "mt_bench", ],
-        help="List of datasets to use for multi-dataset online RL training"
+        default="eagle-online-rl",
+        help="Wandb project name for logging (only used during online RL training)"
+    )
+    parser.add_argument(
+        "--no-wandb",
+        action="store_true",
+        help="Disable wandb logging even during training"
+    )
+    
+    # Resume and checkpoint arguments
+    parser.add_argument(
+        "--training-seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible training data shuffling (needed for resume)"
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="checkpoints",
+        help="Directory to save training checkpoints for resume capability"
+    )
+    parser.add_argument(
+        "--checkpoint-freq",
+        type=int,
+        default=100,
+        help="Save checkpoint every N training steps"
+    )
+    parser.add_argument(
+        "--max-checkpoints",
+        type=int,
+        default=3,
+        help="Maximum number of checkpoints to keep (older ones are automatically deleted)"
+    )
+    parser.add_argument(
+        "--resume-training",
+        type=bool,
+        default=True,
+        help="Automatically resume from latest checkpoint if available (default: True)"
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Disable automatic resume and start fresh training"
     )
 
     args = parser.parse_args()
@@ -677,11 +908,15 @@ if __name__ == "__main__":
         print(f"   Exploration: {args.online_epsilon_start} → {args.online_epsilon_end}")
         print(f"   Memory size: {args.online_memory_size}")
         print(f"   Policy will be saved to: {args.online_policy_save_path}")
+        print(f"   Resume capability: {not args.no_resume} (checkpoints every {args.checkpoint_freq} steps)")
+        print(f"   Checkpoint directory: {args.checkpoint_dir}")
+        print(f"   Training seed: {args.training_seed}")
+        if not args.online_inference_only:
+            print(f"   Training: Questions repeated {args.online_repeat_factor}x and shuffled")
+        else:
+            print(f"   Inference: Questions processed in original order")
         if args.online_policy_path:
             print(f"   Loading existing policy from: {args.online_policy_path}")
-        if args.online_multi_dataset:
-            print(f"   Multi-dataset training enabled: {args.online_dataset_list}")
-            print(f"   Total training samples: ~{len(args.online_dataset_list) * 80}")
     elif args.use_rl_policy:
         print("\n🤖 Offline RL Policy Mode: Tree parameters will be predicted dynamically by RL policy")
         print(f"   Fallback parameters: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
@@ -694,76 +929,32 @@ if __name__ == "__main__":
     args.model_id = args.model_id + "-temperature-" + str(args.temperature)
     if args.num_gpus_total // args.num_gpus_per_model > 1:
         import ray
+
         ray.init()
 
-    # Multi-dataset training for online RL
-    if args.use_online_rl and args.online_multi_dataset and not args.online_inference_only:
-        print(f"\n🔄 Starting multi-dataset online RL training...")
-        print(f"Datasets: {args.online_dataset_list}")
-        
-        for dataset_idx, dataset_name in enumerate(args.online_dataset_list):
-            print(f"\n--- Training Round {dataset_idx + 1}/{len(args.online_dataset_list)}: {dataset_name} ---")
-            
-            question_file = f"{parent_dir}/data/{dataset_name}/question.jsonl"
-            if not os.path.exists(question_file):
-                print(f"Warning: {question_file} does not exist, skipping...")
-                continue
-                
-            if args.answer_file:
-                answer_file = f"{args.answer_file}_{dataset_name}"
-            else:
-                answer_file = f"{dataset_name}/{args.model_id}_round_{dataset_idx + 1}.jsonl"
-
-            print(f"Training on: {question_file}")
-            print(f"Output to: {answer_file}")
-
-            run_eval(
-                args.base_model_path,
-                args.ea_model_path,
-                f"{args.model_id}_round_{dataset_idx + 1}",
-                question_file,
-                args.question_begin,
-                args.question_end,
-                answer_file,
-                args.max_new_token,
-                args.num_choices,
-                args.num_gpus_per_model,
-                args.num_gpus_total,
-                args.max_gpu_memory,
-                args.temperature,
-                args
-            )
-
-            print(f"✓ Completed training round {dataset_idx + 1}")
-        
-        print(f"\n🎉 Multi-dataset online RL training complete!")
-        print(f"Policy saved to: {args.online_policy_save_path}")
-        
+    question_file = f"{parent_dir}/data/{args.bench_name}/question.jsonl"
+    if args.answer_file:
+        answer_file = args.answer_file
     else:
-        # Single dataset training/inference
-        question_file = f"{parent_dir}/data/{args.bench_name}/question.jsonl"
-        if args.answer_file:
-            answer_file = args.answer_file
-        else:
-            answer_file = f"{args.bench_name}/{args.model_id}.jsonl"
+        answer_file = f"{args.bench_name}/{args.model_id}.jsonl"
 
-        print(f"Output to {answer_file}")
+    print(f"Output to {answer_file}")
 
-        run_eval(
-            args.base_model_path,
-            args.ea_model_path,
-            args.model_id,
-            question_file,
-            args.question_begin,
-            args.question_end,
-            answer_file,
-            args.max_new_token,
-            args.num_choices,
-            args.num_gpus_per_model,
-            args.num_gpus_total,
-            args.max_gpu_memory,
-            args.temperature,
-            args
-        )
+    run_eval(
+        args.base_model_path,
+        args.ea_model_path,
+        args.model_id,
+        question_file,
+        args.question_begin,
+        args.question_end,
+        answer_file,
+        args.max_new_token,
+        args.num_choices,
+        args.num_gpus_per_model,
+        args.num_gpus_total,
+        args.max_gpu_memory,
+        args.temperature,
+        args
+    )
 
-        reorg_answer_file(answer_file)
+    reorg_answer_file(answer_file)
