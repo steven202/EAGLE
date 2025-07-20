@@ -74,13 +74,32 @@ class ContinuousOnlineTreePolicy:
                 print(f"🔗 Using existing wandb run: {wandb.run.get_url()}")
         else:
             print("📊 Wandb logging disabled")
-        
         # Continuous parameter ranges
         self.param_ranges = {
-            'total_tokens': {'min': 16, 'max': 128},  # Wider range
+            'total_tokens': {'min': 16, 'max': 128},  # Wider range 
             'depth': {'min': 2, 'max': 8},           # Continuous depth
             'top_k': {'min': 2, 'max': 32}           # Continuous top_k
         }
+        # self.param_ranges = {
+        #     'total_tokens': {'min': 16, 'max': 512},  # Wider range 
+        #     'depth': {'min': 2, 'max': 10},           # Continuous depth
+        #     'top_k': {'min': 2, 'max': 48}           # Continuous top_k
+        # }
+        # self.param_ranges = {
+        #     'total_tokens': {'min': 16, 'max': 192},  # Wider range 
+        #     'depth': {'min': 2, 'max': 10},           # Continuous depth
+        #     'top_k': {'min': 2, 'max': 48}           # Continuous top_k
+        # }
+        # self.param_ranges = {
+        #     'total_tokens': {'min': 16, 'max': 256},  # Wider range 
+        #     'depth': {'min': 2, 'max': 10},           # Continuous depth
+        #     'top_k': {'min': 2, 'max': 48}           # Continuous top_k
+        # }
+        # self.param_ranges = {
+        #     'total_tokens': {'min': 16, 'max': 512},  # Wider range
+        #     'depth': {'min': 2, 'max': 10},           # Continuous depth
+        #     'top_k': {'min': 2, 'max': 64}           # Continuous top_k
+        # }
         
         # Initialize SBERT for state encoding
         print("Loading SBERT model for state representation...")

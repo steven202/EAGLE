@@ -77,7 +77,10 @@ class OnlineTreePolicy:
         self.total_tokens_bins = [32, 48, 64, 80, 96]  # 5 options
         self.depth_bins = [3, 4, 5, 6, 7]  # 5 options
         self.top_k_bins = [4, 8, 12, 16, 20]  # 5 options
-        
+        # Expanded parameter bins for more granularity
+        self.total_tokens_bins = [16, 32, 48, 64, 80, 96, 128]  # 7 options
+        self.depth_bins = [2, 3, 4, 5, 6, 7, 8]  # 7 options
+        self.top_k_bins = [2, 4, 8, 12, 16, 20, 32]  # 7 options
         # Action space dimensions
         self.n_total_tokens = len(self.total_tokens_bins)
         self.n_depth = len(self.depth_bins)
@@ -426,6 +429,14 @@ class OnlineTreePolicy:
         try:
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
             
+            # Check for action space compatibility before loading model states
+            checkpoint_total_actions = checkpoint.get('total_actions', None)
+            if checkpoint_total_actions is not None and checkpoint_total_actions != self.total_actions:
+                print(f"❌ Action space mismatch: checkpoint has {checkpoint_total_actions} actions, current model has {self.total_actions}")
+                print(f"   This usually happens when parameter bins have been changed.")
+                print(f"   Skipping checkpoint loading and starting fresh.")
+                return False
+            
             # Restore model states
             self.q_network.load_state_dict(checkpoint['q_network_state_dict'])
             self.target_network.load_state_dict(checkpoint['target_network_state_dict'])
@@ -553,7 +564,7 @@ class OnlineTreePolicy:
         batch = random.sample(self.memory, self.batch_size)
         
         # Convert states to numpy array first, then to tensor (more efficient)
-        state_data = np.array([exp['state'].detach().numpy() for exp in batch])
+        state_data = np.array([exp['state'].detach().cpu().numpy() for exp in batch])
         states = torch.FloatTensor(state_data).to(self.device)  # No requires_grad needed for inputs
         actions = torch.LongTensor([exp['action'] for exp in batch]).to(self.device)
         rewards = torch.FloatTensor([exp['reward'] for exp in batch]).to(self.device)

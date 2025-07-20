@@ -20,6 +20,9 @@ python    # Enhanced question handling for online RL training vs inference
 import argparse
 import json
 import os
+import random
+import time
+from collections import defaultdict
 script_dir = os.path.dirname(__file__)
 parent_dir = os.path.dirname(script_dir)
 # os.environ["CUDA_VISIBLE_DEVICES"] = "7"
@@ -77,7 +80,6 @@ def run_eval(
         questions = questions * repeat_factor
         
         # Use seed-based shuffling for reproducible training order (needed for resume)
-        import random
         training_seed = args.training_seed if hasattr(args, 'training_seed') and args.training_seed else 42
         random.seed(training_seed)
         random.shuffle(questions)
@@ -233,7 +235,6 @@ def get_model_answers(
                     # Set the training seed for reproducible continuation
                     if online_policy.training_seed:
                         training_seed = online_policy.training_seed
-                        import random
                         random.seed(training_seed)
                         # Re-shuffle questions with same seed to get same order
                         random.shuffle(questions)
@@ -259,9 +260,6 @@ def get_model_answers(
                 print(f"Loaded existing online policy from {args.online_policy_path}")
             else:
                 print("Starting with fresh online policy")
-                if args.online_inference_only:
-                    print("❗ Failed to load online policy: online inference mode only, no training allowed")
-                    quit()
                 
             # Set training seed for fresh start
             if not args.online_inference_only:
@@ -290,10 +288,49 @@ def get_model_answers(
     cuda_visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
     print('CUDA VISIBLE DEVICES:', cuda_visible_devices)
 
+    # Parameter combination testing setup
+    total_tokens_bins = [32, 48, 64, 80, 96]
+    depth_bins = [3, 4, 5, 6, 7]
+    top_k_bins = [4, 8, 12, 16, 20]
+    # Expanded parameter bins for more granularity
+    total_tokens_bins = [16, 32, 48, 64, 80, 96, 128]  # 7 options
+    depth_bins = [2, 3, 4, 5, 6, 7, 8]  # 7 options
+    top_k_bins = [2, 4, 8, 12, 16, 20, 32]  # 7 options
+    # Another parameter combination for testing
+    top_k_bins: [8, 12, 16, 20, 24, 28, 32, 36]
+    depth_bins: [3, 4, 5, 6, 7, 8, 9, 10]
+    total_tokens_bins: [32, 48, 64, 80, 96, 112, 128, 144]
+    
+    # Generate valid parameter combinations (satisfying constraint: total_tokens <= top_k^(depth-1))
+    valid_combinations = []
+    for tt in total_tokens_bins:
+        for d in depth_bins:
+            for k in top_k_bins:
+                if tt <= k**(d-1):  # Constraint check
+                    valid_combinations.append((tt, d, k))
+    
+    print(f"Valid parameter combinations: {len(valid_combinations)}")
+    for i, combo in enumerate(valid_combinations):  # Show all combinations
+        tt, d, k = combo
+        print(f"  {i+1}: tt={tt}, d={d}, k={k} (max_tt={k**(d-1)})")
+    if len(valid_combinations) > 10:
+        print(f"  ... and {len(valid_combinations) - 10} more")
+    
+    # Select a subset of combinations to test (to avoid too many tests)
+    test_combinations = random.sample(valid_combinations, min(20, len(valid_combinations)))
+    # print(f"\nTesting {len(test_combinations)} combinations on first few questions...")
+    
+    # Test questions (use first 5 questions)
+    # test_questions = questions[:5]
+    test_questions = questions
+    
+    # Results storage: {question_id: {(tt,d,k): {"time": float, "tokens_per_sec": float, "tokens": int}}}
+    test_results = {}
+
     question = questions[0]
 
-    # warmup
-    for _ in range(3):
+    # warmup (reduced to 1 iteration)
+    for warmup_question_idx in range(1):
         torch.manual_seed(0)
 
         messages = [
@@ -336,7 +373,8 @@ def get_model_answers(
                 predicted_depth = args.depth
                 predicted_top_k = args.top_k
                 print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
-            
+            # randomly select parameters from valid action space
+            predicted_total_tokens, predicted_depth, predicted_top_k = random.choice(test_combinations)
             torch.cuda.synchronize()
             start_time = time.time()
 
@@ -417,7 +455,171 @@ def get_model_answers(
                 "role": "assistant",
                 "content": output
             })
+            # print total time with different parameters, and speed (time divided by token)
+            print(f"Warmup Question {warmup_question_idx+1}, Warmup Turn {j+1}: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}, time={total_time:.4f}s, speed={new_token / total_time:.4f} tokens/s, Turn {turns[j][:10]}")
+
     print('Warmup done')
+    
+    # Parameter combination testing
+    print(f"\n=== Testing Parameter Combinations ===")
+    print(f"Testing {len(test_combinations)} combinations on {len(test_questions)} questions")
+    print(f"Total tests: {len(test_combinations) * len(test_questions)}")
+
+    for q_idx, question in enumerate(tqdm(test_questions)):
+        test_combinations = random.sample(valid_combinations, min(20, len(valid_combinations)))
+        question_id = question["question_id"]
+        test_results[question_id] = {}
+        
+        print(f"\n--- Question {q_idx+1}/{len(test_questions)} (ID: {question_id}) ---")
+        
+        for combo_idx, (test_tt, test_d, test_k) in enumerate(test_combinations):
+            print(f"Testing combo {combo_idx+1}/{len(test_combinations)}: tt={test_tt}, d={test_d}, k={test_k}")
+            
+            torch.manual_seed(42)  # Fixed seed for reproducibility
+            messages = [
+                {"role": "system",
+                 "content": "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe."},
+            ]
+            
+            # Process first turn of the question
+            qs = question["turns"][0]
+            messages.append({
+                "role": "user",
+                "content": qs
+            })
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            input_ids = tokenizer([prompt], add_special_tokens=False).input_ids
+            
+            torch.cuda.synchronize()
+            start_time = time.time()
+            
+            try:
+                with torch.no_grad():
+                    output_ids, new_token, idx = model.eagenerate(
+                        torch.as_tensor(input_ids).cuda(),
+                        temperature=temperature,
+                        log=True,
+                        is_llama3=True,
+                        total_tokens=test_tt,
+                        depth=test_d,
+                        tree_top_k=test_k,
+                    )
+                    
+                torch.cuda.synchronize()
+                total_time = time.time() - start_time
+                
+                # Calculate performance metrics
+                new_token_int = int(new_token)
+                tokens_per_sec = new_token_int / total_time if total_time > 0 else 0
+                
+                # Store results
+                test_results[question_id][(test_tt, test_d, test_k)] = {
+                    "time": total_time,
+                    "tokens_per_sec": tokens_per_sec,
+                    "tokens": new_token_int
+                }
+                
+                print(f"  → Time: {total_time:.4f}s, Tokens: {new_token_int}, Speed: {tokens_per_sec:.2f} tok/s")
+                
+            except RuntimeError as e:
+                if "selected index k out of range" in str(e):
+                    print(f"  → ❌ Error: {e}")
+                    # Store error result
+                    test_results[question_id][(test_tt, test_d, test_k)] = {
+                        "time": float('inf'),
+                        "tokens_per_sec": 0,
+                        "tokens": 0,
+                        "error": str(e)
+                    }
+                else:
+                    raise e
+    
+    # Analysis and results
+    print(f"\n=== Analysis Results ===")
+    
+    # Find best combination for each question
+    best_combos_per_question = {}
+    for question_id, results in test_results.items():
+        # Filter out error results and find best (highest tokens_per_sec)
+        valid_results = {combo: metrics for combo, metrics in results.items() 
+                        if "error" not in metrics and metrics["tokens_per_sec"] > 0}
+        
+        if valid_results:
+            best_combo = max(valid_results.keys(), key=lambda x: valid_results[x]["tokens_per_sec"])
+            best_combos_per_question[question_id] = {
+                "combo": best_combo,
+                "metrics": valid_results[best_combo]
+            }
+            
+            tt, d, k = best_combo
+            metrics = valid_results[best_combo]
+            print(f"\nQuestion {question_id}:")
+            print(f"  Best: tt={tt}, d={d}, k={k}")
+            print(f"  Speed: {metrics['tokens_per_sec']:.2f} tok/s")
+            print(f"  Time: {metrics['time']:.4f}s, Tokens: {metrics['tokens']}")
+            
+            # Show top 3 combinations for this question
+            sorted_combos = sorted(valid_results.items(), key=lambda x: x[1]["tokens_per_sec"], reverse=True)
+            print(f"  Top 3 combinations:")
+            for i, (combo, metrics) in enumerate(sorted_combos[:3]):
+                tt, d, k = combo
+                print(f"    {i+1}. tt={tt}, d={d}, k={k} → {metrics['tokens_per_sec']:.2f} tok/s")
+    
+    # Check consistency across questions
+    print(f"\n=== Consistency Analysis ===")
+    if len(best_combos_per_question) > 1:
+        all_best_combos = [info["combo"] for info in best_combos_per_question.values()]
+        unique_best_combos = list(set(all_best_combos))
+        
+        print(f"Unique best combinations across all questions: {len(unique_best_combos)}")
+        
+        if len(unique_best_combos) == 1:
+            tt, d, k = unique_best_combos[0]
+            print(f"🎯 CONSISTENT: Same best combo for all questions: tt={tt}, d={d}, k={k}")
+        else:
+            print(f"📊 VARIABLE: Different best combinations found:")
+            combo_counts = {}
+            for combo in all_best_combos:
+                combo_counts[combo] = combo_counts.get(combo, 0) + 1
+            
+            sorted_combo_counts = sorted(combo_counts.items(), key=lambda x: x[1], reverse=True)
+            for combo, count in sorted_combo_counts:
+                tt, d, k = combo
+                percentage = (count / len(all_best_combos)) * 100
+                print(f"  tt={tt}, d={d}, k={k}: {count}/{len(all_best_combos)} questions ({percentage:.1f}%)")
+    
+    # Overall performance summary
+    print(f"\n=== Performance Summary ===")
+    all_speeds = []
+    error_count = 0
+    
+    for question_id, results in test_results.items():
+        for combo, metrics in results.items():
+            if "error" in metrics:
+                error_count += 1
+            elif metrics["tokens_per_sec"] > 0:
+                all_speeds.append(metrics["tokens_per_sec"])
+    
+    if all_speeds:
+        avg_speed = sum(all_speeds) / len(all_speeds)
+        max_speed = max(all_speeds)
+        min_speed = min(all_speeds)
+        
+        print(f"Speed statistics:")
+        print(f"  Average: {avg_speed:.2f} tok/s")
+        print(f"  Maximum: {max_speed:.2f} tok/s")
+        print(f"  Minimum: {min_speed:.2f} tok/s")
+        print(f"  Range: {max_speed - min_speed:.2f} tok/s")
+        print(f"  Errors: {error_count}/{len(test_combinations) * len(test_questions)} ({error_count/(len(test_combinations) * len(test_questions))*100:.1f}%)")
+    
+    print(f"\n=== Parameter Testing Complete ===")
+    print(f"Results show whether certain parameter combinations are consistently optimal")
+    quit()
+
 
     # questions=questions[6:]
     question_count = 0
