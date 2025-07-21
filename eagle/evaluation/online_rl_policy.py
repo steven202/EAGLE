@@ -81,6 +81,10 @@ class OnlineTreePolicy:
         self.total_tokens_bins = [16, 32, 48, 64, 80, 96, 128]  # 7 options
         self.depth_bins = [2, 3, 4, 5, 6, 7, 8]  # 7 options
         self.top_k_bins = [2, 4, 8, 12, 16, 20, 32]  # 7 options
+        ### Best combination ranges
+        self.top_k_bins = [8, 12, 16, 20, 32]
+        self.depth_bins = [3, 4, 5, 6, 7, 8]
+        self.total_tokens_bins = [32, 48, 64, 80, 96, 128]
         # Action space dimensions
         self.n_total_tokens = len(self.total_tokens_bins)
         self.n_depth = len(self.depth_bins)
@@ -427,7 +431,7 @@ class OnlineTreePolicy:
             return False
         
         try:
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
             
             # Check for action space compatibility before loading model states
             checkpoint_total_actions = checkpoint.get('total_actions', None)
@@ -684,7 +688,7 @@ class OnlineTreePolicy:
     def load(self, path):
         """Load a trained policy with valid actions (supports both checkpoints and final models)"""
         if os.path.exists(path):
-            checkpoint = torch.load(path, map_location=self.device)
+            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
             
             # Load core model state
             self.q_network.load_state_dict(checkpoint['q_network_state_dict'])

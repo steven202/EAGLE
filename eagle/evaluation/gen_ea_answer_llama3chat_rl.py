@@ -40,6 +40,7 @@ try:
     from .online_rl_policy import OnlineTreePolicy, calculate_online_reward
     from .continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
     from .ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
+    from .discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
 except:
     from eagle.model.ea_model import EaModel
     from eagle.model.kv_cache import initialize_past_key_values
@@ -48,6 +49,7 @@ except:
     from eagle.evaluation.online_rl_policy import OnlineTreePolicy, calculate_online_reward
     from eagle.evaluation.continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
     from eagle.evaluation.ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
+    from eagle.evaluation.discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
 
 
 
@@ -170,13 +172,30 @@ def get_model_answers(
         wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
         
         # Choose between PPO, continuous, and discrete action space
-        if getattr(args, 'use_ppo', False):
+        if getattr(args, 'use_discrete_ppo', False):
+            print("🚀 Using Discrete PPO Algorithm for stable learning with parameter bins")
+            online_policy = DiscretePPOOnlineTreePolicy(
+                learning_rate=args.online_lr,
+                ppo_epochs=getattr(args, 'ppo_epochs', 10),
+                batch_size=getattr(args, 'ppo_batch_size', 64),
+                clip_range=getattr(args, 'ppo_clip_range', 0.2),
+                gamma=getattr(args, 'ppo_gamma', 0.99),
+                gae_lambda=getattr(args, 'ppo_gae_lambda', 0.95),
+                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                wandb_project=args.wandb_project,
+                wandb_run_name=wandb_run_name,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
+                max_checkpoints=getattr(args, 'max_checkpoints', 3)
+            )
+            reward_function = calculate_discrete_ppo_reward
+        elif getattr(args, 'use_ppo', False):
             print("🚀 Using PPO Algorithm for stable and efficient learning")
             online_policy = PPOOnlineTreePolicy(
                 learning_rate=args.online_lr,
                 n_steps=getattr(args, 'ppo_n_steps', 2048),
                 batch_size=getattr(args, 'ppo_batch_size', 64),
-                n_epochs=getattr(args, 'ppo_n_epochs', 10),
+                n_epochs=getattr(args, 'ppo_epochs', 10),
                 gamma=getattr(args, 'ppo_gamma', 0.99),
                 gae_lambda=getattr(args, 'ppo_gae_lambda', 0.95),
                 clip_range=getattr(args, 'ppo_clip_range', 0.2),
@@ -635,8 +654,9 @@ def get_model_answers(
             # Progress update with checkpoint info
             if question_count % 10 == 0:
                 resume_info = online_policy.get_resume_info()
+                step_count = resume_info.get('step_count', 0)
                 progress_msg = (f"📊 Progress: {question_count}/{len(questions)} questions, "
-                               f"Step: {resume_info['step_count']}")
+                               f"Step: {step_count}")
                 
                 # Add policy-specific metrics
                 if 'epsilon' in resume_info:
@@ -649,7 +669,7 @@ def get_model_answers(
                 print(progress_msg)
                 
                 if online_policy.should_save_checkpoint():
-                    print(f"   💾 Checkpoint will be saved at step {resume_info['step_count']}")
+                    print(f"   💾 Checkpoint will be saved at step {step_count}")
 
     # Save online RL policy if used and training was enabled
     if online_policy is not None:
@@ -967,40 +987,46 @@ if __name__ == "__main__":
         help="Use PPO (Proximal Policy Optimization) algorithm for stable continuous learning"
     )
     parser.add_argument(
-        "--ppo-n-steps",
+        "--use-discrete-ppo",
+        action="store_true",
+        help="Use PPO with discrete action space (combines PPO stability with parameter bins)"
+    )
+    parser.add_argument(
+        "--ppo-epochs",
         type=int,
-        default=2048,
-        help="Number of steps to run for each environment per update for PPO"
+        default=10,
+        help="Number of epochs when optimizing the surrogate loss for PPO (both continuous and discrete)"
     )
     parser.add_argument(
         "--ppo-batch-size",
         type=int,
         default=64,
-        help="Minibatch size for PPO updates"
-    )
-    parser.add_argument(
-        "--ppo-n-epochs",
-        type=int,
-        default=10,
-        help="Number of epochs when optimizing the surrogate loss for PPO"
-    )
-    parser.add_argument(
-        "--ppo-gamma",
-        type=float,
-        default=0.99,
-        help="Discount factor for PPO"
-    )
-    parser.add_argument(
-        "--ppo-gae-lambda",
-        type=float,
-        default=0.95,
-        help="Factor for trade-off of bias vs variance for Generalized Advantage Estimator"
+        help="Minibatch size for PPO updates (both continuous and discrete)"
     )
     parser.add_argument(
         "--ppo-clip-range",
         type=float,
         default=0.2,
-        help="Clipping parameter for PPO surrogate loss"
+        help="Clipping parameter for PPO surrogate loss (both continuous and discrete)"
+    )
+    parser.add_argument(
+        "--ppo-gamma",
+        type=float,
+        default=0.99,
+        help="Discount factor for PPO (both continuous and discrete)"
+    )
+    parser.add_argument(
+        "--ppo-gae-lambda",
+        type=float,
+        default=0.95,
+        help="Factor for trade-off of bias vs variance for Generalized Advantage Estimator (both continuous and discrete)"
+    )
+    # Continuous PPO specific arguments (ignored by discrete PPO)
+    parser.add_argument(
+        "--ppo-n-steps",
+        type=int,
+        default=2048,
+        help="Number of steps to run for each environment per update for PPO (continuous PPO only)"
     )
 
     args = parser.parse_args()
@@ -1010,7 +1036,9 @@ if __name__ == "__main__":
 
     # Print helpful information about RL vs fixed parameters
     if args.use_online_rl:
-        if getattr(args, 'use_ppo', False):
+        if getattr(args, 'use_discrete_ppo', False):
+            action_space_type = "Discrete PPO (Actor-Critic)"
+        elif getattr(args, 'use_ppo', False):
             action_space_type = "PPO (Continuous)"
         elif getattr(args, 'continuous_action_space', False):
             action_space_type = "Continuous (Actor-Critic)"
@@ -1020,10 +1048,16 @@ if __name__ == "__main__":
         print(f"\n🚀 Online RL Mode: Real-time learning and parameter optimization ({action_space_type})")
         print(f"   Learning rate: {args.online_lr}")
         
-        if getattr(args, 'use_ppo', False):
+        if getattr(args, 'use_discrete_ppo', False):
+            print(f"   Discrete PPO epochs: {getattr(args, 'ppo_epochs', 10)}")
+            print(f"   Discrete PPO batch_size: {getattr(args, 'ppo_batch_size', 64)}")
+            print(f"   Discrete PPO clip_range: {getattr(args, 'ppo_clip_range', 0.2)}")
+            print(f"   Discrete PPO gamma: {getattr(args, 'ppo_gamma', 0.99)}")
+            print(f"   Discrete PPO GAE lambda: {getattr(args, 'ppo_gae_lambda', 0.95)}")
+        elif getattr(args, 'use_ppo', False):
             print(f"   PPO n_steps: {getattr(args, 'ppo_n_steps', 2048)}")
             print(f"   PPO batch_size: {getattr(args, 'ppo_batch_size', 64)}")
-            print(f"   PPO n_epochs: {getattr(args, 'ppo_n_epochs', 10)}")
+            print(f"   PPO n_epochs: {getattr(args, 'ppo_epochs', 10)}")
             print(f"   PPO gamma: {getattr(args, 'ppo_gamma', 0.99)}")
             print(f"   PPO clip_range: {getattr(args, 'ppo_clip_range', 0.2)}")
         else:
@@ -1038,7 +1072,7 @@ if __name__ == "__main__":
         if getattr(args, 'use_ppo', False) or getattr(args, 'continuous_action_space', False):
             print(f"   Action Space: Continuous (total_tokens: 16-128, depth: 2-8, top_k: 2-32)")
         else:
-            print(f"   Action Space: Discrete (116 valid combinations from 5×5×5 bins)")
+            print(f"   Action Space: Discrete (valid combinations from 6×6×5=180 total bins)")
         if not args.online_inference_only:
             print(f"   Training: Questions repeated {args.online_repeat_factor}x and shuffled")
         else:
