@@ -41,6 +41,7 @@ try:
     from .continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
     from .ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
     from .discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
+    from .sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
 except:
     from eagle.model.ea_model import EaModel
     from eagle.model.kv_cache import initialize_past_key_values
@@ -50,6 +51,7 @@ except:
     from eagle.evaluation.continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
     from eagle.evaluation.ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
     from eagle.evaluation.discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
+    from eagle.evaluation.sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
 
 
 
@@ -172,7 +174,26 @@ def get_model_answers(
         wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
         
         # Choose between PPO, continuous, and discrete action space
-        if getattr(args, 'use_discrete_ppo', False):
+        if getattr(args, 'use_sb3_discrete_ppo', False):
+            print("🚀 Using Stable Baselines 3 Discrete PPO for robust and optimized learning")
+            online_policy = SB3DiscretePPOOnlineTreePolicy(
+                learning_rate=args.online_lr,
+                n_steps=getattr(args, 'ppo_n_steps', 64),
+                batch_size=getattr(args, 'ppo_batch_size', 32),
+                n_epochs=getattr(args, 'ppo_epochs', 4),
+                gamma=getattr(args, 'ppo_gamma', 0.95),
+                gae_lambda=getattr(args, 'ppo_gae_lambda', 0.9),
+                clip_range=getattr(args, 'ppo_clip_range', 0.2),
+                ent_coef=getattr(args, 'ppo_ent_coef', 0.05),
+                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                wandb_project=args.wandb_project,
+                wandb_run_name=wandb_run_name,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
+                max_checkpoints=getattr(args, 'max_checkpoints', 3)
+            )
+            reward_function = calculate_sb3_discrete_ppo_reward
+        elif getattr(args, 'use_discrete_ppo', False):
             print("🚀 Using Discrete PPO Algorithm for stable learning with parameter bins")
             online_policy = DiscretePPOOnlineTreePolicy(
                 learning_rate=args.online_lr,
@@ -273,9 +294,35 @@ def get_model_answers(
         
         # Fallback to explicit policy path if no checkpoint resume
         if not resumed:
-            if args.online_policy_path and os.path.exists(args.online_policy_path):
-                online_policy.load(args.online_policy_path)
-                print(f"Loaded existing online policy from {args.online_policy_path}")
+            if args.online_policy_path:
+                # For SB3 discrete PPO, check the converted path format
+                policy_exists = False
+                if getattr(args, 'use_sb3_discrete_ppo', False):
+                    # Check for SB3 format: .pth -> _sb3.zip
+                    sb3_path = args.online_policy_path.replace('.pth', '_sb3.zip') if args.online_policy_path.endswith('.pth') else args.online_policy_path + '.zip'
+                    policy_exists = os.path.exists(sb3_path)
+                    if policy_exists:
+                        print(f"Found SB3 policy file: {sb3_path}")
+                else:
+                    # Standard path check for other policies
+                    policy_exists = os.path.exists(args.online_policy_path)
+                
+                if policy_exists:
+                    # Load the policy (let the policy class handle path conversion internally)
+                    if online_policy.load(args.online_policy_path):
+                        print(f"Loaded existing online policy from {args.online_policy_path}")
+                    else:
+                        print("❗ Failed to load online policy: file exists but loading failed")
+                        if args.online_inference_only:
+                            print("❗ Online inference mode only, no training allowed")
+                            quit()
+                else:
+                    print(f"Policy file not found: {args.online_policy_path}")
+                    if args.online_inference_only:
+                        print("❗ Failed to load online policy: online inference mode only, no training allowed")
+                        quit()
+                    else:
+                        print("Starting with fresh online policy")
             else:
                 print("Starting with fresh online policy")
                 if args.online_inference_only:
@@ -992,6 +1039,11 @@ if __name__ == "__main__":
         help="Use PPO with discrete action space (combines PPO stability with parameter bins)"
     )
     parser.add_argument(
+        "--use-sb3-discrete-ppo",
+        action="store_true",
+        help="Use Stable Baselines 3 Discrete PPO for optimized and robust learning"
+    )
+    parser.add_argument(
         "--ppo-epochs",
         type=int,
         default=10,
@@ -1021,12 +1073,23 @@ if __name__ == "__main__":
         default=0.95,
         help="Factor for trade-off of bias vs variance for Generalized Advantage Estimator (both continuous and discrete)"
     )
-    # Continuous PPO specific arguments (ignored by discrete PPO)
     parser.add_argument(
         "--ppo-n-steps",
         type=int,
         default=2048,
         help="Number of steps to run for each environment per update for PPO (continuous PPO only)"
+    )
+    parser.add_argument(
+        "--ppo-ent-coef",
+        type=float,
+        default=0.01,
+        help="Entropy coefficient for the loss calculation (SB3 PPO only)"
+    )
+    parser.add_argument(
+        "--ppo-vf-coef",
+        type=float,
+        default=0.5,
+        help="Value function coefficient for the loss calculation (SB3 PPO only)"
     )
 
     args = parser.parse_args()
@@ -1036,7 +1099,9 @@ if __name__ == "__main__":
 
     # Print helpful information about RL vs fixed parameters
     if args.use_online_rl:
-        if getattr(args, 'use_discrete_ppo', False):
+        if getattr(args, 'use_sb3_discrete_ppo', False):
+            action_space_type = "SB3 Discrete PPO (Optimized)"
+        elif getattr(args, 'use_discrete_ppo', False):
             action_space_type = "Discrete PPO (Actor-Critic)"
         elif getattr(args, 'use_ppo', False):
             action_space_type = "PPO (Continuous)"
@@ -1048,7 +1113,14 @@ if __name__ == "__main__":
         print(f"\n🚀 Online RL Mode: Real-time learning and parameter optimization ({action_space_type})")
         print(f"   Learning rate: {args.online_lr}")
         
-        if getattr(args, 'use_discrete_ppo', False):
+        if getattr(args, 'use_sb3_discrete_ppo', False):
+            print(f"   SB3 Discrete PPO n_steps: {getattr(args, 'ppo_n_steps', 64)}")
+            print(f"   SB3 Discrete PPO batch_size: {getattr(args, 'ppo_batch_size', 32)}")
+            print(f"   SB3 Discrete PPO n_epochs: {getattr(args, 'ppo_epochs', 4)}")
+            print(f"   SB3 Discrete PPO gamma: {getattr(args, 'ppo_gamma', 0.95)}")
+            print(f"   SB3 Discrete PPO GAE lambda: {getattr(args, 'ppo_gae_lambda', 0.9)}")
+            print(f"   SB3 Discrete PPO entropy coef: {getattr(args, 'ppo_ent_coef', 0.05)}")
+        elif getattr(args, 'use_discrete_ppo', False):
             print(f"   Discrete PPO epochs: {getattr(args, 'ppo_epochs', 10)}")
             print(f"   Discrete PPO batch_size: {getattr(args, 'ppo_batch_size', 64)}")
             print(f"   Discrete PPO clip_range: {getattr(args, 'ppo_clip_range', 0.2)}")
