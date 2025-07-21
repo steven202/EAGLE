@@ -825,6 +825,11 @@ if __name__ == "__main__":
         help="The name of the benchmark question set.",
     )
     parser.add_argument(
+        "--question-file",
+        type=str,
+        help="Custom question file path (overrides --bench-name). Use this for training with custom datasets like the combined conversational data."
+    )
+    parser.add_argument(
         "--question-begin",
         type=int,
         help="A debug option. The begin index of questions.",
@@ -1193,7 +1198,7 @@ if __name__ == "__main__":
 
         ray.init()
 
-    question_file = f"{parent_dir}/data/{args.bench_name}/question.jsonl"
+    question_file = args.question_file if args.question_file else f"{parent_dir}/data/{args.bench_name}/question.jsonl"
     if args.answer_file:
         answer_file = args.answer_file
     else:

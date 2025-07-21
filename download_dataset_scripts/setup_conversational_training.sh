@@ -8,7 +8,7 @@ set -e
 # Configuration
 BASE_DIR="/home/guo/EAGLE_RL"
 DATA_DIR="$BASE_DIR/training_data"
-SCRIPTS_DIR="$BASE_DIR/scripts"
+SCRIPTS_DIR="$BASE_DIR/download_dataset_scripts"
 MODEL_PATH="$BASE_DIR/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
 
