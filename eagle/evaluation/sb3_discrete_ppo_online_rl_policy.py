@@ -164,7 +164,7 @@ class WandbCallback(BaseCallback):
         return True
 
 class SB3DiscretePPOOnlineTreePolicy:
-    """Stable Baselines 3 PPO-based Online RL Policy for EAGLE parameter optimization"""
+    """Stable Baselines 3 Max-Entropy PPO-based Online RL Policy for EAGLE parameter optimization"""
     
     def __init__(self, 
                  learning_rate=3e-4,
@@ -174,9 +174,11 @@ class SB3DiscretePPOOnlineTreePolicy:
                  gamma=0.95,
                  gae_lambda=0.9,
                  clip_range=0.2,
-                 ent_coef=0.05,       # Entropy coefficient for exploration
+                 ent_coef=0.1,        # Higher entropy coefficient for max-entropy RL
                  vf_coef=0.5,         # Value function coefficient
                  max_grad_norm=0.5,
+                 inference_temperature=1.0,  # Temperature for inference-time exploration
+                 max_entropy_inference=True,  # Enable max-entropy during inference
                  use_wandb=True,
                  wandb_project="eagle-sb3-discrete-ppo",
                  wandb_run_name=None,
@@ -188,6 +190,10 @@ class SB3DiscretePPOOnlineTreePolicy:
             raise ImportError("Stable Baselines 3 not available. Install with: pip install stable-baselines3")
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Max-entropy RL parameters
+        self.inference_temperature = inference_temperature
+        self.max_entropy_inference = max_entropy_inference
         
         # Resume mechanism configuration
         self.checkpoint_dir = checkpoint_dir
@@ -216,6 +222,8 @@ class SB3DiscretePPOOnlineTreePolicy:
                         "clip_range": clip_range,
                         "ent_coef": ent_coef,
                         "vf_coef": vf_coef,
+                        "inference_temperature": inference_temperature,
+                        "max_entropy_inference": max_entropy_inference,
                         "device": str(self.device)
                     }
                 )
@@ -254,17 +262,18 @@ class SB3DiscretePPOOnlineTreePolicy:
         self.step_count = 0
         self.update_count = 0
         
-        # Performance tracking
+        # Track performance with entropy metrics
         self.reward_history = []
         self.parameter_history = []
         self.tokens_per_second_history = []
+        self.entropy_history = []  # Track entropy for max-entropy RL
         
         # Setup wandb callback
         self.callbacks = []
         if self.use_wandb:
             self.callbacks.append(WandbCallback())
         
-        print(f"SB3 Discrete PPO Policy initialized:")
+        print(f"SB3 Max-Entropy Discrete PPO Policy initialized:")
         print(f"  - Environment: EagleParameterEnv")
         print(f"  - Action space: {self.env.action_space.n} valid actions")
         print(f"  - Observation space: {self.env.observation_space.shape}")
@@ -272,17 +281,40 @@ class SB3DiscretePPOOnlineTreePolicy:
         print(f"  - PPO n_steps: {n_steps}")
         print(f"  - PPO batch_size: {batch_size}")
         print(f"  - PPO n_epochs: {n_epochs}")
+        print(f"  - Entropy coefficient: {ent_coef} (high for max-entropy)")
+        print(f"  - Inference temperature: {inference_temperature}")
+        print(f"  - Max-entropy inference: {max_entropy_inference}")
         print(f"  - Device: {self.device}")
         print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
     
     def predict_parameters(self, context, training_mode=True):
-        """Predict parameters using SB3 PPO policy"""
+        """Predict parameters using SB3 Max-Entropy PPO policy"""
         # Encode state
         state = self.env._encode_state(context)
         self.env.current_context = context
         
-        # Get action from PPO model
-        action, _ = self.model.predict(state, deterministic=not training_mode)
+        # Max-entropy inference: use temperature-based sampling even during inference
+        if self.max_entropy_inference and not training_mode:
+            # For robust max-entropy inference, use a hybrid approach
+            if self.inference_temperature != 1.0:
+                # Try temperature-based sampling
+                try:
+                    action = self._sample_with_temperature(state, self.inference_temperature)
+                    exploration_mode = "MAX-ENTROPY"
+                except Exception as e:
+                    print(f"⚠️  Temperature sampling failed: {e}")
+                    print("   Using enhanced stochastic sampling instead")
+                    # Enhanced fallback: sample multiple times and use diversity
+                    action = self._enhanced_stochastic_sampling(state)
+                    exploration_mode = "ENHANCED-STOCHASTIC"
+            else:
+                # Use stochastic prediction for exploration
+                action, _ = self.model.predict(state, deterministic=False) 
+                exploration_mode = "STOCHASTIC"
+        else:
+            # Standard PPO prediction
+            action, _ = self.model.predict(state, deterministic=not training_mode)
+            exploration_mode = "EXPLORE" if training_mode else "EXPLOIT"
         
         # Convert to actual parameters
         actual_action = self.env.valid_actions[action]
@@ -293,17 +325,126 @@ class SB3DiscretePPOOnlineTreePolicy:
             self.last_state = state
             self.last_action = action
             self.last_params = (total_tokens, depth, top_k)
-            
-            # Debug print
-            max_tokens = top_k ** (depth - 1)
-            mode_str = "EXPLORE" if not self.model.predict(state, deterministic=True)[0] == action else "EXPLOIT"
-            print(f"SB3 Discrete PPO {mode_str}: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
-        else:
-            # Inference mode
-            max_tokens = top_k ** (depth - 1)
-            print(f"SB3 Discrete PPO INFERENCE: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
+        
+        # Debug print
+        max_tokens = top_k ** (depth - 1)
+        mode_prefix = "SB3 Max-Entropy PPO" if not training_mode and self.max_entropy_inference else "SB3 Discrete PPO"
+        print(f"{mode_prefix} {exploration_mode}: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
         
         return total_tokens, depth, top_k
+    
+    def _sample_with_temperature(self, state, temperature):
+        """Sample action using temperature-based softmax for max-entropy exploration"""
+        # Get action probabilities from the policy network
+        obs_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        
+        with torch.no_grad():
+            # Use SB3's proper prediction pipeline to get action distribution
+            # This ensures proper feature extraction and preprocessing
+            try:
+                # Method 1: Get logits directly from the policy network
+                features = self.model.policy.extract_features(obs_tensor)
+                if hasattr(self.model.policy, 'mlp_extractor'):
+                    # SB3 v2.x style with mlp_extractor
+                    latent_pi, _ = self.model.policy.mlp_extractor(features)
+                    logits = self.model.policy.action_net(latent_pi)
+                else:
+                    # SB3 v1.x style direct action network
+                    logits = self.model.policy.action_net(features)
+                
+                # Apply temperature scaling for max-entropy sampling
+                if temperature > 0:
+                    scaled_logits = logits / temperature
+                    probs = torch.softmax(scaled_logits, dim=-1)
+                    
+                    # Sample from the distribution
+                    dist = torch.distributions.Categorical(probs)
+                    action = dist.sample()
+                    
+                    # Log entropy for monitoring
+                    entropy = dist.entropy()
+                    if self.use_wandb and hasattr(self, 'step_count'):
+                        import wandb
+                        wandb.log({
+                            "inference_entropy": entropy.item(),
+                            "inference_temperature": temperature,
+                            "step": self.step_count
+                        })
+                    
+                    print(f"   Max-entropy sampling: T={temperature:.1f}, H={entropy.item():.3f}")
+                    return action.item()
+                else:
+                    # Deterministic (argmax)
+                    return torch.argmax(logits, dim=-1).item()
+                    
+            except Exception as e:
+                print(f"⚠️  Error in direct logits extraction: {e}")
+                
+                # Method 2: Fallback using action probabilities from policy
+                try:
+                    # Get the action probabilities using the policy's forward pass
+                    actions, values, log_probs = self.model.policy.forward(obs_tensor)
+                    
+                    # Convert log probabilities to probabilities
+                    probs = torch.exp(log_probs)
+                    
+                    if temperature > 0 and temperature != 1.0:
+                        # Apply temperature scaling
+                        # Convert back to logits, scale, then to probabilities
+                        logits = torch.log(probs + 1e-8)  # Add small epsilon for numerical stability
+                        scaled_logits = logits / temperature
+                        scaled_probs = torch.softmax(scaled_logits, dim=-1)
+                        
+                        # Sample from the scaled distribution
+                        dist = torch.distributions.Categorical(scaled_probs)
+                        action = dist.sample()
+                        
+                        # Log entropy for monitoring
+                        entropy = dist.entropy()
+                        if self.use_wandb and hasattr(self, 'step_count'):
+                            import wandb
+                            wandb.log({
+                                "inference_entropy": entropy.item(),
+                                "inference_temperature": temperature,
+                                "step": self.step_count
+                            })
+                        
+                        print(f"   Max-entropy sampling (fallback): T={temperature:.1f}, H={entropy.item():.3f}")
+                        return action.item()
+                    else:
+                        # Use the original action from policy
+                        return actions.item()
+                        
+                except Exception as e2:
+                    print(f"⚠️  Error in fallback method: {e2}")
+                    print("   Using standard stochastic PPO prediction")
+                    # Final fallback to standard prediction
+                    action, _ = self.model.predict(obs_tensor.cpu().numpy(), deterministic=False)
+                    return action if isinstance(action, int) else action.item()
+    
+    def _enhanced_stochastic_sampling(self, state):
+        """Enhanced stochastic sampling for max-entropy when temperature sampling fails"""
+        # Sample multiple times and choose based on a strategy to increase diversity
+        samples = []
+        for _ in range(5):  # Take 5 samples
+            action, _ = self.model.predict(state, deterministic=False)
+            samples.append(action if isinstance(action, int) else action.item())
+        
+        # Strategy 1: Choose a random sample (increases diversity)
+        chosen_action = random.choice(samples)
+        
+        # Log diversity metrics
+        unique_samples = len(set(samples))
+        if self.use_wandb and hasattr(self, 'step_count'):
+            import wandb
+            wandb.log({
+                "enhanced_sampling_diversity": unique_samples / 5.0,
+                "enhanced_sampling_unique_actions": unique_samples,
+                "step": self.step_count
+            })
+        
+        print(f"   Enhanced stochastic: {unique_samples}/5 unique actions")
+        return chosen_action
     
     def update_policy(self, reward, generation_time=None, new_tokens=None):
         """Update policy with reward from last action"""
@@ -397,6 +538,7 @@ class SB3DiscretePPOOnlineTreePolicy:
             'reward_history': self.reward_history,
             'parameter_history': self.parameter_history,
             'tokens_per_second_history': self.tokens_per_second_history,
+            'entropy_history': self.entropy_history,
         }
         
         metadata_path = checkpoint_path + "_metadata.json"
@@ -436,6 +578,7 @@ class SB3DiscretePPOOnlineTreePolicy:
                 self.reward_history = metadata['reward_history']
                 self.parameter_history = metadata['parameter_history']
                 self.tokens_per_second_history = metadata['tokens_per_second_history']
+                self.entropy_history = metadata.get('entropy_history', [])
             
             print(f"✅ SB3 Discrete PPO checkpoint loaded: {checkpoint_path}")
             print(f"   Resuming from step {self.step_count}, update {self.update_count}")

@@ -14,9 +14,10 @@ BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
 echo "=== EAGLE3 SB3 Discrete PPO Online RL: Training + Testing Workflow ===" | tee log/$DATE/output_sb3_discrete_ppo.log
 echo "Model: $MODEL_PATH" | tee -a log/$DATE/output_sb3_discrete_ppo.log
 echo "Base Model: $BASE_MODEL_PATH" | tee -a log/$DATE/output_sb3_discrete_ppo.log
-echo "Algorithm: Stable Baselines 3 Discrete PPO with optimized implementation" | tee -a log/$DATE/output_sb3_discrete_ppo.log
+echo "Algorithm: Stable Baselines 3 Max-Entropy Discrete PPO with diverse parameter exploration" | tee -a log/$DATE/output_sb3_discrete_ppo.log
 echo "Constraint: total_tokens ≤ top_k^(depth-1)" | tee -a log/$DATE/output_sb3_discrete_ppo.log
-echo "SB3 Features: Optimized PPO, vectorized environments, robust training" | tee -a log/$DATE/output_sb3_discrete_ppo.log
+echo "SB3 Features: Optimized PPO, vectorized environments, robust training, max-entropy exploration" | tee -a log/$DATE/output_sb3_discrete_ppo.log
+echo "Max-Entropy Features: High entropy coefficient, temperature-based inference, diverse parameter sampling" | tee -a log/$DATE/output_sb3_discrete_ppo.log
 echo "Workflow: Train → Test → Analyze" | tee -a log/$DATE/output_sb3_discrete_ppo.log
 echo "Resume: Checkpoints → Fallback to final model → Fresh start" | tee -a log/$DATE/output_sb3_discrete_ppo.log
 echo "Log Directory: log/$DATE" | tee -a log/$DATE/output_sb3_discrete_ppo.log
@@ -38,8 +39,10 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --ppo-clip-range 0.2 \
     --ppo-gamma 0.95 \
     --ppo-gae-lambda 0.9 \
-    --ppo-ent-coef 0.05 \
+    --ppo-ent-coef 0.1 \
     --ppo-vf-coef 0.5 \
+    --inference-temperature 1.5 \
+    --max-entropy-inference \
     --online-policy-save-path "log/$DATE/sb3_discrete_ppo_policy.pth" \
     --temperature 0.0 \
     --use_eagle3 \
@@ -49,7 +52,6 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --checkpoint-freq 50 \
     --online-repeat-factor 5 \
     --no-resume \
-    # --wandb-project "eagle-sb3-discrete-ppo-experiment" \
     2>&1 | tee -a log/$DATE/output_sb3_discrete_ppo.log
 
 echo "" | tee -a log/$DATE/output_sb3_discrete_ppo.log
@@ -72,6 +74,8 @@ python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --use-sb3-discrete-ppo \
     --online-policy-path "log/$DATE/sb3_discrete_ppo_policy.pth" \
     --online-inference-only \
+    --inference-temperature 1.5 \
+    --max-entropy-inference \
     --temperature 0.0 \
     --use_eagle3 \
     --max-new-token 512 \

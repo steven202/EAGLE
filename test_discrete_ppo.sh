@@ -46,7 +46,6 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --checkpoint-freq 50 \
     --online-repeat-factor 5 \
     --no-resume \
-    # --wandb-project "eagle-discrete-ppo-experiment" \
     2>&1 | tee -a log/$DATE/output_discrete_ppo.log
 
 echo "" | tee -a log/$DATE/output_discrete_ppo.log
