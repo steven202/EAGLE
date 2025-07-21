@@ -562,7 +562,7 @@ def get_model_answers(
                 start_time = time.time()
 
                 # Use no_grad for model inference to save memory and computation
-                max_retries = 3
+                max_retries = 1 # default is 3, here, we set it to 1 for faster inference
                 retry_count = 0
                 success = False
                 
