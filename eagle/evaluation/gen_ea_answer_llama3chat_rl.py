@@ -505,6 +505,31 @@ def get_model_answers(
     # questions=questions[6:]
     question_count = 0
     for question in tqdm(questions, desc="Processing questions"):
+        
+        # Track question processing for online RL resume mechanism (count even skipped questions)
+        question_count += 1
+        if online_policy is not None and not args.online_inference_only:
+            online_policy.increment_questions_processed()
+            
+            # Progress update with checkpoint info
+            if question_count % 10 == 0:
+                resume_info = online_policy.get_resume_info()
+                step_count = resume_info.get('step_count', 0)
+                progress_msg = (f"📊 Progress: {question_count}/{len(questions)} questions, "
+                               f"Step: {step_count}")
+                
+                # Add policy-specific metrics
+                if 'epsilon' in resume_info:
+                    # DQN-based policies (discrete/continuous Actor-Critic)
+                    progress_msg += f", Epsilon: {resume_info['epsilon']:.3f}"
+                elif 'ppo_updates' in resume_info:
+                    # PPO-based policies
+                    progress_msg += f", PPO Updates: {resume_info['ppo_updates']}"
+                
+                print(progress_msg)
+                
+                if online_policy.should_save_checkpoint():
+                    print(f"   💾 Checkpoint will be saved at step {step_count}")
 
         choices = []
         for i in range(num_choices):
@@ -610,7 +635,7 @@ def get_model_answers(
                 
                 # If all retries failed, skip this question
                 if not success:
-                    print(f"⏭️  Skipping question {question_count} due to persistent KV cache errors")
+                    print(f"⏭️  Skipping question {question_count}/{len(questions)} due to persistent KV cache errors")
                     continue
                     
                 torch.cuda.synchronize()
@@ -721,31 +746,6 @@ def get_model_answers(
                 "tstamp": time.time(),
             }
             fout.write(json.dumps(ans_json) + "\n")
-
-        # Track question completion for online RL resume mechanism
-        question_count += 1
-        if online_policy is not None and not args.online_inference_only:
-            online_policy.increment_questions_processed()
-            
-            # Progress update with checkpoint info
-            if question_count % 10 == 0:
-                resume_info = online_policy.get_resume_info()
-                step_count = resume_info.get('step_count', 0)
-                progress_msg = (f"📊 Progress: {question_count}/{len(questions)} questions, "
-                               f"Step: {step_count}")
-                
-                # Add policy-specific metrics
-                if 'epsilon' in resume_info:
-                    # DQN-based policies (discrete/continuous Actor-Critic)
-                    progress_msg += f", Epsilon: {resume_info['epsilon']:.3f}"
-                elif 'ppo_updates' in resume_info:
-                    # PPO-based policies
-                    progress_msg += f", PPO Updates: {resume_info['ppo_updates']}"
-                
-                print(progress_msg)
-                
-                if online_policy.should_save_checkpoint():
-                    print(f"   💾 Checkpoint will be saved at step {step_count}")
 
     # Save online RL policy if used and training was enabled
     if online_policy is not None:
