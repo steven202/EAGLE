@@ -50,8 +50,9 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --num-choices 1 \
     --checkpoint-dir "log/$DATE/sb3_discrete_ppo_checkpoints" \
     --checkpoint-freq 50 \
-    --online-repeat-factor 5 \
+    --online-repeat-factor 1 \
     --no-resume \
+    --question-file eagle/data/rl_training/question.jsonl \
     2>&1 | tee -a log/$DATE/output_sb3_discrete_ppo.log
 
 echo "" | tee -a log/$DATE/output_sb3_discrete_ppo.log

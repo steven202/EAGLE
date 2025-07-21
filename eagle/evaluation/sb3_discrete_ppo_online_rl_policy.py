@@ -78,9 +78,35 @@ class EagleParameterEnv(gym.Env):
         return valid_actions
     
     def _is_valid_combination(self, total_tokens, depth, top_k):
-        """Check if parameter combination satisfies constraint"""
-        max_tokens = top_k ** (depth - 1)
-        return total_tokens <= max_tokens
+        """Check if parameter combination satisfies constraints"""
+        # Original constraint: total_tokens <= top_k^(depth-1)
+        max_tokens_constraint = top_k ** (depth - 1)
+        basic_constraint = total_tokens <= max_tokens_constraint
+        
+        # Additional KV cache constraint: approximate tree size should not exceed safe limits
+        # Empirical observation: tree expansion can be roughly estimated as total_tokens * depth
+        # Conservative estimate to avoid KV cache overflow (2048 limit)
+        tree_size_estimate = total_tokens * depth
+        kv_cache_safe_limit = 1500  # Conservative limit to avoid 2048 overflow
+        kv_constraint = tree_size_estimate <= kv_cache_safe_limit
+        
+        # Very conservative constraint for high depth/high top_k combinations
+        if depth >= 7 and top_k >= 16:
+            # Extra conservative for high complexity combinations
+            conservative_limit = 800
+            conservative_constraint = tree_size_estimate <= conservative_limit
+        else:
+            conservative_constraint = True
+        # All constraints must pass
+        is_valid = basic_constraint and kv_constraint and conservative_constraint
+        
+        if not is_valid and hasattr(self, '_debug_constraint'):
+            print(f"❌ Invalid combination: tt={total_tokens}, d={depth}, k={top_k}")
+            print(f"   Basic: {basic_constraint} (tt <= k^(d-1) = {max_tokens_constraint})")
+            print(f"   KV cache: {kv_constraint} (tree_size={tree_size_estimate} <= {kv_cache_safe_limit})")
+            print(f"   Conservative: {conservative_constraint}")
+            
+        return is_valid
     
     def _action_to_params(self, action):
         """Convert discrete action to parameter values"""
@@ -164,7 +190,12 @@ class WandbCallback(BaseCallback):
         return True
 
 class SB3DiscretePPOOnlineTreePolicy:
-    """Stable Baselines 3 Max-Entropy PPO-based Online RL Policy for EAGLE parameter optimization"""
+    """Stable Baselines 3 PPO-based Online RL Policy for EAGLE parameter optimization
+    
+    Supports both standard PPO and max-entropy PPO modes:
+    - Standard PPO: Low entropy coefficient, deterministic inference
+    - Max-Entropy PPO: High entropy coefficient, temperature-based inference
+    """
     
     def __init__(self, 
                  learning_rate=3e-4,
@@ -174,11 +205,14 @@ class SB3DiscretePPOOnlineTreePolicy:
                  gamma=0.95,
                  gae_lambda=0.9,
                  clip_range=0.2,
-                 ent_coef=0.1,        # Higher entropy coefficient for max-entropy RL
+                 ent_coef=0.1,        # DEFAULT: Max-Entropy PPO entropy (high)
                  vf_coef=0.5,         # Value function coefficient
                  max_grad_norm=0.5,
-                 inference_temperature=1.0,  # Temperature for inference-time exploration
-                 max_entropy_inference=True,  # Enable max-entropy during inference
+                 # Max-entropy specific parameters
+                 enable_max_entropy=True,      # NEW: Max-entropy mode enabled by default
+                 max_entropy_ent_coef=0.1,     # Higher entropy for max-entropy mode
+                 inference_temperature=1.5,    # Temperature for inference-time exploration (default higher)
+                 max_entropy_inference=True,   # NEW: Default enabled for max-entropy
                  use_wandb=True,
                  wandb_project="eagle-sb3-discrete-ppo",
                  wandb_run_name=None,
@@ -191,9 +225,18 @@ class SB3DiscretePPOOnlineTreePolicy:
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Max-entropy RL parameters
-        self.inference_temperature = inference_temperature
-        self.max_entropy_inference = max_entropy_inference
+        # Max-entropy RL configuration
+        self.enable_max_entropy = enable_max_entropy
+        self.inference_temperature = inference_temperature if enable_max_entropy else 1.0
+        self.max_entropy_inference = max_entropy_inference and enable_max_entropy  # Only if max-entropy enabled
+        
+        # Choose entropy coefficient based on mode
+        if enable_max_entropy:
+            actual_ent_coef = max_entropy_ent_coef
+            mode_name = "Max-Entropy PPO"
+        else:
+            actual_ent_coef = ent_coef
+            mode_name = "Standard PPO"
         
         # Resume mechanism configuration
         self.checkpoint_dir = checkpoint_dir
@@ -220,11 +263,13 @@ class SB3DiscretePPOOnlineTreePolicy:
                         "gamma": gamma,
                         "gae_lambda": gae_lambda,
                         "clip_range": clip_range,
-                        "ent_coef": ent_coef,
+                        "ent_coef": actual_ent_coef,
                         "vf_coef": vf_coef,
-                        "inference_temperature": inference_temperature,
-                        "max_entropy_inference": max_entropy_inference,
-                        "device": str(self.device)
+                        "enable_max_entropy": enable_max_entropy,
+                        "inference_temperature": self.inference_temperature,
+                        "max_entropy_inference": self.max_entropy_inference,
+                        "device": str(self.device),
+                        "mode": mode_name
                     }
                 )
                 print(f"🔗 Wandb logging initialized: {wandb.run.get_url()}")
@@ -239,7 +284,7 @@ class SB3DiscretePPOOnlineTreePolicy:
         # Wrap environment for SB3
         self.vec_env = DummyVecEnv([lambda: self.env])
         
-        # Create PPO model
+        # Create PPO model with determined entropy coefficient
         self.model = PPO(
             policy="MlpPolicy",
             env=self.vec_env,
@@ -250,7 +295,7 @@ class SB3DiscretePPOOnlineTreePolicy:
             gamma=gamma,
             gae_lambda=gae_lambda,
             clip_range=clip_range,
-            ent_coef=ent_coef,
+            ent_coef=actual_ent_coef,    # Use mode-specific entropy coefficient
             vf_coef=vf_coef,
             max_grad_norm=max_grad_norm,
             verbose=1,
@@ -273,7 +318,8 @@ class SB3DiscretePPOOnlineTreePolicy:
         if self.use_wandb:
             self.callbacks.append(WandbCallback())
         
-        print(f"SB3 Max-Entropy Discrete PPO Policy initialized:")
+        print(f"SB3 {mode_name} Policy initialized:")
+        print(f"  - Mode: {mode_name}")
         print(f"  - Environment: EagleParameterEnv")
         print(f"  - Action space: {self.env.action_space.n} valid actions")
         print(f"  - Observation space: {self.env.observation_space.shape}")
@@ -281,21 +327,29 @@ class SB3DiscretePPOOnlineTreePolicy:
         print(f"  - PPO n_steps: {n_steps}")
         print(f"  - PPO batch_size: {batch_size}")
         print(f"  - PPO n_epochs: {n_epochs}")
-        print(f"  - Entropy coefficient: {ent_coef} (high for max-entropy)")
-        print(f"  - Inference temperature: {inference_temperature}")
-        print(f"  - Max-entropy inference: {max_entropy_inference}")
+        print(f"  - Entropy coefficient: {actual_ent_coef} ({'high for diversity' if enable_max_entropy else 'standard'})")
+        if enable_max_entropy:
+            print(f"  - Inference temperature: {self.inference_temperature}")
+            print(f"  - Max-entropy inference: {self.max_entropy_inference}")
+        else:
+            print(f"  - Inference mode: Deterministic/Standard Stochastic")
         print(f"  - Device: {self.device}")
         print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
+        
+        if enable_max_entropy:
+            print(f"🌟 MAX-ENTROPY MODE: Higher exploration, temperature-based inference")
+        else:
+            print(f"⚙️  STANDARD PPO MODE: Standard exploration, deterministic inference")
     
     def predict_parameters(self, context, training_mode=True):
-        """Predict parameters using SB3 Max-Entropy PPO policy"""
+        """Predict parameters using SB3 PPO policy (standard or max-entropy mode)"""
         # Encode state
         state = self.env._encode_state(context)
         self.env.current_context = context
         
-        # Max-entropy inference: use temperature-based sampling even during inference
-        if self.max_entropy_inference and not training_mode:
-            # For robust max-entropy inference, use a hybrid approach
+        # Choose prediction strategy based on mode and phase
+        if self.enable_max_entropy and self.max_entropy_inference and not training_mode:
+            # MAX-ENTROPY INFERENCE: Use temperature-based sampling for diversity
             if self.inference_temperature != 1.0:
                 # Try temperature-based sampling
                 try:
@@ -304,17 +358,20 @@ class SB3DiscretePPOOnlineTreePolicy:
                 except Exception as e:
                     print(f"⚠️  Temperature sampling failed: {e}")
                     print("   Using enhanced stochastic sampling instead")
-                    # Enhanced fallback: sample multiple times and use diversity
                     action = self._enhanced_stochastic_sampling(state)
                     exploration_mode = "ENHANCED-STOCHASTIC"
             else:
                 # Use stochastic prediction for exploration
                 action, _ = self.model.predict(state, deterministic=False) 
                 exploration_mode = "STOCHASTIC"
+        elif training_mode:
+            # TRAINING MODE: Always use stochastic for both modes (exploration)
+            action, _ = self.model.predict(state, deterministic=False)
+            exploration_mode = "EXPLORE"
         else:
-            # Standard PPO prediction
-            action, _ = self.model.predict(state, deterministic=not training_mode)
-            exploration_mode = "EXPLORE" if training_mode else "EXPLOIT"
+            # STANDARD INFERENCE: Use deterministic prediction
+            action, _ = self.model.predict(state, deterministic=True)
+            exploration_mode = "DETERMINISTIC"
         
         # Convert to actual parameters
         actual_action = self.env.valid_actions[action]
@@ -327,9 +384,9 @@ class SB3DiscretePPOOnlineTreePolicy:
             self.last_params = (total_tokens, depth, top_k)
         
         # Debug print
-        max_tokens = top_k ** (depth - 1)
-        mode_prefix = "SB3 Max-Entropy PPO" if not training_mode and self.max_entropy_inference else "SB3 Discrete PPO"
-        print(f"{mode_prefix} {exploration_mode}: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
+        # max_tokens = top_k ** (depth - 1)
+        # mode_name = "Max-Entropy PPO" if self.enable_max_entropy else "Standard PPO"
+        # print(f"SB3 {mode_name} {exploration_mode}: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
         
         return total_tokens, depth, top_k
     

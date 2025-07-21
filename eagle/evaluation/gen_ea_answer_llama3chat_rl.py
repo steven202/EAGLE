@@ -175,7 +175,13 @@ def get_model_answers(
         
         # Choose between PPO, continuous, and discrete action space
         if getattr(args, 'use_sb3_discrete_ppo', False):
-            print("🚀 Using Stable Baselines 3 Max-Entropy Discrete PPO for diverse parameter exploration")
+            # Determine max-entropy mode settings (default: enabled)
+            enable_max_entropy = getattr(args, 'enable_max_entropy', True)  # Default: True (max-entropy enabled)
+            max_entropy_inference_enabled = getattr(args, 'max_entropy_inference', True) and enable_max_entropy  # Default: True if max-entropy enabled
+            
+            mode_description = "SB3 Max-Entropy Discrete PPO" if enable_max_entropy else "SB3 Standard Discrete PPO"
+            print(f"🚀 Using {mode_description} for {'diverse' if enable_max_entropy else 'standard'} parameter exploration")
+            
             online_policy = SB3DiscretePPOOnlineTreePolicy(
                 learning_rate=args.online_lr,
                 n_steps=getattr(args, 'ppo_n_steps', 64),
@@ -184,9 +190,12 @@ def get_model_answers(
                 gamma=getattr(args, 'ppo_gamma', 0.95),
                 gae_lambda=getattr(args, 'ppo_gae_lambda', 0.9),
                 clip_range=getattr(args, 'ppo_clip_range', 0.2),
-                ent_coef=getattr(args, 'ppo_ent_coef', 0.1),  # Higher entropy for max-entropy RL
-                inference_temperature=getattr(args, 'inference_temperature', 1.0),
-                max_entropy_inference=getattr(args, 'max_entropy_inference', True),
+                ent_coef=0.01,  # Standard entropy coefficient (will be overridden if max-entropy enabled)
+                # Max-entropy specific parameters
+                enable_max_entropy=enable_max_entropy,
+                max_entropy_ent_coef=getattr(args, 'max_entropy_ent_coef', 0.1),
+                inference_temperature=getattr(args, 'inference_temperature', 1.5),
+                max_entropy_inference=max_entropy_inference_enabled,
                 use_wandb=(not args.online_inference_only and not args.no_wandb),
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
@@ -281,7 +290,7 @@ def get_model_answers(
                         random.shuffle(questions)
                         
                         # Skip already processed questions
-                        questions_to_skip = 0 #online_policy.questions_processed
+                        questions_to_skip = online_policy.questions_processed
                         if questions_to_skip > 0 and questions_to_skip < len(questions):
                             questions = questions[questions_to_skip:]
                             print(f"📋 Resuming from question {questions_to_skip+1}/{len(questions) + questions_to_skip}")
@@ -421,7 +430,7 @@ def get_model_answers(
                         tree_top_k=predicted_top_k,
                     )
             except RuntimeError as e:
-                if "selected index k out of range" in str(e):
+                if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                     print(f"   Falling back to conservative warmup parameters...")
                     
@@ -559,7 +568,7 @@ def get_model_answers(
                             tree_top_k=predicted_top_k,
                         )
                 except RuntimeError as e:
-                    if "selected index k out of range" in str(e):
+                    if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e):
                         print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                         print(f"   Error: {e}")
                         print(f"   Falling back to safe parameters...")
@@ -584,6 +593,12 @@ def get_model_answers(
                         
                         # Update predicted parameters for reward calculation
                         predicted_total_tokens, predicted_depth, predicted_top_k = safe_total_tokens, safe_depth, safe_top_k
+                        # If using online RL, give negative reward for invalid parameters
+                        # if online_policy is not None and not args.online_inference_only:
+                        #     # Penalize the policy for choosing invalid parameters
+                        #     penalty_reward = -10.0
+                        #     online_policy.update_policy(penalty_reward, 0.0, 0)
+                        #     print(f"   Applied penalty reward: {penalty_reward}")
                     else:
                         raise e  # Re-raise if it's a different error
                 torch.cuda.synchronize()
@@ -1101,16 +1116,33 @@ if __name__ == "__main__":
     
     # Max-entropy RL arguments
     parser.add_argument(
+        "--enable-max-entropy",
+        action="store_true",
+        default=True,  # DEFAULT: Max-entropy mode enabled
+        help="Enable max-entropy RL mode for SB3 PPO (higher exploration, temperature-based inference) - DEFAULT ENABLED"
+    )
+    parser.add_argument(
+        "--disable-max-entropy",
+        action="store_true",
+        help="Disable max-entropy RL mode and use standard PPO (lower exploration, deterministic inference)"
+    )
+    parser.add_argument(
+        "--max-entropy-ent-coef",
+        type=float,
+        default=0.1,
+        help="Entropy coefficient for max-entropy mode (default: 0.1, standard PPO uses ~0.01)"
+    )
+    parser.add_argument(
         "--inference-temperature",
         type=float,
-        default=1.0,
-        help="Temperature for exploration during inference (SB3 Max-Entropy PPO only). Higher values increase diversity."
+        default=1.5,
+        help="Temperature for exploration during inference (Max-Entropy mode only). Higher values increase diversity."
     )
     parser.add_argument(
         "--max-entropy-inference",
         action="store_true",
-        default=True,
-        help="Enable max-entropy inference for parameter diversity during inference (SB3 PPO only)"
+        default=True,  # DEFAULT: Max-entropy inference enabled
+        help="Enable max-entropy inference for parameter diversity during inference (DEFAULT ENABLED)"
     )
     parser.add_argument(
         "--no-max-entropy-inference",
@@ -1119,6 +1151,18 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    
+    # Handle max-entropy mode defaults and overrides
+    if getattr(args, 'disable_max_entropy', False):
+        args.enable_max_entropy = False
+        args.max_entropy_inference = False
+        print("🔧 Max-entropy mode disabled via --disable-max-entropy flag")
+    else:
+        # Default to max-entropy mode unless explicitly disabled
+        if not hasattr(args, 'enable_max_entropy'):
+            args.enable_max_entropy = True
+        if not hasattr(args, 'max_entropy_inference'):
+            args.max_entropy_inference = True
     
     # Handle max-entropy inference argument
     if getattr(args, 'no_max_entropy_inference', False):
@@ -1130,7 +1174,9 @@ if __name__ == "__main__":
     # Print helpful information about RL vs fixed parameters
     if args.use_online_rl:
         if getattr(args, 'use_sb3_discrete_ppo', False):
-            action_space_type = "SB3 Max-Entropy Discrete PPO (Optimized + Diverse)"
+            enable_max_entropy = getattr(args, 'enable_max_entropy', True)  # Default: True (max-entropy enabled)
+            mode_name = "SB3 Max-Entropy Discrete PPO" if enable_max_entropy else "SB3 Standard Discrete PPO"
+            action_space_type = f"{mode_name} ({'Diverse Exploration' if enable_max_entropy else 'Standard Exploration'})"
         elif getattr(args, 'use_discrete_ppo', False):
             action_space_type = "Discrete PPO (Actor-Critic)"
         elif getattr(args, 'use_ppo', False):
@@ -1144,14 +1190,21 @@ if __name__ == "__main__":
         print(f"   Learning rate: {args.online_lr}")
         
         if getattr(args, 'use_sb3_discrete_ppo', False):
-            print(f"   SB3 Max-Entropy Discrete PPO n_steps: {getattr(args, 'ppo_n_steps', 64)}")
-            print(f"   SB3 Max-Entropy Discrete PPO batch_size: {getattr(args, 'ppo_batch_size', 32)}")
-            print(f"   SB3 Max-Entropy Discrete PPO n_epochs: {getattr(args, 'ppo_epochs', 4)}")
-            print(f"   SB3 Max-Entropy Discrete PPO gamma: {getattr(args, 'ppo_gamma', 0.95)}")
-            print(f"   SB3 Max-Entropy Discrete PPO GAE lambda: {getattr(args, 'ppo_gae_lambda', 0.9)}")
-            print(f"   SB3 Max-Entropy Discrete PPO entropy coef: {getattr(args, 'ppo_ent_coef', 0.1)} (high for diversity)")
-            print(f"   Inference temperature: {getattr(args, 'inference_temperature', 1.0)} (for exploration during inference)")
-            print(f"   Max-entropy inference: {getattr(args, 'max_entropy_inference', True)}")
+            enable_max_entropy = getattr(args, 'enable_max_entropy', True)  # Default: True (max-entropy enabled)
+            print(f"   SB3 Mode: {'Max-Entropy' if enable_max_entropy else 'Standard'} PPO")
+            print(f"   SB3 PPO n_steps: {getattr(args, 'ppo_n_steps', 64)}")
+            print(f"   SB3 PPO batch_size: {getattr(args, 'ppo_batch_size', 32)}")
+            print(f"   SB3 PPO n_epochs: {getattr(args, 'ppo_epochs', 4)}")
+            print(f"   SB3 PPO gamma: {getattr(args, 'ppo_gamma', 0.95)}")
+            print(f"   SB3 PPO GAE lambda: {getattr(args, 'ppo_gae_lambda', 0.9)}")
+            
+            if enable_max_entropy:
+                print(f"   Entropy coefficient: {getattr(args, 'max_entropy_ent_coef', 0.1)} (HIGH for max-entropy)")
+                print(f"   Inference temperature: {getattr(args, 'inference_temperature', 1.5)} (for exploration during inference)")
+                print(f"   Max-entropy inference: {getattr(args, 'max_entropy_inference', False)}")
+            else:
+                print(f"   Entropy coefficient: 0.01 (standard)")
+                print(f"   Inference mode: Deterministic")
         elif getattr(args, 'use_discrete_ppo', False):
             print(f"   Discrete PPO epochs: {getattr(args, 'ppo_epochs', 10)}")
             print(f"   Discrete PPO batch_size: {getattr(args, 'ppo_batch_size', 64)}")

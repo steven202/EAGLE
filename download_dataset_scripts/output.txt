@@ -1,4 +1,4 @@
-(eagle-rl) guo@MS-7D04:~/EAGLE_RL$ bash scripts/setup_conversational_training.sh 
+(eagle-rl) guo@MS-7D04:~/EAGLE_RL$ bash download_dataset_scripts/setup_conversational_training.sh 
 === EAGLE Training Data Pipeline ===
 Setting up directories...
 
