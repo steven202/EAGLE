@@ -1,6 +1,6 @@
 """
-Online RL Policy for Real-time EAGLE Parameter Optimization
-Learns and adapts tree parameters dynamically during inference
+Max-Entropy Online RL Policy for Real-time EAGLE Parameter Optimization
+Learns and adapts tree parameters dynamically with enhanced exploration and diversity
 """
 
 import numpy as np
@@ -20,7 +20,7 @@ except ImportError:
     print("Warning: wandb not available. Install with: pip install wandb")
 
 class OnlineTreePolicy:
-    """Online RL Policy that learns tree parameters in real-time during evaluation"""
+    """Max-Entropy Online RL Policy that learns tree parameters with enhanced diversity and exploration"""
     
     def __init__(self, 
                  learning_rate=3e-4,
@@ -30,6 +30,11 @@ class OnlineTreePolicy:
                  memory_size=1000,
                  batch_size=32,
                  target_update_freq=100,
+                 # Max-entropy RL parameters
+                 temperature=1.0,          # Temperature for action sampling
+                 entropy_weight=0.1,       # Weight for entropy regularization
+                 inference_temperature=1.5, # Temperature during inference for diversity
+                 max_entropy_inference=True, # Enable max-entropy during inference
                  use_wandb=True,
                  wandb_project="eagle-online-rl",
                  wandb_run_name=None,
@@ -38,6 +43,12 @@ class OnlineTreePolicy:
                  max_checkpoints=3):
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Max-entropy RL configuration
+        self.temperature = temperature
+        self.entropy_weight = entropy_weight
+        self.inference_temperature = inference_temperature
+        self.max_entropy_inference = max_entropy_inference
         
         # Resume mechanism configuration
         self.checkpoint_dir = checkpoint_dir
@@ -64,6 +75,10 @@ class OnlineTreePolicy:
                         "memory_size": memory_size,
                         "batch_size": batch_size,
                         "target_update_freq": target_update_freq,
+                        "temperature": temperature,
+                        "entropy_weight": entropy_weight,
+                        "inference_temperature": inference_temperature,
+                        "max_entropy_inference": max_entropy_inference,
                         "device": str(self.device)
                     }
                 )
@@ -122,11 +137,13 @@ class OnlineTreePolicy:
         self.step_count = 0
         self.target_update_freq = target_update_freq
         
-        # Performance tracking with wandb integration
+        # Performance tracking with wandb integration (including entropy metrics)
         self.reward_history = []
         self.parameter_history = []
         self.loss_history = []
         self.tokens_per_second_history = []
+        self.entropy_history = []  # Track entropy for max-entropy RL
+        self.action_diversity_history = []  # Track action diversity
         
         # Wandb logging setup
         if self.use_wandb:
@@ -137,12 +154,26 @@ class OnlineTreePolicy:
                 "valid_coverage": len(self.valid_actions)/self.total_actions,
                 "total_tokens_bins": self.total_tokens_bins,
                 "depth_bins": self.depth_bins,
-                "top_k_bins": self.top_k_bins
+                "top_k_bins": self.top_k_bins,
+                "temperature": self.temperature,
+                "entropy_weight": self.entropy_weight,
+                "inference_temperature": self.inference_temperature,
+                "max_entropy_inference": self.max_entropy_inference
             })
         
-        print(f"Online RL Policy initialized:")
+        print(f"Max-Entropy Online RL Policy initialized:")
         print(f"  - State dim: {self.state_dim}")
         print(f"  - Action space: {self.total_actions} total ({self.n_total_tokens}×{self.n_depth}×{self.n_top_k})")
+        print(f"  - Valid actions: {len(self.valid_actions)} ({len(self.valid_actions)/self.total_actions*100:.1f}%)")
+        print(f"  - Constraint: total_tokens ≤ top_k^(depth-1)")
+        print(f"  - Learning rate: {learning_rate}")
+        print(f"  - Max-entropy config:")
+        print(f"    • Training temperature: {self.temperature}")
+        print(f"    • Entropy weight: {self.entropy_weight}")
+        print(f"    • Inference temperature: {self.inference_temperature}")
+        print(f"    • Max-entropy inference: {self.max_entropy_inference}")
+        print(f"  - Device: {self.device}")
+        print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
         print(f"  - Valid actions: {len(self.valid_actions)} ({len(self.valid_actions)/self.total_actions*100:.1f}%)")
         print(f"  - Constraint: total_tokens ≤ top_k^(depth-1)")
         print(f"  - Learning rate: {learning_rate}")
@@ -220,27 +251,40 @@ class OnlineTreePolicy:
             return random.randint(0, self.total_actions - 1)
     
     def predict_parameters(self, context, training_mode=True):
-        """Predict parameters using epsilon-greedy policy with enhanced exploration and safety constraints"""
+        """Predict parameters using max-entropy policy with temperature-based sampling and enhanced exploration"""
         state = self._encode_state(context)
         
-        # Enhanced epsilon-greedy action selection from VALID actions only
-        if training_mode and random.random() < self.epsilon:
-            # Exploration: random VALID action
-            action = random.choice(self.valid_actions)
-            exploration_used = True
+        # Max-entropy action selection with temperature-based sampling
+        if self.max_entropy_inference and not training_mode:
+            # Inference mode with max-entropy: use temperature-based sampling for diversity
+            action, entropy = self._sample_action_with_temperature(state, self.inference_temperature)
+            exploration_mode = "MAX-ENTROPY"
+            
+            # Log entropy for monitoring
+            self.entropy_history.append(entropy)
+            if self.use_wandb:
+                wandb.log({
+                    "inference_entropy": entropy,
+                    "inference_temperature": self.inference_temperature,
+                    "step": self.step_count
+                })
+        elif training_mode:
+            # Training mode: combine epsilon-greedy with temperature-based sampling
+            if random.random() < self.epsilon:
+                # Exploration: temperature-based sampling for diversity
+                action, entropy = self._sample_action_with_temperature(state, self.temperature)
+                exploration_mode = "EXPLORE-ENTROPY"
+                self.entropy_history.append(entropy)
+            else:
+                # Exploitation: still use some temperature for diversity
+                action, entropy = self._sample_action_with_temperature(state, self.temperature * 0.5)
+                exploration_mode = "EXPLOIT-ENTROPY"
+                self.entropy_history.append(entropy)
         else:
-            # Exploitation: best VALID action from Q-network
-            with torch.no_grad():
-                q_values = self.q_network(state.unsqueeze(0))
-                
-                # Mask invalid actions by setting their Q-values to -inf
-                masked_q_values = q_values.clone()
-                for i in range(self.total_actions):
-                    if i not in self.valid_actions:
-                        masked_q_values[0, i] = float('-inf')
-                
-                action = masked_q_values.argmax().item()
-            exploration_used = False
+            # Standard inference mode: use softmax with low temperature
+            action, entropy = self._sample_action_with_temperature(state, 0.5)
+            exploration_mode = "INFERENCE"
+            self.entropy_history.append(entropy)
         
         # Convert action to parameters
         total_tokens, depth, top_k = self._action_to_params(action)
@@ -253,47 +297,90 @@ class OnlineTreePolicy:
             self.last_state = state
             self.last_action = action
             self.last_params = (total_tokens, depth, top_k)
-            self.last_exploration = exploration_used
+            self.last_exploration_mode = exploration_mode
+            self.last_entropy = entropy
             
-            # Debug print for training mode with constraint validation
-            mode_str = "EXPLORE" if exploration_used else "EXPLOIT"
+            # Debug print for training mode with entropy info
             max_tokens = top_k ** (depth - 1)
-            # valid_mark = "✓" if total_tokens <= max_tokens else "✗"
-            # print(f"Online RL {mode_str} {valid_mark} (ε={self.epsilon:.3f}): tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
+            print(f"Max-Entropy RL {exploration_mode} (ε={self.epsilon:.3f}, H={entropy:.3f}): tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
         else:
-            # Inference mode - just use best action
+            # Inference mode
             max_tokens = top_k ** (depth - 1)
-            # valid_mark = "✓" if total_tokens <= max_tokens else "✗"
-            # print(f"Online RL INFERENCE {valid_mark}: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
+            print(f"Max-Entropy RL {exploration_mode} (T={self.inference_temperature:.1f}, H={entropy:.3f}): tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
         
         return total_tokens, depth, top_k
     
+    def _sample_action_with_temperature(self, state, temperature):
+        """Sample action using temperature-based softmax for max-entropy exploration"""
+        with torch.no_grad():
+            q_values = self.q_network(state.unsqueeze(0))
+            
+            # Mask invalid actions by setting their Q-values to -inf
+            masked_q_values = q_values.clone()
+            for i in range(self.total_actions):
+                if i not in self.valid_actions:
+                    masked_q_values[0, i] = float('-inf')
+            
+            if temperature > 0:
+                # Apply temperature scaling
+                scaled_q_values = masked_q_values / temperature
+                # Use softmax to get action probabilities
+                action_probs = torch.softmax(scaled_q_values, dim=1)
+                
+                # Sample from the distribution
+                action_dist = torch.distributions.Categorical(action_probs)
+                action = action_dist.sample().item()
+                
+                # Calculate entropy for monitoring
+                entropy = action_dist.entropy().item()
+                
+                return action, entropy
+            else:
+                # Deterministic (temperature = 0)
+                action = masked_q_values.argmax().item()
+                return action, 0.0
+    
     def update_policy(self, reward, generation_time=None, new_tokens=None):
-        """Update policy with reward from last action"""
+        """Update policy with reward from last action including entropy regularization"""
         if not hasattr(self, 'last_state'):
             return
+        
+        # Apply entropy regularization to reward for max-entropy RL
+        if hasattr(self, 'last_entropy') and self.entropy_weight > 0:
+            entropy_bonus = self.entropy_weight * self.last_entropy
+            augmented_reward = reward + entropy_bonus
+            print(f"  → Entropy bonus: {entropy_bonus:.3f} (H={self.last_entropy:.3f}, w={self.entropy_weight})")
+        else:
+            augmented_reward = reward
         
         # Store experience in replay buffer
         experience = {
             'state': self.last_state.detach().cpu(),  # Detach to avoid gradient issues
             'action': self.last_action,
-            'reward': reward,
+            'reward': augmented_reward,  # Use entropy-augmented reward
+            'original_reward': reward,   # Store original for analysis
             'done': True  # Each inference is treated as terminal
         }
         self.memory.append(experience)
         
         # Track performance
-        self.reward_history.append(reward)
+        self.reward_history.append(reward)  # Track original reward
         self.parameter_history.append(self.last_params)
+        
+        # Track action diversity
+        recent_params = self.parameter_history[-20:] if len(self.parameter_history) >= 20 else self.parameter_history
+        unique_params = len(set(recent_params))
+        self.action_diversity_history.append(unique_params / len(recent_params))
         
         # Track tokens per second if provided
         if generation_time and new_tokens:
             tokens_per_sec = new_tokens / generation_time if generation_time > 0 else 0
             self.tokens_per_second_history.append(tokens_per_sec)
         
-        # Debug info for learning
-        explore_str = "EXPLORE" if hasattr(self, 'last_exploration') and self.last_exploration else "EXPLOIT"
-        print(f"  → Reward: {reward:.3f} for {self.last_params} ({explore_str})")
+        # Debug info for learning with entropy info
+        explore_str = getattr(self, 'last_exploration_mode', 'UNKNOWN')
+        entropy_str = f", H={getattr(self, 'last_entropy', 0):.3f}" if hasattr(self, 'last_entropy') else ""
+        print(f"  → Reward: {reward:.3f} (aug: {augmented_reward:.3f}) for {self.last_params} ({explore_str}{entropy_str})")
         
         # Learn from experience if we have enough samples
         if len(self.memory) >= self.batch_size:
@@ -313,18 +400,30 @@ class OnlineTreePolicy:
             self.target_network.load_state_dict(self.q_network.state_dict())
             print(f"Step {self.step_count}: Updated target network, epsilon={self.epsilon:.3f}")
         
-        # Wandb logging for real-time tracking
+        # Wandb logging for real-time tracking with entropy metrics
         if self.use_wandb:
             log_dict = {
                 "step": self.step_count,
                 "reward": reward,
+                "augmented_reward": augmented_reward,
                 "epsilon": self.epsilon,
                 "memory_size": len(self.memory),
                 "total_tokens": self.last_params[0],
                 "depth": self.last_params[1], 
                 "top_k": self.last_params[2],
-                "exploration": 1 if (hasattr(self, 'last_exploration') and self.last_exploration) else 0
+                "exploration_mode": explore_str
             }
+            
+            # Add entropy metrics
+            if hasattr(self, 'last_entropy'):
+                log_dict.update({
+                    "action_entropy": self.last_entropy,
+                    "entropy_bonus": entropy_bonus if hasattr(self, 'last_entropy') and self.entropy_weight > 0 else 0
+                })
+            
+            # Add diversity metrics
+            if self.action_diversity_history:
+                log_dict["action_diversity"] = self.action_diversity_history[-1]
             
             # Add tokens per second if available
             if generation_time and new_tokens:
@@ -375,6 +474,8 @@ class OnlineTreePolicy:
             'parameter_history': self.parameter_history,
             'loss_history': self.loss_history,
             'tokens_per_second_history': self.tokens_per_second_history,
+            'entropy_history': self.entropy_history,
+            'action_diversity_history': self.action_diversity_history,
             'memory': list(self.memory),  # Convert deque to list for serialization
             'total_tokens_bins': self.total_tokens_bins,
             'depth_bins': self.depth_bins,
@@ -388,7 +489,12 @@ class OnlineTreePolicy:
             'batch_size': self.batch_size,
             'target_update_freq': self.target_update_freq,
             'checkpoint_freq': self.checkpoint_freq,
-            'max_checkpoints': self.max_checkpoints
+            'max_checkpoints': self.max_checkpoints,
+            # Max-entropy RL configuration
+            'temperature': self.temperature,
+            'entropy_weight': self.entropy_weight,
+            'inference_temperature': self.inference_temperature,
+            'max_entropy_inference': self.max_entropy_inference
         }
         
         torch.save(checkpoint_data, checkpoint_path)
@@ -457,6 +563,14 @@ class OnlineTreePolicy:
             self.parameter_history = checkpoint['parameter_history']
             self.loss_history = checkpoint.get('loss_history', [])
             self.tokens_per_second_history = checkpoint.get('tokens_per_second_history', [])
+            self.entropy_history = checkpoint.get('entropy_history', [])
+            self.action_diversity_history = checkpoint.get('action_diversity_history', [])
+            
+            # Restore max-entropy RL parameters
+            self.temperature = checkpoint.get('temperature', 1.0)
+            self.entropy_weight = checkpoint.get('entropy_weight', 0.1)
+            self.inference_temperature = checkpoint.get('inference_temperature', 1.5)
+            self.max_entropy_inference = checkpoint.get('max_entropy_inference', True)
             
             # Restore experience replay memory
             if 'memory' in checkpoint:
@@ -476,6 +590,8 @@ class OnlineTreePolicy:
             print(f"   Step: {self.step_count}, Questions processed: {self.questions_processed}")
             print(f"   Epsilon: {self.epsilon:.3f}, Memory size: {len(self.memory)}")
             print(f"   Training seed: {self.training_seed}")
+            print(f"   Max-entropy RL: temp={self.temperature:.2f}, ent_weight={self.entropy_weight:.3f}")
+            print(f"   Inference temp: {self.inference_temperature:.2f}, max-entropy mode: {self.max_entropy_inference}")
             
             return True
             

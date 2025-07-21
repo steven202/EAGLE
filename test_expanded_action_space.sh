@@ -40,7 +40,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --max-new-token 512 \
     --num-choices 1 \
     --checkpoint-dir "log/$DATE" \
-    --online-repeat-factor 20 \
+    --online-repeat-factor 5 \
     --no-resume \
     2>&1 | tee -a log/$DATE/output_disc_space.log
 
