@@ -532,6 +532,8 @@ def get_model_answers(
                     print(f"   💾 Checkpoint will be saved at step {step_count}")
 
         choices = []
+        question_failed = False  # Track if any turn in this question failed
+        
         for i in range(num_choices):
             torch.manual_seed(i)
             messages = [
@@ -542,6 +544,7 @@ def get_model_answers(
             idxs = []
             new_tokens = []
             wall_time = []
+            
             for j in range(len(question["turns"])):
                 qs = question["turns"][j]
                 messages.append({
@@ -633,10 +636,11 @@ def get_model_answers(
                             # Re-raise non-KV cache related errors
                             raise e
                 
-                # If all retries failed, skip this question
+                # If all retries failed, skip this entire question
                 if not success:
                     print(f"⏭️  Skipping question {question_count}/{len(questions)} due to persistent KV cache errors")
-                    continue
+                    question_failed = True
+                    break  # Break out of the turns loop
                     
                 torch.cuda.synchronize()
                 total_time = time.time() - start_time
@@ -733,19 +737,25 @@ def get_model_answers(
                     "content": output
                 })
             # torch.cuda.empty_cache()
+            if question_failed:
+                break  # Break out of choices loop if any turn failed
             choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time})
 
-        # Dump answers
-        os.makedirs(os.path.dirname(answer_file), exist_ok=True)
-        with open(os.path.expanduser(answer_file), "a") as fout:
-            ans_json = {
-                "question_id": question["question_id"],
-                "answer_id": shortuuid.uuid(),
-                "model_id": model_id,
-                "choices": choices,
-                "tstamp": time.time(),
-            }
-            fout.write(json.dumps(ans_json) + "\n")
+        # Only save answer if question was successfully processed
+        if not question_failed:
+            # Dump answers
+            os.makedirs(os.path.dirname(answer_file), exist_ok=True)
+            with open(os.path.expanduser(answer_file), "a") as fout:
+                ans_json = {
+                    "question_id": question["question_id"],
+                    "answer_id": shortuuid.uuid(),
+                    "model_id": model_id,
+                    "choices": choices,
+                    "tstamp": time.time(),
+                }
+                fout.write(json.dumps(ans_json) + "\n")
+        else:
+            print(f"   Question {question_count} skipped - not saved to answer file")
 
     # Save online RL policy if used and training was enabled
     if online_policy is not None:
