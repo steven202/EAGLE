@@ -430,25 +430,31 @@ def get_model_answers(
                         tree_top_k=predicted_top_k,
                     )
             except RuntimeError as e:
-                if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e):
+                if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
-                    print(f"   Falling back to conservative warmup parameters...")
+                    print(f"   Falling back to ultra-conservative warmup parameters...")
                     
-                    # Use very safe parameters for warmup
-                    safe_total_tokens = 48
-                    safe_depth = 7
-                    safe_top_k = 20
+                    # Use ultra-safe parameters for warmup that definitely won't overflow
+                    safe_total_tokens = 16
+                    safe_depth = 3
+                    safe_top_k = 4
                 
-                    with torch.no_grad():
-                        output_ids, new_token, idx = model.eagenerate(
-                            torch.as_tensor(input_ids).cuda(),
-                            temperature=temperature,
-                            log=True,
-                            is_llama3=True,
-                            total_tokens=safe_total_tokens,
-                            depth=safe_depth,
-                            tree_top_k=safe_top_k,
-                        )
+                    try:
+                        with torch.no_grad():
+                            output_ids, new_token, idx = model.eagenerate(
+                                torch.as_tensor(input_ids).cuda(),
+                                temperature=temperature,
+                                log=True,
+                                is_llama3=True,
+                                total_tokens=safe_total_tokens,
+                                depth=safe_depth,
+                                tree_top_k=safe_top_k,
+                            )
+                    except RuntimeError as e2:
+                        print(f"❌ Even ultra-conservative warmup failed: {e2}")
+                        print("   Skipping warmup - proceeding with standard generation")
+                        # We'll skip warmup if even ultra-conservative parameters fail
+                        pass
                 else:
                     raise e  # Re-raise if it's a different error
             torch.cuda.synchronize()
@@ -556,51 +562,57 @@ def get_model_answers(
                 start_time = time.time()
 
                 # Use no_grad for model inference to save memory and computation
-                try:
-                    with torch.no_grad():
-                        output_ids, new_token, idx = model.eagenerate(
-                            torch.as_tensor(input_ids).cuda(),
-                            temperature=temperature,
-                            log=True,
-                            is_llama3=True,
-                            total_tokens=predicted_total_tokens,
-                            depth=predicted_depth,
-                            tree_top_k=predicted_top_k,
-                        )
-                except RuntimeError as e:
-                    if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e):
-                        print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
-                        print(f"   Error: {e}")
-                        print(f"   Falling back to safe parameters...")
-                        
-                        # Fall back to conservative safe parameters
-                        safe_total_tokens = min(32, predicted_top_k ** (predicted_depth - 1))
-                        safe_depth = max(3, min(predicted_depth, 4))  
-                        safe_top_k = max(4, min(predicted_top_k, 8))
-                        
-                        print(f"   Using safe params: tt={safe_total_tokens}, d={safe_depth}, k={safe_top_k}")
-                        
+                max_retries = 3
+                retry_count = 0
+                success = False
+                
+                while retry_count < max_retries and not success:
+                    try:
                         with torch.no_grad():
                             output_ids, new_token, idx = model.eagenerate(
                                 torch.as_tensor(input_ids).cuda(),
                                 temperature=temperature,
                                 log=True,
                                 is_llama3=True,
-                                total_tokens=safe_total_tokens,
-                                depth=safe_depth,
-                                tree_top_k=safe_top_k,
+                                total_tokens=predicted_total_tokens,
+                                depth=predicted_depth,
+                                tree_top_k=predicted_top_k,
                             )
+                        success = True
                         
-                        # Update predicted parameters for reward calculation
-                        predicted_total_tokens, predicted_depth, predicted_top_k = safe_total_tokens, safe_depth, safe_top_k
-                        # If using online RL, give negative reward for invalid parameters
-                        # if online_policy is not None and not args.online_inference_only:
-                        #     # Penalize the policy for choosing invalid parameters
-                        #     penalty_reward = -10.0
-                        #     online_policy.update_policy(penalty_reward, 0.0, 0)
-                        #     print(f"   Applied penalty reward: {penalty_reward}")
-                    else:
-                        raise e  # Re-raise if it's a different error
+                    except RuntimeError as e:
+                        if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
+                            retry_count += 1
+                            print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k} (attempt {retry_count}/{max_retries})")
+                            print(f"   Error: {e}")
+                            
+                            if retry_count < max_retries:
+                                print(f"   Trying more conservative parameters...")
+                                # Make parameters increasingly conservative with each retry
+                                if retry_count == 1:
+                                    # First retry: moderate reduction
+                                    predicted_total_tokens = min(32, predicted_total_tokens // 2)
+                                    predicted_depth = max(3, min(predicted_depth, 4))  
+                                    predicted_top_k = max(4, min(predicted_top_k, 8))
+                                elif retry_count == 2:
+                                    # Second retry: very conservative
+                                    predicted_total_tokens = 16
+                                    predicted_depth = 3
+                                    predicted_top_k = 4
+                                
+                                print(f"   Using safer params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
+                            else:
+                                print(f"   All retries failed. Skipping this question...")
+                                break
+                        else:
+                            # Re-raise non-KV cache related errors
+                            raise e
+                
+                # If all retries failed, skip this question
+                if not success:
+                    print(f"⏭️  Skipping question {question_count} due to persistent KV cache errors")
+                    continue
+                    
                 torch.cuda.synchronize()
                 total_time = time.time() - start_time
                 output_ids = output_ids[0][len(input_ids[0]):]
