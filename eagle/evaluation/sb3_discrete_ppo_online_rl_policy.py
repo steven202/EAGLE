@@ -86,53 +86,46 @@ class EagleParameterEnv(gym.Env):
         # Additional KV cache constraint: approximate tree size should not exceed safe limits
         # Empirical observation: tree expansion can be roughly estimated as total_tokens * depth
         # But actual expansion is much larger due to tree branching
-        # EXTREMELY Conservative estimate to avoid KV cache overflow (2048 hard limit)
-        # tree_size_estimate = total_tokens * depth
-        # kv_cache_safe_limit = 400  # Extremely conservative limit (reduced from 800)
-        # kv_constraint = tree_size_estimate <= kv_cache_safe_limit
+        # BALANCED Conservative estimate to avoid KV cache overflow (2048 hard limit)
+        tree_size_estimate = total_tokens * depth
+        kv_cache_safe_limit = 800  # Balanced limit - not too restrictive
+        kv_constraint = tree_size_estimate <= kv_cache_safe_limit
         
-        # # Extra conservative constraint for any high-complexity combinations
-        # if depth >= 7:
-        #     # For depth 7+: extremely conservative
-        #     ultra_conservative_limit = 400
-        #     ultra_conservative_constraint = tree_size_estimate <= ultra_conservative_limit
-        # elif depth >= 6 and top_k >= 16:
-        #     # For depth 6+ with high top_k: very conservative
-        #     conservative_limit = 500
-        #     ultra_conservative_constraint = tree_size_estimate <= conservative_limit
-        # else:
-        #     ultra_conservative_constraint = True
+        # Extra conservative constraint for high-complexity combinations
+        if depth >= 8:
+            # For depth 8: very conservative (observed 10-12x expansion)
+            empirical_expansion_factor = 8  # Less restrictive than before
+            ultra_conservative_limit = 600
+            ultra_conservative_constraint = tree_size_estimate <= ultra_conservative_limit
+        elif depth >= 7:
+            # For depth 7: conservative (assume 6x expansion)
+            empirical_expansion_factor = 6
+            ultra_conservative_limit = 700
+            ultra_conservative_constraint = tree_size_estimate <= ultra_conservative_limit
+        elif depth >= 6 and top_k >= 20:
+            # For depth 6+ with high top_k: moderate conservative
+            conservative_limit = 800
+            ultra_conservative_constraint = tree_size_estimate <= conservative_limit
+        else:
+            ultra_conservative_constraint = True
             
-        # # Empirical constraint based on observed failures:
-        # # tt=96, d=8, k=20 → actual tree ~2798 (fails), simple estimate was 768
-        # # tt=32, d=8, k=20 → actual tree ~2798 (fails), simple estimate was 256
-        # # The actual tree expansion is roughly 10-12x our simple estimate for depth=8!
-        # if depth >= 8:
-        #     # For depth 8: extremely conservative (observed 10-12x expansion)
-        #     empirical_expansion_factor = 12
-        # elif depth >= 7:
-        #     # For depth 7: very conservative (assume 8x expansion)
-        #     empirical_expansion_factor = 8
-        # elif depth >= 6:
-        #     # For depth 6: conservative (assume 5x expansion)
-        #     empirical_expansion_factor = 5
-        # else:
-        #     # For depth ≤ 5: moderate expansion
-        #     empirical_expansion_factor = 3
+        # Empirical constraint based on observed failures but less restrictive
+        if depth >= 8:
+            empirical_expansion_factor = 8  # Reduced from 12
+        elif depth >= 7:
+            empirical_expansion_factor = 6  # Reduced from 8
+        elif depth >= 6:
+            empirical_expansion_factor = 4  # Reduced from 5
+        else:
+            empirical_expansion_factor = 3
         
-        # estimated_actual_tree_size = tree_size_estimate * empirical_expansion_factor
-        # empirical_constraint = estimated_actual_tree_size <= 1800  # Even more conservative margin
-        # # All constraints must pass
-        # is_valid = basic_constraint and kv_constraint and ultra_conservative_constraint and empirical_constraint
+        estimated_actual_tree_size = tree_size_estimate * empirical_expansion_factor
+        empirical_constraint = estimated_actual_tree_size <= 1900  # Less conservative margin
         
-        # if not is_valid and hasattr(self, '_debug_constraint'):
-        #     print(f"❌ Invalid combination: tt={total_tokens}, d={depth}, k={top_k}")
-        #     print(f"   Basic: {basic_constraint} (tt <= k^(d-1) = {max_tokens_constraint})")
-        #     print(f"   KV cache: {kv_constraint} (tree_size={tree_size_estimate} <= {kv_cache_safe_limit})")
-        #     print(f"   Ultra Conservative: {ultra_conservative_constraint}")
-        #     print(f"   Empirical: {empirical_constraint} (estimated_actual={estimated_actual_tree_size} <= 2000)")
-            
-        return basic_constraint
+        # All constraints must pass
+        is_valid = basic_constraint and kv_constraint and ultra_conservative_constraint and empirical_constraint
+        
+        return is_valid
     
     def _action_to_params(self, action):
         """Convert discrete action to parameter values"""
@@ -366,6 +359,9 @@ class SB3DiscretePPOOnlineTreePolicy:
             print(f"🌟 MAX-ENTROPY MODE: Higher exploration, temperature-based inference")
         else:
             print(f"⚙️  STANDARD PPO MODE: Standard exploration, deterministic inference")
+            
+        # Debug action space
+        self.debug_action_space()
     
     def predict_parameters(self, context, training_mode=True):
         """Predict parameters using SB3 PPO policy (standard or max-entropy mode)"""
@@ -391,9 +387,29 @@ class SB3DiscretePPOOnlineTreePolicy:
                 action, _ = self.model.predict(state, deterministic=False) 
                 exploration_mode = "STOCHASTIC"
         elif training_mode:
-            # TRAINING MODE: Always use stochastic for both modes (exploration)
-            action, _ = self.model.predict(state, deterministic=False)
-            exploration_mode = "EXPLORE"
+            # TRAINING MODE: Enhanced exploration with epsilon-greedy + stochastic
+            if not hasattr(self, 'training_step'):
+                self.training_step = 0
+            self.training_step += 1
+            
+            # Check if we should force action diversity
+            forced_action, is_forced = self.force_action_diversity()
+            if is_forced:
+                action = forced_action
+                exploration_mode = f"FORCED-DIVERSITY"
+                print(f"🎯 Forcing diversity: trying action {action}")
+            else:
+                # Use epsilon-greedy exploration during training for better coverage
+                epsilon = max(0.15, 0.9 - self.training_step * 0.001)  # Decay from 0.9 to 0.15
+                
+                if np.random.random() < epsilon:
+                    # Random exploration: sample uniformly from valid actions
+                    action = np.random.randint(0, len(self.env.valid_actions))
+                    exploration_mode = f"RANDOM(ε={epsilon:.3f})"
+                else:
+                    # Use policy prediction with enhanced stochasticity
+                    action = self._enhanced_stochastic_sampling(state)
+                    exploration_mode = f"ENHANCED(ε={epsilon:.3f})"
         else:
             # STANDARD INFERENCE: Use deterministic prediction
             action, _ = self.model.predict(state, deterministic=True)
@@ -409,12 +425,42 @@ class SB3DiscretePPOOnlineTreePolicy:
             self.last_action = action
             self.last_params = (total_tokens, depth, top_k)
         
-        # Debug print
-        # max_tokens = top_k ** (depth - 1)
-        # mode_name = "Max-Entropy PPO" if self.enable_max_entropy else "Standard PPO"
-        # print(f"SB3 {mode_name} {exploration_mode}: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
+        # Debug print with more details
+        if training_mode and hasattr(self, 'training_step') and self.training_step % 50 == 0:
+            print(f"🔍 Training step {self.training_step}: Action {action}/{len(self.env.valid_actions)} → tt={total_tokens}, d={depth}, k={top_k}")
+            print(f"   Mode: {exploration_mode}, Max constraint: {top_k ** (depth - 1)}")
         
         return total_tokens, depth, top_k
+    
+    def debug_action_space(self):
+        """Debug method to analyze the action space"""
+        print(f"\n🔍 ACTION SPACE ANALYSIS:")
+        print(f"Total combinations: {self.env.total_actions}")
+        print(f"Valid combinations: {len(self.env.valid_actions)}")
+        
+        # Analyze valid actions by parameter ranges
+        valid_params = []
+        for action_idx in self.env.valid_actions:
+            params = self.env._action_to_params(action_idx)
+            valid_params.append(params)
+            
+        # Group by depth
+        depth_counts = {}
+        for tt, d, k in valid_params:
+            if d not in depth_counts:
+                depth_counts[d] = []
+            depth_counts[d].append((tt, k))
+            
+        for depth in sorted(depth_counts.keys()):
+            params_for_depth = depth_counts[depth]
+            print(f"Depth {depth}: {len(params_for_depth)} valid combinations")
+            if len(params_for_depth) <= 10:
+                for tt, k in params_for_depth:
+                    print(f"  tt={tt}, k={k} (max={k**(depth-1)})")
+            else:
+                print(f"  Example: {params_for_depth[:3]}...")
+                
+        print(f"Action space diversity: {len(set(valid_params))} unique parameter combinations\n")
     
     def _sample_with_temperature(self, state, temperature):
         """Sample action using temperature-based softmax for max-entropy exploration"""
@@ -534,19 +580,103 @@ class SB3DiscretePPOOnlineTreePolicy:
         if not hasattr(self, 'last_state'):
             return
         
-        # Create a temporary episode for the single step
-        obs = self.vec_env.reset()
-        obs[0] = self.last_state
-        
-        # Take action and get environment response
-        obs, _, done, info = self.vec_env.step([self.last_action])
-        
-        # Manually set the reward in the environment
-        # Since SB3 doesn't directly support external rewards, we'll use a different approach
-        
         # Track performance
         self.reward_history.append(reward)
         self.parameter_history.append(self.last_params)
+        
+        # Store experience for batch training
+        if not hasattr(self, 'experience_buffer'):
+            self.experience_buffer = []
+            
+        self.experience_buffer.append({
+            'state': self.last_state.copy(),
+            'action': self.last_action,
+            'reward': reward,
+            'params': self.last_params
+        })
+        
+        # Train in batches to improve stability
+        if len(self.experience_buffer) >= 64:  # Batch size for training
+            self._train_on_batch()
+            
+        # Force more frequent updates for better learning
+        if len(self.reward_history) % 10 == 0:
+            self._train_on_batch(force=True)
+            
+    def _train_on_batch(self, force=False):
+        """Train the SB3 model on accumulated experiences"""
+        if not hasattr(self, 'experience_buffer') or (len(self.experience_buffer) < 32 and not force):
+            return
+            
+        if len(self.experience_buffer) == 0:
+            return
+            
+        print(f"🔄 Training SB3 PPO on {len(self.experience_buffer)} experiences...")
+        
+        # Create temporary dataset for training
+        states = np.array([exp['state'] for exp in self.experience_buffer])
+        actions = np.array([exp['action'] for exp in self.experience_buffer])
+        rewards = np.array([exp['reward'] for exp in self.experience_buffer])
+        
+        # Normalize rewards to improve training stability
+        if len(rewards) > 1:
+            reward_mean = np.mean(rewards)
+            reward_std = np.std(rewards) + 1e-8
+            normalized_rewards = (rewards - reward_mean) / reward_std
+        else:
+            normalized_rewards = rewards
+            
+        # Set environment to training mode and collect trajectories
+        try:
+            # Reset environment with first state
+            obs = self.vec_env.reset()
+            obs[0] = states[0]
+            
+            # Simulate trajectory for SB3 training
+            episode_rewards = []
+            episode_actions = []
+            episode_observations = []
+            
+            for i, (state, action, reward) in enumerate(zip(states, actions, normalized_rewards)):
+                obs[0] = state
+                episode_observations.append(obs[0].copy())
+                episode_actions.append(action)
+                episode_rewards.append(reward)
+                
+                # Take step in environment
+                obs, _, done, info = self.vec_env.step([action])
+                
+            # Now train the model
+            self.model.learn(total_timesteps=len(self.experience_buffer), reset_num_timesteps=False)
+            
+            # Update step count for checkpointing
+            self.step_count += len(self.experience_buffer)
+            
+            print(f"✅ SB3 training completed. Step count: {self.step_count}")
+            
+        except Exception as e:
+            print(f"⚠️  SB3 training failed: {e}")
+            
+        # Clear buffer after training
+        self.experience_buffer = []
+    
+    def force_action_diversity(self):
+        """Force the policy to try different actions for better exploration"""
+        if not hasattr(self, 'forced_actions_tried'):
+            self.forced_actions_tried = set()
+            self.force_counter = 0
+            
+        # Every N steps, force trying a new action
+        self.force_counter += 1
+        if self.force_counter % 20 == 0 and len(self.forced_actions_tried) < len(self.env.valid_actions):
+            # Find an untried action
+            untried_actions = set(range(len(self.env.valid_actions))) - self.forced_actions_tried
+            if untried_actions:
+                forced_action = np.random.choice(list(untried_actions))
+                self.forced_actions_tried.add(forced_action)
+                return forced_action, True
+                
+        return None, False
         
         # Track tokens per second if provided
         if generation_time and new_tokens:
