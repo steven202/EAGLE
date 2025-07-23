@@ -49,9 +49,8 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --ppo-batch-size 32 \
     --ppo-epochs 4 \
     --ppo-clip-range 0.2 \
-    --ppo-gamma 0.9 \
-    --ppo-gae-lambda 0.8 \
-    --ppo-ent-coef 0.2 \
+    --ppo-gamma 0.95 \
+    --ppo-gae-lambda 0.9 \
     --ppo-vf-coef 0.5 \
     --online-policy-save-path "log/$DATE/max_entropy_ppo/max_entropy_ppo_policy.pth" \
     --temperature 0.0 \

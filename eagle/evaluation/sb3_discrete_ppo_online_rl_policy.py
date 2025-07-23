@@ -283,11 +283,14 @@ class SB3DiscretePPOOnlineTreePolicy:
         self.step_count = 0
         self.update_count = 0
         
-        # Track performance with entropy metrics
+        # Track performance with entropy metrics and action performance history
         self.reward_history = []
         self.parameter_history = []
         self.tokens_per_second_history = []
         self.entropy_history = []  # Track entropy for max-entropy RL
+        
+        # Track action performance for smart inference
+        self.action_performance_history = {}  # Maps (total_tokens, depth, top_k) -> list of rewards
         
         # Setup wandb callback
         self.callbacks = []
@@ -403,37 +406,91 @@ class SB3DiscretePPOOnlineTreePolicy:
         return chosen_action
     
     def _max_entropy_inference(self, state):
-        """Simple max-entropy inference using multiple stochastic samples"""
-        # Take multiple stochastic samples
+        """Smart max-entropy inference: diversity among top-performing actions only"""
+        # Take multiple stochastic samples to get a distribution
         samples = []
-        for i in range(10):  # Take 10 samples for better diversity
+        for i in range(20):  # More samples for better analysis
             action, _ = self.model.predict(state, deterministic=False)
             action_val = action if isinstance(action, int) else action.item()
             samples.append(action_val)
         
-        # Strategy: Use weighted random selection favoring diversity
-        unique_actions = list(set(samples))
+        # Count occurrences to find the most preferred actions by the policy
+        from collections import Counter
+        action_counts = Counter(samples)
         
-        if len(unique_actions) > 1:
-            # If we have diversity, randomly choose from unique actions
-            chosen_action = random.choice(unique_actions)
-            diversity_score = len(unique_actions) / 10.0
+        # Get actions with their parameter combinations
+        action_params = {}
+        for action in action_counts.keys():
+            actual_action = self.env.valid_actions[action]
+            params = self.env._action_to_params(actual_action)
+            action_params[action] = params
+        
+        # Strategy 1: If we have historical performance data, use it
+        if len(self.action_performance_history) >= 3:
+            # Calculate average performance for each parameter combination
+            param_avg_performance = {}
+            for params, rewards in self.action_performance_history.items():
+                if len(rewards) >= 2:  # Need at least 2 samples for reliability
+                    param_avg_performance[params] = sum(rewards) / len(rewards)
+            
+            if param_avg_performance:
+                # Get top-performing parameter combinations (above median performance)
+                median_performance = sorted(param_avg_performance.values())[len(param_avg_performance)//2]
+                high_performance_params = [params for params, avg_perf in param_avg_performance.items() 
+                                         if avg_perf >= median_performance]
+                
+                # Filter actions to only those with high performance
+                good_actions = [action for action, params in action_params.items() 
+                              if params in high_performance_params]
+                
+                if good_actions:
+                    # Choose randomly from good actions for diversity + performance
+                    chosen_action = random.choice(good_actions)
+                    strategy = f"performance-based-{len(good_actions)}"
+                    print(f"   📊 Using performance history: {len(good_actions)} good actions (>= {median_performance:.1f} tokens/sec)")
+                else:
+                    # Fallback to policy preference
+                    chosen_action = action_counts.most_common(1)[0][0]
+                    strategy = "policy-preference"
+            else:
+                # Not enough performance data yet
+                chosen_action = action_counts.most_common(1)[0][0]
+                strategy = "insufficient-data"
         else:
-            # If all samples are the same, use that action
-            chosen_action = samples[0]
-            diversity_score = 0.0
+            # Strategy 2: Use policy preferences (top 3 most frequent actions)
+            top_actions = [action for action, count in action_counts.most_common(3)]
+            
+            if len(top_actions) >= 2:
+                # Choose randomly from top actions (maintains performance while adding diversity)
+                chosen_action = random.choice(top_actions)
+                strategy = f"top-{len(top_actions)}-policy"
+            else:
+                # Fallback: use the most common action
+                chosen_action = action_counts.most_common(1)[0][0]
+                strategy = "deterministic"
+        
+        # Convert chosen action to parameters for logging
+        actual_action = self.env.valid_actions[chosen_action]
+        total_tokens, depth, top_k = self.env._action_to_params(actual_action)
+        
+        # Calculate diversity metrics
+        diversity_score = len(set(samples)) / 20.0
+        unique_actions = len(set(samples))
         
         # Log diversity metrics
         if self.use_wandb and hasattr(self, 'step_count'):
             import wandb
             wandb.log({
-                "max_entropy_diversity": diversity_score,
-                "max_entropy_unique_actions": len(unique_actions),
-                "max_entropy_samples": 10,
+                "inference_diversity": diversity_score,
+                "inference_unique_actions": unique_actions,
+                "inference_samples": 20,
+                "inference_strategy": strategy,
                 "step": self.step_count
             })
         
-        print(f"   Max-entropy inference: {len(unique_actions)}/10 unique actions, diversity={diversity_score:.2f}")
+        print(f"   🎯 Smart max-entropy: {unique_actions}/20 unique, using {strategy} strategy")
+        print(f"       Selected: ({total_tokens}, {depth}, {top_k})")
+        
         return chosen_action
     
     def _sample_with_temperature(self, state, temperature):
@@ -568,6 +625,11 @@ class SB3DiscretePPOOnlineTreePolicy:
         self.reward_history.append(reward)
         self.parameter_history.append(self.last_params)
         
+        # Track action performance for smart inference
+        if self.last_params not in self.action_performance_history:
+            self.action_performance_history[self.last_params] = []
+        self.action_performance_history[self.last_params].append(reward)
+        
         # Track tokens per second if provided
         if generation_time and new_tokens:
             tps = new_tokens / generation_time
@@ -642,6 +704,7 @@ class SB3DiscretePPOOnlineTreePolicy:
             'parameter_history': self.parameter_history,
             'tokens_per_second_history': self.tokens_per_second_history,
             'entropy_history': self.entropy_history,
+            'action_performance_history': {str(k): v for k, v in self.action_performance_history.items()},  # Convert tuple keys to strings
         }
         
         metadata_path = checkpoint_path + "_metadata.json"
@@ -682,6 +745,17 @@ class SB3DiscretePPOOnlineTreePolicy:
                 self.parameter_history = metadata['parameter_history']
                 self.tokens_per_second_history = metadata['tokens_per_second_history']
                 self.entropy_history = metadata.get('entropy_history', [])
+                
+                # Load action performance history (convert string keys back to tuples)
+                action_perf_raw = metadata.get('action_performance_history', {})
+                self.action_performance_history = {}
+                for key_str, values in action_perf_raw.items():
+                    # Convert string representation back to tuple
+                    try:
+                        key_tuple = eval(key_str)  # Safe since we control the format
+                        self.action_performance_history[key_tuple] = values
+                    except:
+                        pass  # Skip malformed keys
             
             print(f"✅ SB3 Discrete PPO checkpoint loaded: {checkpoint_path}")
             print(f"   Resuming from step {self.step_count}, update {self.update_count}")

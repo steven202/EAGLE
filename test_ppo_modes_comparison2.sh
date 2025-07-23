@@ -8,7 +8,7 @@ DATE=$(date '+%Y%m%d_%H%M')
 DATE='20250721_1215'
 MODEL_PATH="/home/guo/EAGLE_RL/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=6000
+QUESTION_END=4550
 
 # Create single unified log directory
 mkdir -p log/$DATE/{standard_ppo,max_entropy_ppo,baseline_results,evaluation}
@@ -29,6 +29,8 @@ echo "" | tee -a log/$DATE/comparison.txt
 # BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natural Questions")
 BENCHMARKS=("gsm8k" "mt_bench")
 BENCHMARK_NAMES=("GSM8K" "MT-Bench")
+# BENCHMARKS=("gsm8k")
+# BENCHMARK_NAMES=("GSM8K")
 
 echo "=== Phase 1: Training with MAX-ENTROPY PPO - Default Mode ===" | tee -a log/$DATE/comparison.txt
 echo "- High entropy coefficient 0.1" | tee -a log/$DATE/comparison.txt
