@@ -41,7 +41,7 @@ try:
     from .continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
     from .ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
     from .discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
-    from .sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward, calculate_step_reward
+    from .sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
 except:
     from eagle.model.ea_model import EaModel
     from eagle.model.kv_cache import initialize_past_key_values
@@ -51,7 +51,7 @@ except:
     from eagle.evaluation.continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
     from eagle.evaluation.ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
     from eagle.evaluation.discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
-    from eagle.evaluation.sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward, calculate_step_reward
+    from eagle.evaluation.sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
 
 
 
@@ -706,50 +706,34 @@ def get_model_answers(
                         output = output.replace(special_token, "")
                 output = output.strip()
 
-                # Online RL: Update policy with step-level performance feedback (if training enabled)
+                # Online RL: Update policy with reward from this generation (if training enabled)
                 if online_policy is not None and not args.online_inference_only:
                     # Convert tensor values to Python scalars
                     new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
                     
-                    # Get step-level performance data from the RL-aware generation
-                    step_performance_data = model.get_last_step_performance()
+                    # Calculate reward for online learning (use appropriate reward function)
+                    online_reward = reward_function(
+                        total_time, new_token_scalar, predicted_total_tokens, 
+                        predicted_depth, predicted_top_k
+                    )
                     
-                    if step_performance_data:
-                        # Process each step's performance for fine-grained RL feedback
-                        for step_data in step_performance_data:
-                            step_reward = calculate_step_reward(step_data)
-                            # Update policy with individual step experience
-                            online_policy.update_step_policy(
-                                step_data['parameters'],  # (total_tokens, depth, top_k)
-                                step_reward,
-                                step_data
-                            )
-                        
-                        print(f"📈 Updated policy with {len(step_performance_data)} step experiences, "
-                              f"avg tokens/sec: {sum(s['tokens_per_second'] for s in step_performance_data)/len(step_performance_data):.2f}")
-                    else:
-                        # Fallback to traditional generation-level feedback
-                        online_reward = reward_function(
-                            total_time, new_token_scalar, predicted_total_tokens, 
-                            predicted_depth, predicted_top_k
-                        )
-                        
-                        # Update policy with this experience (including timing info for wandb)
-                        online_policy.update_policy(online_reward, total_time, new_token_scalar)
+                    # Update policy with this experience (including timing info for wandb)
+                    online_policy.update_policy(online_reward, total_time, new_token_scalar)
                     
                     # Print learning progress periodically
                     if online_policy.step_count % 20 == 0:
                         stats = online_policy.get_performance_stats()
-                        print(f"Online RL Update: Avg Recent Reward={stats.get('avg_reward_recent', 0):.3f}, "
+                        print(f"Online RL Update: Reward={online_reward:.3f}, "
+                              f"Avg Recent Reward={stats.get('avg_reward_recent', 0):.3f}, "
                               f"Tokens/sec={new_token_scalar/total_time:.1f}")
                         
                         # Additional wandb logging for progress tracking
                         if online_policy.use_wandb:
                             import wandb
                             wandb.log({
+                                "progress_reward": online_reward,
                                 "progress_tokens_per_sec": new_token_scalar/total_time,
-                                "progress_step": online_policy.step_count,
-                                "step_count": len(step_performance_data) if step_performance_data else 0
+                                "progress_step": online_policy.step_count
                             })
 
                 # Collect RL training data if requested

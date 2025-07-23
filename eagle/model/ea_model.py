@@ -233,16 +233,6 @@ class EaModel(nn.Module):
                     generation_state, max_new_tokens, max_length, log,
                     rl_policy_callback, total_tokens, depth, tree_top_k
                 )
-                # Extract performance data for RL feedback
-                if not log:
-                    generated_ids, step_performance = result
-                    # Store performance data for RL training
-                    self._last_step_performance = step_performance
-                    return generated_ids
-                else:
-                    generated_ids, new_token, step_count, step_performance = result
-                    self._last_step_performance = step_performance
-                    return generated_ids, new_token, step_count
             else:
                 # Traditional generation with fixed parameters
                 if total_tokens is not None:
@@ -255,16 +245,13 @@ class EaModel(nn.Module):
                 result = self._eagenerate_traditional(
                     generation_state, max_new_tokens, max_length, log
                 )
-                return result
         finally:
             # Restore original parameters
             self.ea_layer.total_tokens = original_total_tokens
             self.ea_layer.depth = original_depth
             self.ea_layer.top_k = original_top_k
-    
-    def get_last_step_performance(self):
-        """Get performance data from the last RL-aware generation for training feedback"""
-        return getattr(self, '_last_step_performance', [])
+        
+        return result
     
     def _prepare_generation_state(self, input_ids, temperature, top_p, top_k, max_length, is_llama3):
         """Prepare the generation state (KV cache, logits processor, etc.)"""
@@ -391,9 +378,9 @@ class EaModel(nn.Module):
         state['input_ids'] = input_ids
         
         if not log:
-            return input_ids, step_performance  # Return performance data for RL feedback
+            return input_ids
         else:
-            return input_ids, new_token, step_count, step_performance
+            return input_ids, new_token, step_count
     
     def _eagenerate_traditional(self, state, max_new_tokens, max_length, log):
         """Traditional generation with fixed parameters (original implementation)"""

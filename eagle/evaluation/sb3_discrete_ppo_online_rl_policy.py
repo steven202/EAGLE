@@ -79,8 +79,58 @@ class EagleParameterEnv(gym.Env):
     
     def _is_valid_combination(self, total_tokens, depth, top_k):
         """Check if parameter combination satisfies constraints"""
+        # Original constraint: total_tokens <= top_k^(depth-1)
         max_tokens_constraint = top_k ** (depth - 1)
         basic_constraint = total_tokens <= max_tokens_constraint
+        
+        # Additional KV cache constraint: approximate tree size should not exceed safe limits
+        # Empirical observation: tree expansion can be roughly estimated as total_tokens * depth
+        # But actual expansion is much larger due to tree branching
+        # EXTREMELY Conservative estimate to avoid KV cache overflow (2048 hard limit)
+        # tree_size_estimate = total_tokens * depth
+        # kv_cache_safe_limit = 400  # Extremely conservative limit (reduced from 800)
+        # kv_constraint = tree_size_estimate <= kv_cache_safe_limit
+        
+        # # Extra conservative constraint for any high-complexity combinations
+        # if depth >= 7:
+        #     # For depth 7+: extremely conservative
+        #     ultra_conservative_limit = 400
+        #     ultra_conservative_constraint = tree_size_estimate <= ultra_conservative_limit
+        # elif depth >= 6 and top_k >= 16:
+        #     # For depth 6+ with high top_k: very conservative
+        #     conservative_limit = 500
+        #     ultra_conservative_constraint = tree_size_estimate <= conservative_limit
+        # else:
+        #     ultra_conservative_constraint = True
+            
+        # # Empirical constraint based on observed failures:
+        # # tt=96, d=8, k=20 → actual tree ~2798 (fails), simple estimate was 768
+        # # tt=32, d=8, k=20 → actual tree ~2798 (fails), simple estimate was 256
+        # # The actual tree expansion is roughly 10-12x our simple estimate for depth=8!
+        # if depth >= 8:
+        #     # For depth 8: extremely conservative (observed 10-12x expansion)
+        #     empirical_expansion_factor = 12
+        # elif depth >= 7:
+        #     # For depth 7: very conservative (assume 8x expansion)
+        #     empirical_expansion_factor = 8
+        # elif depth >= 6:
+        #     # For depth 6: conservative (assume 5x expansion)
+        #     empirical_expansion_factor = 5
+        # else:
+        #     # For depth ≤ 5: moderate expansion
+        #     empirical_expansion_factor = 3
+        
+        # estimated_actual_tree_size = tree_size_estimate * empirical_expansion_factor
+        # empirical_constraint = estimated_actual_tree_size <= 1800  # Even more conservative margin
+        # # All constraints must pass
+        # is_valid = basic_constraint and kv_constraint and ultra_conservative_constraint and empirical_constraint
+        
+        # if not is_valid and hasattr(self, '_debug_constraint'):
+        #     print(f"❌ Invalid combination: tt={total_tokens}, d={depth}, k={top_k}")
+        #     print(f"   Basic: {basic_constraint} (tt <= k^(d-1) = {max_tokens_constraint})")
+        #     print(f"   KV cache: {kv_constraint} (tree_size={tree_size_estimate} <= {kv_cache_safe_limit})")
+        #     print(f"   Ultra Conservative: {ultra_conservative_constraint}")
+        #     print(f"   Empirical: {empirical_constraint} (estimated_actual={estimated_actual_tree_size} <= 2000)")
             
         return basic_constraint
     
@@ -283,14 +333,11 @@ class SB3DiscretePPOOnlineTreePolicy:
         self.step_count = 0
         self.update_count = 0
         
-        # Track performance with entropy metrics and action performance history
+        # Track performance with entropy metrics
         self.reward_history = []
         self.parameter_history = []
         self.tokens_per_second_history = []
         self.entropy_history = []  # Track entropy for max-entropy RL
-        
-        # Track action performance for smart inference
-        self.action_performance_history = {}  # Maps (total_tokens, depth, top_k) -> list of rewards
         
         # Setup wandb callback
         self.callbacks = []
@@ -327,16 +374,24 @@ class SB3DiscretePPOOnlineTreePolicy:
         self.env.current_context = context
         
         # Choose prediction strategy based on mode and phase
-        if training_mode and self.enable_max_entropy:
-            # MAX-ENTROPY TRAINING: Use aggressive exploration with multiple sampling
-            action = self._max_entropy_training_exploration(state, n_samples=8)
-            exploration_mode = "MAX-ENTROPY-TRAIN"
-        elif self.enable_max_entropy and self.max_entropy_inference and not training_mode:
-            # MAX-ENTROPY INFERENCE: Use multiple stochastic samples for diversity
-            action = self._max_entropy_inference(state, n_samples=8)
-            exploration_mode = "MAX-ENTROPY"
+        if self.enable_max_entropy and self.max_entropy_inference and not training_mode:
+            # MAX-ENTROPY INFERENCE: Use temperature-based sampling for diversity
+            if self.inference_temperature != 1.0:
+                # Try temperature-based sampling
+                try:
+                    action = self._sample_with_temperature(state, self.inference_temperature)
+                    exploration_mode = "MAX-ENTROPY"
+                except Exception as e:
+                    print(f"⚠️  Temperature sampling failed: {e}")
+                    print("   Using enhanced stochastic sampling instead")
+                    action = self._enhanced_stochastic_sampling(state)
+                    exploration_mode = "ENHANCED-STOCHASTIC"
+            else:
+                # Use stochastic prediction for exploration
+                action, _ = self.model.predict(state, deterministic=False) 
+                exploration_mode = "STOCHASTIC"
         elif training_mode:
-            # STANDARD TRAINING MODE: Use stochastic for exploration
+            # TRAINING MODE: Always use stochastic for both modes (exploration)
             action, _ = self.model.predict(state, deterministic=False)
             exploration_mode = "EXPLORE"
         else:
@@ -355,143 +410,11 @@ class SB3DiscretePPOOnlineTreePolicy:
             self.last_params = (total_tokens, depth, top_k)
         
         # Debug print
-        mode_name = "Max-Entropy PPO" if self.enable_max_entropy else "Standard PPO"
-        print(f"SB3 {mode_name} {exploration_mode}: tt={total_tokens}, d={depth}, k={top_k}")
+        # max_tokens = top_k ** (depth - 1)
+        # mode_name = "Max-Entropy PPO" if self.enable_max_entropy else "Standard PPO"
+        # print(f"SB3 {mode_name} {exploration_mode}: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
         
         return total_tokens, depth, top_k
-    
-    def _max_entropy_training_exploration(self, state, n_samples=8):
-        """Aggressive exploration for max-entropy training"""
-        # Every 5th step, force pure random exploration to increase diversity
-        if hasattr(self, 'step_count') and self.step_count % 5 == 0:
-            # Pure random exploration
-            random_action = random.randint(0, len(self.env.valid_actions) - 1)
-            print(f"   🎲 Forced random exploration: action {random_action}")
-            return random_action
-        
-        # Otherwise, use enhanced stochastic sampling with temperature-like effect
-        samples = []
-        for i in range(n_samples):  # Take n_samples samples for better diversity
-            action, _ = self.model.predict(state, deterministic=False)
-            action_val = action if isinstance(action, int) else action.item()
-            samples.append(action_val)
-        
-        # Strategy: Favor less common actions to increase diversity
-        unique_actions = list(set(samples))
-        action_counts = {action: samples.count(action) for action in unique_actions}
-        
-        if len(unique_actions) > 1:
-            # Choose the least common action to encourage exploration
-            min_count = min(action_counts.values())
-            least_common = [action for action, count in action_counts.items() if count == min_count]
-            chosen_action = random.choice(least_common)
-            diversity_score = len(unique_actions) / float(n_samples)
-        else:
-            # If all samples are the same, use that action
-            chosen_action = samples[0]
-            diversity_score = 0.0
-        
-        # Log diversity metrics
-        if self.use_wandb and hasattr(self, 'step_count'):
-            import wandb
-            wandb.log({
-                "training_diversity": diversity_score,
-                "training_unique_actions": len(unique_actions),
-                "training_samples": n_samples,
-                "forced_random": (self.step_count % 5 == 0),
-                "step": self.step_count
-            })
-        
-        print(f"   🎯 Max-entropy training: {len(unique_actions)}/{n_samples} unique, diversity={diversity_score:.2f}")
-        return chosen_action
-    
-    def _max_entropy_inference(self, state, n_samples=20):
-        """Smart max-entropy inference: diversity among top-performing actions only"""
-        # Take multiple stochastic samples to get a distribution
-        samples = []
-        for i in range(n_samples):  # More samples for better analysis
-            action, _ = self.model.predict(state, deterministic=False)
-            action_val = action if isinstance(action, int) else action.item()
-            samples.append(action_val)
-        
-        # Count occurrences to find the most preferred actions by the policy
-        from collections import Counter
-        action_counts = Counter(samples)
-        
-        # Get actions with their parameter combinations
-        action_params = {}
-        for action in action_counts.keys():
-            actual_action = self.env.valid_actions[action]
-            params = self.env._action_to_params(actual_action)
-            action_params[action] = params
-        
-        # Strategy 1: If we have historical performance data, use it
-        if len(self.action_performance_history) >= 3:
-            # Calculate average performance for each parameter combination
-            param_avg_performance = {}
-            for params, rewards in self.action_performance_history.items():
-                if len(rewards) >= 2:  # Need at least 2 samples for reliability
-                    param_avg_performance[params] = sum(rewards) / len(rewards)
-            
-            if param_avg_performance:
-                # Get top-performing parameter combinations (above median performance)
-                median_performance = sorted(param_avg_performance.values())[len(param_avg_performance)//2]
-                high_performance_params = [params for params, avg_perf in param_avg_performance.items() 
-                                         if avg_perf >= median_performance]
-                
-                # Filter actions to only those with high performance
-                good_actions = [action for action, params in action_params.items() 
-                              if params in high_performance_params]
-                
-                if good_actions:
-                    # Choose randomly from good actions for diversity + performance
-                    chosen_action = random.choice(good_actions)
-                    strategy = f"performance-based-{len(good_actions)}"
-                    print(f"   📊 Using performance history: {len(good_actions)} good actions (>= {median_performance:.1f} tokens/sec)")
-                else:
-                    # Fallback to policy preference
-                    chosen_action = action_counts.most_common(1)[0][0]
-                    strategy = "policy-preference"
-            else:
-                # Not enough performance data yet
-                chosen_action = action_counts.most_common(1)[0][0]
-                strategy = "insufficient-data"
-        else:
-            # Strategy 2: Use policy preferences (top 3 most frequent actions)
-            top_actions = [action for action, count in action_counts.most_common(3)]
-            
-            if len(top_actions) >= 2:
-                # Choose randomly from top actions (maintains performance while adding diversity)
-                chosen_action = random.choice(top_actions)
-                strategy = f"top-{len(top_actions)}-policy"
-            else:
-                # Fallback: use the most common action
-                chosen_action = action_counts.most_common(1)[0][0]
-                strategy = "deterministic"
-        
-        # Convert chosen action to parameters for logging
-        actual_action = self.env.valid_actions[chosen_action]
-        total_tokens, depth, top_k = self.env._action_to_params(actual_action)
-        
-        # Calculate diversity metrics
-        diversity_score = len(set(samples)) / float(n_samples)
-        unique_actions = len(set(samples))
-        
-        # Log diversity metrics
-        if self.use_wandb and hasattr(self, 'step_count'):
-            import wandb
-            wandb.log({
-                "inference_diversity": diversity_score,
-                "inference_unique_actions": unique_actions,
-                "inference_samples": n_samples,
-                "inference_strategy": strategy,
-                "step": self.step_count
-            })
-
-        print(f"   🎯 Smart max-entropy: {unique_actions}/{n_samples} unique, using {strategy} strategy")
-        print(f"       Selected: ({total_tokens}, {depth}, {top_k})")
-        
-        return chosen_action
     
     def _sample_with_temperature(self, state, temperature):
         """Sample action using temperature-based softmax for max-entropy exploration"""
@@ -625,11 +548,6 @@ class SB3DiscretePPOOnlineTreePolicy:
         self.reward_history.append(reward)
         self.parameter_history.append(self.last_params)
         
-        # Track action performance for smart inference
-        if self.last_params not in self.action_performance_history:
-            self.action_performance_history[self.last_params] = []
-        self.action_performance_history[self.last_params].append(reward)
-        
         # Track tokens per second if provided
         if generation_time and new_tokens:
             tps = new_tokens / generation_time
@@ -684,50 +602,6 @@ class SB3DiscretePPOOnlineTreePolicy:
             
             wandb.log(log_data)
     
-    def update_step_policy(self, parameters, step_reward, step_data):
-        """Update policy with individual step-level performance feedback"""
-        # Track performance for these specific parameters
-        if parameters not in self.action_performance_history:
-            self.action_performance_history[parameters] = []
-        self.action_performance_history[parameters].append(step_reward)
-        
-        # Update overall reward tracking
-        self.reward_history.append(step_reward)
-        self.parameter_history.append(parameters)
-        
-        # Track tokens per second for this step
-        tps = step_data.get('tokens_per_second', 0)
-        if tps > 0:
-            self.tokens_per_second_history.append(tps)
-        
-        # For step-level learning, we can update more frequently
-        if len(self.reward_history) % 8 == 0:  # Update every 8 steps for more granular learning
-            self.update_count += 1
-            print(f"📈 SB3 PPO Step Update #{self.update_count}: Granular step-level learning")
-        
-        self.step_count += 1
-        
-        # Progress logging for step-level updates (less frequent)
-        if self.step_count % 50 == 0:
-            recent_rewards = self.reward_history[-20:] if len(self.reward_history) >= 20 else self.reward_history
-            avg_recent_reward = sum(recent_rewards) / len(recent_rewards) if recent_rewards else 0
-            
-            print(f"Step-level RL: Step Reward={step_reward:.3f}, Avg Recent={avg_recent_reward:.3f}, "
-                  f"TPS={tps:.1f}, Step: {self.step_count}")
-        
-        # Wandb logging for step-level data
-        if self.use_wandb and self.step_count % 5 == 0:  # Log every 5 steps to avoid spam
-            wandb.log({
-                "step_reward": step_reward,
-                "step_tokens_per_second": tps,
-                "step_accepted_tokens": step_data.get('accepted_tokens', 0),
-                "step_time": step_data.get('step_time', 0),
-                "step_total_tokens": parameters[0],
-                "step_depth": parameters[1],
-                "step_top_k": parameters[2],
-                "granular_step": self.step_count
-            })
-    
     def save_checkpoint(self, checkpoint_name=None):
         """Save training checkpoint"""
         if checkpoint_name is None:
@@ -748,7 +622,6 @@ class SB3DiscretePPOOnlineTreePolicy:
             'parameter_history': self.parameter_history,
             'tokens_per_second_history': self.tokens_per_second_history,
             'entropy_history': self.entropy_history,
-            'action_performance_history': {str(k): v for k, v in self.action_performance_history.items()},  # Convert tuple keys to strings
         }
         
         metadata_path = checkpoint_path + "_metadata.json"
@@ -789,17 +662,6 @@ class SB3DiscretePPOOnlineTreePolicy:
                 self.parameter_history = metadata['parameter_history']
                 self.tokens_per_second_history = metadata['tokens_per_second_history']
                 self.entropy_history = metadata.get('entropy_history', [])
-                
-                # Load action performance history (convert string keys back to tuples)
-                action_perf_raw = metadata.get('action_performance_history', {})
-                self.action_performance_history = {}
-                for key_str, values in action_perf_raw.items():
-                    # Convert string representation back to tuple
-                    try:
-                        key_tuple = eval(key_str)  # Safe since we control the format
-                        self.action_performance_history[key_tuple] = values
-                    except:
-                        pass  # Skip malformed keys
             
             print(f"✅ SB3 Discrete PPO checkpoint loaded: {checkpoint_path}")
             print(f"   Resuming from step {self.step_count}, update {self.update_count}")
@@ -956,24 +818,3 @@ def calculate_sb3_discrete_ppo_reward(generation_time, new_tokens, total_tokens,
     # Reward is simply tokens per second
     tokens_per_second = new_tokens / generation_time
     return tokens_per_second
-
-
-def calculate_step_reward(step_data):
-    """Calculate reward for individual step performance in RL-aware generation"""
-    # Extract performance metrics from step_data
-    tokens_per_second = step_data['tokens_per_second']
-    accepted_tokens = step_data['accepted_tokens']
-    step_time = step_data['step_time']
-    
-    # Primary reward: tokens per second (throughput)
-    base_reward = tokens_per_second
-    
-    # Bonus for accepting multiple tokens (efficiency)
-    efficiency_bonus = 0.1 * max(0, accepted_tokens - 1)
-    
-    # Penalty for very slow steps
-    time_penalty = max(0, step_time - 0.5) * 0.5
-    
-    reward = base_reward + efficiency_bonus - time_penalty
-    
-    return max(0.0, reward)  # Ensure non-negative rewards
