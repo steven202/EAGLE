@@ -329,11 +329,11 @@ class SB3DiscretePPOOnlineTreePolicy:
         # Choose prediction strategy based on mode and phase
         if training_mode and self.enable_max_entropy:
             # MAX-ENTROPY TRAINING: Use aggressive exploration with multiple sampling
-            action = self._max_entropy_training_exploration(state)
+            action = self._max_entropy_training_exploration(state, n_samples=8)
             exploration_mode = "MAX-ENTROPY-TRAIN"
         elif self.enable_max_entropy and self.max_entropy_inference and not training_mode:
             # MAX-ENTROPY INFERENCE: Use multiple stochastic samples for diversity
-            action = self._max_entropy_inference(state)
+            action = self._max_entropy_inference(state, n_samples=8)
             exploration_mode = "MAX-ENTROPY"
         elif training_mode:
             # STANDARD TRAINING MODE: Use stochastic for exploration
@@ -360,7 +360,7 @@ class SB3DiscretePPOOnlineTreePolicy:
         
         return total_tokens, depth, top_k
     
-    def _max_entropy_training_exploration(self, state):
+    def _max_entropy_training_exploration(self, state, n_samples=8):
         """Aggressive exploration for max-entropy training"""
         # Every 5th step, force pure random exploration to increase diversity
         if hasattr(self, 'step_count') and self.step_count % 5 == 0:
@@ -371,7 +371,7 @@ class SB3DiscretePPOOnlineTreePolicy:
         
         # Otherwise, use enhanced stochastic sampling with temperature-like effect
         samples = []
-        for i in range(8):  # Take 8 samples for better diversity
+        for i in range(n_samples):  # Take n_samples samples for better diversity
             action, _ = self.model.predict(state, deterministic=False)
             action_val = action if isinstance(action, int) else action.item()
             samples.append(action_val)
@@ -385,7 +385,7 @@ class SB3DiscretePPOOnlineTreePolicy:
             min_count = min(action_counts.values())
             least_common = [action for action, count in action_counts.items() if count == min_count]
             chosen_action = random.choice(least_common)
-            diversity_score = len(unique_actions) / 8.0
+            diversity_score = len(unique_actions) / float(n_samples)
         else:
             # If all samples are the same, use that action
             chosen_action = samples[0]
@@ -397,19 +397,19 @@ class SB3DiscretePPOOnlineTreePolicy:
             wandb.log({
                 "training_diversity": diversity_score,
                 "training_unique_actions": len(unique_actions),
-                "training_samples": 8,
+                "training_samples": n_samples,
                 "forced_random": (self.step_count % 5 == 0),
                 "step": self.step_count
             })
         
-        print(f"   🎯 Max-entropy training: {len(unique_actions)}/8 unique, diversity={diversity_score:.2f}")
+        print(f"   🎯 Max-entropy training: {len(unique_actions)}/{n_samples} unique, diversity={diversity_score:.2f}")
         return chosen_action
     
-    def _max_entropy_inference(self, state):
+    def _max_entropy_inference(self, state, n_samples=20):
         """Smart max-entropy inference: diversity among top-performing actions only"""
         # Take multiple stochastic samples to get a distribution
         samples = []
-        for i in range(20):  # More samples for better analysis
+        for i in range(n_samples):  # More samples for better analysis
             action, _ = self.model.predict(state, deterministic=False)
             action_val = action if isinstance(action, int) else action.item()
             samples.append(action_val)
@@ -474,7 +474,7 @@ class SB3DiscretePPOOnlineTreePolicy:
         total_tokens, depth, top_k = self.env._action_to_params(actual_action)
         
         # Calculate diversity metrics
-        diversity_score = len(set(samples)) / 20.0
+        diversity_score = len(set(samples)) / float(n_samples)
         unique_actions = len(set(samples))
         
         # Log diversity metrics
@@ -483,12 +483,12 @@ class SB3DiscretePPOOnlineTreePolicy:
             wandb.log({
                 "inference_diversity": diversity_score,
                 "inference_unique_actions": unique_actions,
-                "inference_samples": 20,
+                "inference_samples": n_samples,
                 "inference_strategy": strategy,
                 "step": self.step_count
             })
-        
-        print(f"   🎯 Smart max-entropy: {unique_actions}/20 unique, using {strategy} strategy")
+
+        print(f"   🎯 Smart max-entropy: {unique_actions}/{n_samples} unique, using {strategy} strategy")
         print(f"       Selected: ({total_tokens}, {depth}, {top_k})")
         
         return chosen_action
