@@ -5,10 +5,10 @@
 # NOTE: Max-Entropy PPO is now the DEFAULT mode. Use --disable-max-entropy for Standard PPO.
 
 DATE=$(date '+%Y%m%d_%H%M')
-DATE='20250721_1215'
+# DATE='20250721_1215'
 MODEL_PATH="/home/guo/EAGLE_RL/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=8600
+QUESTION_END=200
 
 # Create single unified log directory
 mkdir -p log/$DATE/{standard_ppo,max_entropy_ppo,baseline_results,evaluation}
@@ -149,12 +149,12 @@ for i in "${!BENCHMARKS[@]}"; do
         --model-id "eagle-max-entropy-ppo-$benchmark-$DATE" \
         --bench-name "$benchmark" \
         --use-online-rl \
+        --use-stepwise-rl \
         --use-sb3-discrete-ppo \
         --online-policy-path "log/$DATE/max_entropy_ppo/max_entropy_ppo_policy.pth" \
         --online-inference-only \
         --temperature 0.0 \
         --use_eagle3 \
-        --max-new-token 512 \
         --num-choices 1 \
         --answer-file "log/$DATE/max_entropy_ppo/evaluation/${benchmark}_results.jsonl" \
         --no-wandb \

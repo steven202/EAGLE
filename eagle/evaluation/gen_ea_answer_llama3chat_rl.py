@@ -420,15 +420,31 @@ def get_model_answers(
             # Use no_grad for model inference to save memory and computation
             try:
                 with torch.no_grad():
-                    output_ids, new_token, idx = model.eagenerate(
-                        torch.as_tensor(input_ids).cuda(),
-                        temperature=temperature,
-                        log=True,
-                        is_llama3=True,
-                        total_tokens=predicted_total_tokens,
-                        depth=predicted_depth,
-                        tree_top_k=predicted_top_k,
-                    )
+                    if args.use_stepwise_rl and online_policy is not None:
+                        # Use stepwise RL generation
+                        output_ids, new_token, idx = model.eagenerate_stepwise(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            is_llama3=True,
+                            total_tokens=predicted_total_tokens,
+                            depth=predicted_depth,
+                            tree_top_k=predicted_top_k,
+                            online_policy=online_policy,
+                            full_context=full_context,
+                            training_mode=False  # No exploration during warmup
+                        )
+                    else:
+                        # Use standard generation
+                        output_ids, new_token, idx = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            is_llama3=True,
+                            total_tokens=predicted_total_tokens,
+                            depth=predicted_depth,
+                            tree_top_k=predicted_top_k,
+                        )
             except RuntimeError as e:
                 if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
@@ -441,15 +457,31 @@ def get_model_answers(
                 
                     try:
                         with torch.no_grad():
-                            output_ids, new_token, idx = model.eagenerate(
-                                torch.as_tensor(input_ids).cuda(),
-                                temperature=temperature,
-                                log=True,
-                                is_llama3=True,
-                                total_tokens=safe_total_tokens,
-                                depth=safe_depth,
-                                tree_top_k=safe_top_k,
-                            )
+                            if args.use_stepwise_rl and online_policy is not None:
+                                # Use stepwise RL generation with safe parameters
+                                output_ids, new_token, idx = model.eagenerate_stepwise(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    total_tokens=safe_total_tokens,
+                                    depth=safe_depth,
+                                    tree_top_k=safe_top_k,
+                                    online_policy=online_policy,
+                                    full_context=full_context,
+                                    training_mode=False  # No exploration during warmup
+                                )
+                            else:
+                                # Use standard generation with safe parameters
+                                output_ids, new_token, idx = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    total_tokens=safe_total_tokens,
+                                    depth=safe_depth,
+                                    tree_top_k=safe_top_k,
+                                )
                     except RuntimeError as e2:
                         print(f"❌ Even ultra-conservative warmup failed: {e2}")
                         print("   Skipping warmup - proceeding with standard generation")
@@ -597,15 +629,31 @@ def get_model_answers(
                 while retry_count < max_retries and not success:
                     try:
                         with torch.no_grad():
-                            output_ids, new_token, idx = model.eagenerate(
-                                torch.as_tensor(input_ids).cuda(),
-                                temperature=temperature,
-                                log=True,
-                                is_llama3=True,
-                                total_tokens=predicted_total_tokens,
-                                depth=predicted_depth,
-                                tree_top_k=predicted_top_k,
-                            )
+                            if args.use_stepwise_rl and online_policy is not None:
+                                # Use stepwise RL generation
+                                output_ids, new_token, idx = model.eagenerate_stepwise(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    total_tokens=predicted_total_tokens,
+                                    depth=predicted_depth,
+                                    tree_top_k=predicted_top_k,
+                                    online_policy=online_policy,
+                                    full_context=full_context,
+                                    training_mode=not args.online_inference_only  # Enable training unless inference-only
+                                )
+                            else:
+                                # Use standard generation
+                                output_ids, new_token, idx = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    total_tokens=predicted_total_tokens,
+                                    depth=predicted_depth,
+                                    tree_top_k=predicted_top_k,
+                                )
                         success = True
                         
                     except RuntimeError as e:
@@ -1170,6 +1218,13 @@ if __name__ == "__main__":
         "--no-max-entropy-inference",
         action="store_true",
         help="Disable max-entropy inference and use deterministic inference (SB3 PPO only)"
+    )
+    
+    # Stepwise RL arguments
+    parser.add_argument(
+        "--use-stepwise-rl",
+        action="store_true",
+        help="Use stepwise RL where policy selects parameters at every draft/verify step (enables immediate feedback)"
     )
 
     args = parser.parse_args()

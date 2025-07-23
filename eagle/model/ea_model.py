@@ -319,6 +319,191 @@ class EaModel(nn.Module):
             return input_ids, new_token, idx
 
     @torch.no_grad()
+    def eagenerate_stepwise(
+            self,
+            input_ids,
+            temperature=0.0,
+            top_p=0.0,
+            top_k=0.0,
+            max_new_tokens=512,
+            max_length=2048,
+            log=False,
+            is_llama3=False,
+            total_tokens=None,
+            depth=None,
+            tree_top_k=None,
+            online_policy=None,  # RL policy for stepwise parameter selection
+            full_context="",  # Context for RL policy
+            training_mode=True,  # Whether to use exploration during training
+    ):
+        """
+        Stepwise EAGLE generation with immediate RL feedback after each draft/verify step.
+        
+        This method provides step-by-step reward feedback to the RL policy during generation,
+        allowing the policy to learn from immediate performance at each draft/verify step.
+        
+        Note: Due to tensor dimension constraints in the EAGLE tree structure, parameters
+        are set once at the beginning of generation, but the policy receives immediate 
+        feedback after each step and can adapt for subsequent generation calls.
+        
+        This enables faster RL learning compared to episode-based RL where feedback
+        only comes after complete generation cycles.
+        """
+        if is_llama3:
+            stop_token_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+
+        if temperature > 1e-5:
+            logits_processor = prepare_logits_processor(temperature=temperature, top_p=top_p, top_k=top_k)
+        else:
+            logits_processor = None
+
+        # Store original parameters for restoration later
+        original_total_tokens = self.ea_layer.total_tokens
+        original_depth = self.ea_layer.depth
+        original_top_k = self.ea_layer.top_k
+
+        padding = (torch.zeros(1, 1, dtype=torch.long) - 1).to(input_ids.device)
+        input_ids = input_ids.clone()
+        self.ea_layer.reset_kv()
+
+        # Initialize the past key and value states
+        if hasattr(self, "past_key_values"):
+            past_key_values = self.past_key_values
+            past_key_values_data = self.past_key_values_data
+            current_length_data = self.current_length_data
+            # Reset the past key and value states
+            current_length_data.zero_()
+        else:
+            (
+                past_key_values,
+                past_key_values_data,
+                current_length_data,
+            ) = initialize_past_key_values(self.base_model, max_length=max_length)
+            self.past_key_values = past_key_values
+            self.past_key_values_data = past_key_values_data
+            self.current_length_data = current_length_data
+
+        input_len = input_ids.shape[1]
+        reset_tree_mode(self)
+        
+        # Initial context for RL policy
+        context = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+        
+        # Get initial parameters from RL policy
+        if online_policy is not None:
+            total_tokens, depth, tree_top_k = online_policy.predict_parameters(full_context, training_mode=training_mode)
+        else:
+            # Use default parameters
+            total_tokens = self.ea_layer.total_tokens + 1  # Add 1 to match expected format
+            depth = self.ea_layer.depth
+            tree_top_k = self.ea_layer.top_k
+
+        # Set initial parameters
+        self.ea_layer.total_tokens = total_tokens - 1
+        self.ea_layer.depth = depth
+        self.ea_layer.top_k = tree_top_k
+
+        # Initialize tree with initial parameters
+        draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
+            input_ids, self, past_key_values, logits_processor, total_tokens, depth, tree_top_k
+        )
+        
+        new_token = 0
+        max_length = max_length - self.ea_layer.total_tokens - 10
+        step_rewards = []  # Track rewards for each step
+        
+        for idx in range(max_length):
+            # ===== STEPWISE RL APPROACH =====
+            # Note: We can't rebuild the tree mid-generation due to tensor dimension mismatches
+            # Instead, we collect step-by-step rewards and update the policy after each verification step
+            
+            # Track the step start time for RL reward calculation
+            if online_policy is not None:
+                step_start_time = time.time()
+            
+            # Execute single draft/verify step with current parameters
+            self.base_model.model.tree_mask = tree_mask
+            draft_tokens = draft_tokens.to(input_ids.device)
+            
+            # DRAFT: Target model forward, get logits
+            logits, hidden_state_new, outputs = tree_decoding(
+                self,
+                draft_tokens,
+                past_key_values,
+                tree_position_ids,
+                input_ids,
+                retrieve_indices,
+            )
+            
+            # VERIFY: verification step
+            draft_tokens = torch.cat((draft_tokens, padding), dim=1)
+            candidates = draft_tokens[0, retrieve_indices]
+            best_candidate, accept_length, sample_p = evaluate_posterior(
+                logits, candidates, logits_processor
+            )
+            
+            # UPDATE: Adjusting the input sequence for next iteration
+            old_length = input_ids.shape[1]
+            input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
+                input_ids,
+                candidates,
+                best_candidate,
+                accept_length,
+                retrieve_indices,
+                logits_processor,
+                new_token,
+                past_key_values_data,
+                current_length_data,
+                self,
+                hidden_state_new,
+                sample_p
+            )
+            
+            # Calculate immediate reward for this step and update policy
+            if online_policy is not None:
+                step_end_time = time.time()
+                step_time = step_end_time - step_start_time
+                tokens_generated = input_ids.shape[1] - old_length
+                
+                # Calculate reward based on tokens per second for this step
+                if step_time > 0 and tokens_generated > 0:
+                    tokens_per_second = tokens_generated / step_time
+                    step_reward = tokens_per_second
+                else:
+                    step_reward = 0.0
+                
+                step_rewards.append(step_reward)
+                
+                # Immediate policy update with step reward
+                # Note: The policy can learn from each step, but parameter changes
+                # will take effect in the next complete generation call
+                online_policy.update_policy(step_reward, step_time, tokens_generated)
+                
+                print(f"   Step {idx}: {tokens_generated} tokens in {step_time:.3f}s = {tokens_per_second:.1f} tok/s, reward={step_reward:.1f}")
+
+            # Check termination conditions
+            if is_llama3:
+                if stop_token_id in input_ids[0, input_len:].tolist():
+                    break
+
+            if self.tokenizer.eos_token_id in input_ids[0, input_len:].tolist():
+                break
+            if new_token > max_new_tokens:
+                break
+            if input_ids.shape[1] > max_length:
+                break
+        
+        # Restore original parameters
+        self.ea_layer.total_tokens = original_total_tokens
+        self.ea_layer.depth = original_depth
+        self.ea_layer.top_k = original_top_k
+        
+        if log:
+            return input_ids, new_token, idx
+        else:
+            return input_ids
+
+    @torch.no_grad()
     def naivegenerate(
             self,
             input_ids,
