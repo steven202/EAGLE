@@ -38,10 +38,9 @@ class EagleParameterEnv(gym.Env):
         super(EagleParameterEnv, self).__init__()
         
         # Parameter bins (6×6×5 = 180 total combinations)
-        self.total_tokens_bins = [16, 32, 48, 64, 80, 96, 112, 128, 144, 
-                                  160, 176, 192, 208, 224, 240, 256]
-        self.depth_bins = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-        self.top_k_bins = [4, 8, 12, 16, 20, 32, 40, 48, 56, 64]
+        self.total_tokens_bins = [32, 48, 64, 80, 96, 128]  # 6 options
+        self.depth_bins = [3, 4, 5, 6, 7, 8]  # 6 options  
+        self.top_k_bins = [8, 12, 16, 20, 32]  # 5 options
         
         # Action space dimensions
         self.n_total_tokens = len(self.total_tokens_bins)
@@ -54,11 +53,11 @@ class EagleParameterEnv(gym.Env):
         
         # Define action and observation space
         self.action_space = spaces.Discrete(len(self.valid_actions))  # Only valid actions
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(768,), dtype=np.float32)  # SBERT embedding
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(384,), dtype=np.float32)  # SBERT embedding
         
         # Initialize SBERT for state encoding
-        self.sbert_model = SentenceTransformer('all-mpnet-base-v2')
-
+        self.sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
+        
         # Environment state
         self.current_context = ""
         self.step_count = 0
@@ -108,7 +107,7 @@ class EagleParameterEnv(gym.Env):
         self.current_context = ""
         self.step_count = 0
         # Return zero state - will be set properly when predict_parameters is called
-        return np.zeros(768, dtype=np.float32)
+        return np.zeros(384, dtype=np.float32)
     
     def step(self, action):
         """Execute one step with the given action"""
@@ -134,7 +133,7 @@ class EagleParameterEnv(gym.Env):
         self.step_count += 1
         
         # Return next observation (will be updated externally)
-        next_obs = np.zeros(768, dtype=np.float32)
+        next_obs = np.zeros(384, dtype=np.float32)
         
         return next_obs, reward, done, info
 
@@ -211,9 +210,6 @@ class SB3DiscretePPOOnlineTreePolicy:
         if enable_max_entropy:
             actual_ent_coef = max_entropy_ent_coef
             mode_name = "Max-Entropy PPO"
-            # Increase exploration parameters for max-entropy
-            gamma = min(gamma, 0.9)  # Lower gamma for shorter-term focus
-            gae_lambda = min(gae_lambda, 0.8)  # Lower GAE lambda 
         else:
             actual_ent_coef = ent_coef
             mode_name = "Standard PPO"
@@ -263,15 +259,11 @@ class SB3DiscretePPOOnlineTreePolicy:
         
         # Wrap environment for SB3
         self.vec_env = DummyVecEnv([lambda: self.env])
-        policy_kwargs = dict(
-            net_arch=[512, 256, 128],   # Hidden layer sizes
-            activation_fn=torch.nn.ReLU  # Activation function (optional)
-        )
+        
         # Create PPO model with determined entropy coefficient
         self.model = PPO(
             policy="MlpPolicy",
             env=self.vec_env,
-            policy_kwargs=policy_kwargs, 
             learning_rate=learning_rate,
             n_steps=n_steps,
             batch_size=batch_size,
@@ -284,9 +276,7 @@ class SB3DiscretePPOOnlineTreePolicy:
             max_grad_norm=max_grad_norm,
             verbose=1,
             device=self.device,
-            tensorboard_log=None,  # We'll use wandb instead
-            # normalize_images=False,
-            # net_arch=[128, 128, 128],  # Simple MLP architecture
+            tensorboard_log=None  # We'll use wandb instead
         )
         
         # Training counters
@@ -334,38 +324,18 @@ class SB3DiscretePPOOnlineTreePolicy:
         self.env.current_context = context
         
         # Choose prediction strategy based on mode and phase
-        if training_mode:
-            # TRAINING MODE: Force high exploration for both modes
-            if self.enable_max_entropy:
-                # Max-entropy training: Use temperature sampling for extra diversity
-                try:
-                    action = self._sample_with_temperature(state, self.inference_temperature * 2.0)  # Higher temp during training
-                    exploration_mode = "MAX-ENTROPY-TRAINING"
-                except Exception:
-                    # Fallback to enhanced stochastic sampling
-                    action = self._enhanced_stochastic_sampling(state)
-                    exploration_mode = "ENHANCED-TRAINING"
-            else:
-                # Standard training: Use multiple stochastic samples for diversity
-                action = self._enhanced_stochastic_sampling(state)
-                exploration_mode = "EXPLORE-TRAINING"
-        
-        elif self.enable_max_entropy and self.max_entropy_inference:
-            # MAX-ENTROPY INFERENCE: Use temperature-based sampling for diversity
-            if self.inference_temperature != 1.0:
-                # Try temperature-based sampling
-                try:
-                    action = self._sample_with_temperature(state, self.inference_temperature)
-                    exploration_mode = "MAX-ENTROPY"
-                except Exception as e:
-                    print(f"⚠️  Temperature sampling failed: {e}")
-                    print("   Using enhanced stochastic sampling instead")
-                    action = self._enhanced_stochastic_sampling(state)
-                    exploration_mode = "ENHANCED-STOCHASTIC"
-            else:
-                # Use stochastic prediction for exploration
-                action, _ = self.model.predict(state, deterministic=False) 
-                exploration_mode = "STOCHASTIC"
+        if training_mode and self.enable_max_entropy:
+            # MAX-ENTROPY TRAINING: Use aggressive exploration with multiple sampling
+            action = self._max_entropy_training_exploration(state)
+            exploration_mode = "MAX-ENTROPY-TRAIN"
+        elif self.enable_max_entropy and self.max_entropy_inference and not training_mode:
+            # MAX-ENTROPY INFERENCE: Use multiple stochastic samples for diversity
+            action = self._max_entropy_inference(state)
+            exploration_mode = "MAX-ENTROPY"
+        elif training_mode:
+            # STANDARD TRAINING MODE: Use stochastic for exploration
+            action, _ = self.model.predict(state, deterministic=False)
+            exploration_mode = "EXPLORE"
         else:
             # STANDARD INFERENCE: Use deterministic prediction
             action, _ = self.model.predict(state, deterministic=True)
@@ -375,35 +345,6 @@ class SB3DiscretePPOOnlineTreePolicy:
         actual_action = self.env.valid_actions[action]
         total_tokens, depth, top_k = self.env._action_to_params(actual_action)
         
-        # Add exploration noise during training
-        if training_mode and random.random() < 0.15:  # 15% chance to add noise
-            # Randomly adjust one parameter slightly
-            noise_type = random.choice(['tokens', 'depth', 'top_k'])
-            original_params = (total_tokens, depth, top_k)
-            
-            if noise_type == 'tokens' and len(self.env.total_tokens_bins) > 1:
-                current_idx = self.env.total_tokens_bins.index(total_tokens)
-                new_idx = max(0, min(len(self.env.total_tokens_bins)-1, 
-                                   current_idx + random.choice([-1, 1])))
-                total_tokens = self.env.total_tokens_bins[new_idx]
-            elif noise_type == 'depth' and len(self.env.depth_bins) > 1:
-                current_idx = self.env.depth_bins.index(depth)
-                new_idx = max(0, min(len(self.env.depth_bins)-1, 
-                                   current_idx + random.choice([-1, 1])))
-                depth = self.env.depth_bins[new_idx]
-            elif noise_type == 'top_k' and len(self.env.top_k_bins) > 1:
-                current_idx = self.env.top_k_bins.index(top_k)
-                new_idx = max(0, min(len(self.env.top_k_bins)-1, 
-                                   current_idx + random.choice([-1, 1])))
-                top_k = self.env.top_k_bins[new_idx]
-            
-            # Check if the noisy parameters are valid
-            if self.env._is_valid_combination(total_tokens, depth, top_k):
-                print(f"   Added exploration noise: {original_params} → {(total_tokens, depth, top_k)}")
-            else:
-                # Revert if invalid
-                total_tokens, depth, top_k = original_params
-        
         # Store for training
         if training_mode:
             self.last_state = state
@@ -411,11 +352,89 @@ class SB3DiscretePPOOnlineTreePolicy:
             self.last_params = (total_tokens, depth, top_k)
         
         # Debug print
-        # max_tokens = top_k ** (depth - 1)
-        # mode_name = "Max-Entropy PPO" if self.enable_max_entropy else "Standard PPO"
-        # print(f"SB3 {mode_name} {exploration_mode}: tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
+        mode_name = "Max-Entropy PPO" if self.enable_max_entropy else "Standard PPO"
+        print(f"SB3 {mode_name} {exploration_mode}: tt={total_tokens}, d={depth}, k={top_k}")
         
         return total_tokens, depth, top_k
+    
+    def _max_entropy_training_exploration(self, state):
+        """Aggressive exploration for max-entropy training"""
+        # Every 5th step, force pure random exploration to increase diversity
+        if hasattr(self, 'step_count') and self.step_count % 5 == 0:
+            # Pure random exploration
+            random_action = random.randint(0, len(self.env.valid_actions) - 1)
+            print(f"   🎲 Forced random exploration: action {random_action}")
+            return random_action
+        
+        # Otherwise, use enhanced stochastic sampling with temperature-like effect
+        samples = []
+        for i in range(8):  # Take 8 samples for better diversity
+            action, _ = self.model.predict(state, deterministic=False)
+            action_val = action if isinstance(action, int) else action.item()
+            samples.append(action_val)
+        
+        # Strategy: Favor less common actions to increase diversity
+        unique_actions = list(set(samples))
+        action_counts = {action: samples.count(action) for action in unique_actions}
+        
+        if len(unique_actions) > 1:
+            # Choose the least common action to encourage exploration
+            min_count = min(action_counts.values())
+            least_common = [action for action, count in action_counts.items() if count == min_count]
+            chosen_action = random.choice(least_common)
+            diversity_score = len(unique_actions) / 8.0
+        else:
+            # If all samples are the same, use that action
+            chosen_action = samples[0]
+            diversity_score = 0.0
+        
+        # Log diversity metrics
+        if self.use_wandb and hasattr(self, 'step_count'):
+            import wandb
+            wandb.log({
+                "training_diversity": diversity_score,
+                "training_unique_actions": len(unique_actions),
+                "training_samples": 8,
+                "forced_random": (self.step_count % 5 == 0),
+                "step": self.step_count
+            })
+        
+        print(f"   🎯 Max-entropy training: {len(unique_actions)}/8 unique, diversity={diversity_score:.2f}")
+        return chosen_action
+    
+    def _max_entropy_inference(self, state):
+        """Simple max-entropy inference using multiple stochastic samples"""
+        # Take multiple stochastic samples
+        samples = []
+        for i in range(10):  # Take 10 samples for better diversity
+            action, _ = self.model.predict(state, deterministic=False)
+            action_val = action if isinstance(action, int) else action.item()
+            samples.append(action_val)
+        
+        # Strategy: Use weighted random selection favoring diversity
+        unique_actions = list(set(samples))
+        
+        if len(unique_actions) > 1:
+            # If we have diversity, randomly choose from unique actions
+            chosen_action = random.choice(unique_actions)
+            diversity_score = len(unique_actions) / 10.0
+        else:
+            # If all samples are the same, use that action
+            chosen_action = samples[0]
+            diversity_score = 0.0
+        
+        # Log diversity metrics
+        if self.use_wandb and hasattr(self, 'step_count'):
+            import wandb
+            wandb.log({
+                "max_entropy_diversity": diversity_score,
+                "max_entropy_unique_actions": len(unique_actions),
+                "max_entropy_samples": 10,
+                "step": self.step_count
+            })
+        
+        print(f"   Max-entropy inference: {len(unique_actions)}/10 unique actions, diversity={diversity_score:.2f}")
+        return chosen_action
     
     def _sample_with_temperature(self, state, temperature):
         """Sample action using temperature-based softmax for max-entropy exploration"""
@@ -508,54 +527,26 @@ class SB3DiscretePPOOnlineTreePolicy:
     
     def _enhanced_stochastic_sampling(self, state):
         """Enhanced stochastic sampling for max-entropy when temperature sampling fails"""
-        # Strategy 1: Random exploration with epsilon-greedy
-        epsilon = 0.3 if self.enable_max_entropy else 0.2  # Higher epsilon for max-entropy
-        
-        if random.random() < epsilon:
-            # Pure random action for exploration
-            action = random.randint(0, len(self.env.valid_actions) - 1)
-            print(f"   Random exploration (ε={epsilon:.1f}): action={action}")
-            return action
-        
-        # Strategy 2: Sample multiple times and choose based on diversity
+        # Sample multiple times and choose based on a strategy to increase diversity
         samples = []
-        for _ in range(8):  # Increased samples for more diversity
+        for _ in range(5):  # Take 5 samples
             action, _ = self.model.predict(state, deterministic=False)
             samples.append(action if isinstance(action, int) else action.item())
         
-        # Choose the action that's different from recent actions (if tracked)
-        if hasattr(self, 'recent_actions'):
-            # Filter out recently used actions to encourage diversity
-            unique_samples = list(set(samples))
-            available_actions = [a for a in unique_samples if a not in self.recent_actions[-5:]]
-            
-            if available_actions:
-                chosen_action = random.choice(available_actions)
-                print(f"   Diversity sampling: avoided recent actions")
-            else:
-                chosen_action = random.choice(unique_samples)
-                print(f"   Diversity sampling: no recent constraints")
-        else:
-            # Initialize recent actions tracking
-            self.recent_actions = deque(maxlen=10)
-            chosen_action = random.choice(list(set(samples)))
-        
-        # Track this action
-        if hasattr(self, 'recent_actions'):
-            self.recent_actions.append(chosen_action)
+        # Strategy 1: Choose a random sample (increases diversity)
+        chosen_action = random.choice(samples)
         
         # Log diversity metrics
         unique_samples = len(set(samples))
         if self.use_wandb and hasattr(self, 'step_count'):
             import wandb
             wandb.log({
-                "enhanced_sampling_diversity": unique_samples / 8.0,
+                "enhanced_sampling_diversity": unique_samples / 5.0,
                 "enhanced_sampling_unique_actions": unique_samples,
-                "epsilon_used": epsilon,
                 "step": self.step_count
             })
         
-        print(f"   Enhanced stochastic: {unique_samples}/8 unique actions, chose {chosen_action}")
+        print(f"   Enhanced stochastic: {unique_samples}/5 unique actions")
         return chosen_action
     
     def update_policy(self, reward, generation_time=None, new_tokens=None):
