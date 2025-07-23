@@ -684,6 +684,50 @@ class SB3DiscretePPOOnlineTreePolicy:
             
             wandb.log(log_data)
     
+    def update_step_policy(self, parameters, step_reward, step_data):
+        """Update policy with individual step-level performance feedback"""
+        # Track performance for these specific parameters
+        if parameters not in self.action_performance_history:
+            self.action_performance_history[parameters] = []
+        self.action_performance_history[parameters].append(step_reward)
+        
+        # Update overall reward tracking
+        self.reward_history.append(step_reward)
+        self.parameter_history.append(parameters)
+        
+        # Track tokens per second for this step
+        tps = step_data.get('tokens_per_second', 0)
+        if tps > 0:
+            self.tokens_per_second_history.append(tps)
+        
+        # For step-level learning, we can update more frequently
+        if len(self.reward_history) % 8 == 0:  # Update every 8 steps for more granular learning
+            self.update_count += 1
+            print(f"📈 SB3 PPO Step Update #{self.update_count}: Granular step-level learning")
+        
+        self.step_count += 1
+        
+        # Progress logging for step-level updates (less frequent)
+        if self.step_count % 50 == 0:
+            recent_rewards = self.reward_history[-20:] if len(self.reward_history) >= 20 else self.reward_history
+            avg_recent_reward = sum(recent_rewards) / len(recent_rewards) if recent_rewards else 0
+            
+            print(f"Step-level RL: Step Reward={step_reward:.3f}, Avg Recent={avg_recent_reward:.3f}, "
+                  f"TPS={tps:.1f}, Step: {self.step_count}")
+        
+        # Wandb logging for step-level data
+        if self.use_wandb and self.step_count % 5 == 0:  # Log every 5 steps to avoid spam
+            wandb.log({
+                "step_reward": step_reward,
+                "step_tokens_per_second": tps,
+                "step_accepted_tokens": step_data.get('accepted_tokens', 0),
+                "step_time": step_data.get('step_time', 0),
+                "step_total_tokens": parameters[0],
+                "step_depth": parameters[1],
+                "step_top_k": parameters[2],
+                "granular_step": self.step_count
+            })
+    
     def save_checkpoint(self, checkpoint_name=None):
         """Save training checkpoint"""
         if checkpoint_name is None:
@@ -912,3 +956,24 @@ def calculate_sb3_discrete_ppo_reward(generation_time, new_tokens, total_tokens,
     # Reward is simply tokens per second
     tokens_per_second = new_tokens / generation_time
     return tokens_per_second
+
+
+def calculate_step_reward(step_data):
+    """Calculate reward for individual step performance in RL-aware generation"""
+    # Extract performance metrics from step_data
+    tokens_per_second = step_data['tokens_per_second']
+    accepted_tokens = step_data['accepted_tokens']
+    step_time = step_data['step_time']
+    
+    # Primary reward: tokens per second (throughput)
+    base_reward = tokens_per_second
+    
+    # Bonus for accepting multiple tokens (efficiency)
+    efficiency_bonus = 0.1 * max(0, accepted_tokens - 1)
+    
+    # Penalty for very slow steps
+    time_penalty = max(0, step_time - 0.5) * 0.5
+    
+    reward = base_reward + efficiency_bonus - time_penalty
+    
+    return max(0.0, reward)  # Ensure non-negative rewards
