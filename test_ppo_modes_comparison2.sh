@@ -8,7 +8,7 @@ DATE=$(date '+%Y%m%d_%H%M')
 DATE='20250721_1215'
 MODEL_PATH="/home/guo/EAGLE_RL/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=1200
+QUESTION_END=6000
 
 # Create single unified log directory
 mkdir -p log/$DATE/{standard_ppo,max_entropy_ppo,baseline_results,evaluation}
@@ -25,8 +25,10 @@ echo "Default Mode: Max-Entropy PPO - use --disable-max-entropy for Standard PPO
 echo "" | tee -a log/$DATE/comparison.txt
 
 # Benchmark names for testing
-BENCHMARKS=("mt_bench" "humaneval" "gsm8k" "alpaca" "sum" "qa")
-BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natural Questions")
+# BENCHMARKS=("mt_bench" "humaneval" "gsm8k" "alpaca" "sum" "qa")
+# BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natural Questions")
+BENCHMARKS=("gsm8k" "mt_bench")
+BENCHMARK_NAMES=("GSM8K" "MT-Bench")
 
 echo "=== Phase 1: Training with MAX-ENTROPY PPO - Default Mode ===" | tee -a log/$DATE/comparison.txt
 echo "- High entropy coefficient 0.1" | tee -a log/$DATE/comparison.txt
@@ -49,9 +51,8 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --ppo-batch-size 32 \
     --ppo-epochs 4 \
     --ppo-clip-range 0.2 \
-    --ppo-gamma 0.9 \
-    --ppo-gae-lambda 0.8 \
-    --ppo-ent-coef 0.2 \
+    --ppo-gamma 0.95 \
+    --ppo-gae-lambda 0.9 \
     --ppo-vf-coef 0.5 \
     --online-policy-save-path "log/$DATE/max_entropy_ppo/max_entropy_ppo_policy.pth" \
     --temperature 0.0 \
@@ -65,46 +66,46 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --question-begin 0 --question-end $QUESTION_END \
     2>&1 | tee -a log/$DATE/max_entropy_ppo/training.log
 
-echo "" | tee -a log/$DATE/comparison.txt
-echo "=== Phase 2: Training with STANDARD PPO - Non-Default Mode ===" | tee -a log/$DATE/comparison.txt
-echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
-echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
-echo "- Standard exploration during training" | tee -a log/$DATE/comparison.txt
-echo "- Training dataset: eagle/data/rl_training/question.jsonl" | tee -a log/$DATE/comparison.txt
-echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
-echo "- NOTE: Using --disable-max-entropy to override default max-entropy mode" | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
+# echo "" | tee -a log/$DATE/comparison.txt
+# echo "=== Phase 2: Training with STANDARD PPO - Non-Default Mode ===" | tee -a log/$DATE/comparison.txt
+# echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
+# echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
+# echo "- Standard exploration during training" | tee -a log/$DATE/comparison.txt
+# echo "- Training dataset: eagle/data/rl_training/question.jsonl" | tee -a log/$DATE/comparison.txt
+# echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
+# echo "- NOTE: Using --disable-max-entropy to override default max-entropy mode" | tee -a log/$DATE/comparison.txt
+# echo "" | tee -a log/$DATE/comparison.txt
 
-PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-    --base-model-path "$BASE_MODEL_PATH" \
-    --ea-model-path "$MODEL_PATH" \
-    --model-id "eagle-standard-ppo-formal-$DATE" \
-    --bench-name "mt_bench" \
-    --use-online-rl \
-    --use-sb3-discrete-ppo \
-    --disable-max-entropy \
-    --online-lr 0.0003 \
-    --ppo-n-steps 64 \
-    --ppo-batch-size 32 \
-    --ppo-epochs 4 \
-    --ppo-clip-range 0.2 \
-    --ppo-gamma 0.99 \
-    --ppo-gae-lambda 0.95 \
-    --ppo-ent-coef 0.01 \
-    --ppo-vf-coef 0.5 \
-    --online-policy-save-path "log/$DATE/standard_ppo/standard_ppo_policy.pth" \
-    --temperature 0.0 \
-    --use_eagle3 \
-    --max-new-token 512 \
-    --num-choices 1 \
-    --checkpoint-dir "log/$DATE/standard_ppo/checkpoints" \
-    --checkpoint-freq 50 \
-    --online-repeat-factor 1 \
-    --question-file eagle/data/rl_training/question.jsonl \
-    --question-begin 0 --question-end $QUESTION_END \
-    2>&1 | tee -a log/$DATE/standard_ppo/training.log
+# PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+#     --base-model-path "$BASE_MODEL_PATH" \
+#     --ea-model-path "$MODEL_PATH" \
+#     --model-id "eagle-standard-ppo-formal-$DATE" \
+#     --bench-name "mt_bench" \
+#     --use-online-rl \
+#     --use-sb3-discrete-ppo \
+#     --disable-max-entropy \
+#     --online-lr 0.0003 \
+#     --ppo-n-steps 64 \
+#     --ppo-batch-size 32 \
+#     --ppo-epochs 4 \
+#     --ppo-clip-range 0.2 \
+#     --ppo-gamma 0.99 \
+#     --ppo-gae-lambda 0.95 \
+#     --ppo-ent-coef 0.01 \
+#     --ppo-vf-coef 0.5 \
+#     --online-policy-save-path "log/$DATE/standard_ppo/standard_ppo_policy.pth" \
+#     --temperature 0.0 \
+#     --use_eagle3 \
+#     --max-new-token 512 \
+#     --num-choices 1 \
+#     --checkpoint-dir "log/$DATE/standard_ppo/checkpoints" \
+#     --checkpoint-freq 50 \
+#     --online-repeat-factor 1 \
+#     --question-file eagle/data/rl_training/question.jsonl \
+#     --question-begin 0 --question-end $QUESTION_END \
+#     2>&1 | tee -a log/$DATE/standard_ppo/training.log
 
-echo "" | tee -a log/$DATE/comparison.txt
+# echo "" | tee -a log/$DATE/comparison.txt
 echo "=== Phase 3: Multi-Benchmark Evaluation ===" | tee -a log/$DATE/comparison.txt
 echo "Testing both trained policies on 5 benchmarks:" | tee -a log/$DATE/comparison.txt
 echo "1. MT-Bench - multi-turn conversation" | tee -a log/$DATE/comparison.txt
@@ -157,24 +158,24 @@ for i in "${!BENCHMARKS[@]}"; do
         2>&1 | tee -a log/$DATE/max_entropy_ppo/evaluation/${benchmark}_test.log
     
     # Standard PPO Evaluation (now tested second)
-    echo "Testing Standard PPO on $benchmark_name..." | tee -a log/$DATE/comparison.txt
-    python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-        --base-model-path "$BASE_MODEL_PATH" \
-        --ea-model-path "$MODEL_PATH" \
-        --model-id "eagle-standard-ppo-$benchmark-$DATE" \
-        --bench-name "$benchmark" \
-        --use-online-rl \
-        --use-sb3-discrete-ppo \
-        --disable-max-entropy \
-        --online-policy-path "log/$DATE/standard_ppo/standard_ppo_policy.pth" \
-        --online-inference-only \
-        --temperature 0.0 \
-        --use_eagle3 \
-        --max-new-token 512 \
-        --num-choices 1 \
-        --answer-file "log/$DATE/standard_ppo/evaluation/${benchmark}_results.jsonl" \
-        --no-wandb \
-        2>&1 | tee -a log/$DATE/standard_ppo/evaluation/${benchmark}_test.log
+    # echo "Testing Standard PPO on $benchmark_name..." | tee -a log/$DATE/comparison.txt
+    # python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+    #     --base-model-path "$BASE_MODEL_PATH" \
+    #     --ea-model-path "$MODEL_PATH" \
+    #     --model-id "eagle-standard-ppo-$benchmark-$DATE" \
+    #     --bench-name "$benchmark" \
+    #     --use-online-rl \
+    #     --use-sb3-discrete-ppo \
+    #     --disable-max-entropy \
+    #     --online-policy-path "log/$DATE/standard_ppo/standard_ppo_policy.pth" \
+    #     --online-inference-only \
+    #     --temperature 0.0 \
+    #     --use_eagle3 \
+    #     --max-new-token 512 \
+    #     --num-choices 1 \
+    #     --answer-file "log/$DATE/standard_ppo/evaluation/${benchmark}_results.jsonl" \
+    #     --no-wandb \
+    #     2>&1 | tee -a log/$DATE/standard_ppo/evaluation/${benchmark}_test.log
     
     echo "✅ Completed evaluation on $benchmark_name" | tee -a log/$DATE/comparison.txt
     echo "" | tee -a log/$DATE/comparison.txt
@@ -323,98 +324,4 @@ for i in "${!BENCHMARKS[@]}"; do
     echo "" >> log/$DATE/summary.txt
     echo "" | tee -a log/$DATE/comparison.txt
 done
-echo "" | tee -a log/$DATE/comparison.txt
-echo "=== Final Results Summary ===" | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
 
-echo "📁 Directory Structure:" | tee -a log/$DATE/comparison.txt
-echo "├── log/$DATE/" | tee -a log/$DATE/comparison.txt
-echo "│   ├── comparison.txt                   # Main execution log" | tee -a log/$DATE/comparison.txt
-echo "│   ├── summary.txt                      # Performance analysis summary" | tee -a log/$DATE/comparison.txt
-echo "│   ├── max_entropy_ppo/" | tee -a log/$DATE/comparison.txt
-echo "│   │   ├── training.log                 # Training process log" | tee -a log/$DATE/comparison.txt
-echo "│   │   ├── checkpoints/                 # Training checkpoints" | tee -a log/$DATE/comparison.txt
-echo "│   │   ├── max_entropy_ppo_policy.pth   # Trained policy" | tee -a log/$DATE/comparison.txt
-echo "│   │   └── evaluation/" | tee -a log/$DATE/comparison.txt
-echo "│   │       ├── mt_bench_results.jsonl   # MT-Bench results" | tee -a log/$DATE/comparison.txt
-echo "│   │       ├── humaneval_results.jsonl  # HumanEval results" | tee -a log/$DATE/comparison.txt
-echo "│   │       ├── gsm8k_results.jsonl      # GSM8K results" | tee -a log/$DATE/comparison.txt
-echo "│   │       ├── alpaca_results.jsonl     # Alpaca results" | tee -a log/$DATE/comparison.txt
-echo "│   │       └── sum_results.jsonl        # CNN/DailyMail results" | tee -a log/$DATE/comparison.txt
-echo "│   ├── standard_ppo/" | tee -a log/$DATE/comparison.txt
-echo "│   │   ├── training.log                 # Training process log" | tee -a log/$DATE/comparison.txt
-echo "│   │   ├── checkpoints/                 # Training checkpoints" | tee -a log/$DATE/comparison.txt
-echo "│   │   ├── standard_ppo_policy.pth      # Trained policy" | tee -a log/$DATE/comparison.txt
-echo "│   │   └── evaluation/" | tee -a log/$DATE/comparison.txt
-echo "│   │       ├── mt_bench_results.jsonl   # MT-Bench results" | tee -a log/$DATE/comparison.txt
-echo "│   │       ├── humaneval_results.jsonl  # HumanEval results" | tee -a log/$DATE/comparison.txt
-echo "│   │       ├── gsm8k_results.jsonl      # GSM8K results" | tee -a log/$DATE/comparison.txt
-echo "│   │       ├── alpaca_results.jsonl     # Alpaca results" | tee -a log/$DATE/comparison.txt
-echo "│   │       └── sum_results.jsonl        # CNN/DailyMail results" | tee -a log/$DATE/comparison.txt
-echo "│   └── baseline_results/" | tee -a log/$DATE/comparison.txt
-echo "│       ├── mt_bench_LLaMA3.1-8B_eagle3.jsonl     # EAGLE3 baseline" | tee -a log/$DATE/comparison.txt
-echo "│       ├── mt_bench_LLaMA3.1-8B_baseline.jsonl   # Standard baseline" | tee -a log/$DATE/comparison.txt
-echo "│       ├── humaneval_LLaMA3.1-8B_eagle3.jsonl    # EAGLE3 baseline" | tee -a log/$DATE/comparison.txt
-echo "│       ├── humaneval_LLaMA3.1-8B_baseline.jsonl  # Standard baseline" | tee -a log/$DATE/comparison.txt
-echo "│       └── ... (all benchmarks × 2 baselines)" | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
-
-echo "🎯 Key Differences to Observe:" | tee -a log/$DATE/comparison.txt
-echo "1. Parameter Diversity: Max-entropy should show more varied parameter combinations across all benchmarks" | tee -a log/$DATE/comparison.txt
-echo "2. Exploration: Max-entropy should explore more of the action space during training" | tee -a log/$DATE/comparison.txt
-echo "3. Consistency: Standard PPO should converge to more consistent parameter choices" | tee -a log/$DATE/comparison.txt
-echo "4. Benchmark Performance: Compare speedup and accuracy across different task types" | tee -a log/$DATE/comparison.txt
-echo "5. Wandb Logs: Compare entropy metrics and training curves between the two approaches" | tee -a log/$DATE/comparison.txt
-echo "6. Comprehensive Comparisons: 6 different speed comparisons for thorough analysis" | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
-
-echo "📊 Comprehensive Speed Analysis (6 comparisons per benchmark):" | tee -a log/$DATE/comparison.txt
-echo "1. Max-Entropy PPO vs EAGLE3 Baseline    (Our best method vs existing method)" | tee -a log/$DATE/comparison.txt
-echo "2. Max-Entropy PPO vs Standard Baseline  (Our best method vs raw LLaMA)" | tee -a log/$DATE/comparison.txt
-echo "3. EAGLE3 Baseline vs Standard Baseline  (Existing method vs raw LLaMA)" | tee -a log/$DATE/comparison.txt
-echo "4. Standard PPO vs EAGLE3 Baseline       (Our standard method vs existing method)" | tee -a log/$DATE/comparison.txt
-echo "5. Standard PPO vs Standard Baseline     (Our standard method vs raw LLaMA)" | tee -a log/$DATE/comparison.txt
-echo "6. Max-Entropy PPO vs Standard PPO       (Our methods comparison)" | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
-
-echo "📊 Analysis Files:" | tee -a log_comparison_$DATE.txt
-echo "- Main log: log_comparison_$DATE.txt" | tee -a log_comparison_$DATE.txt
-echo "- Performance summary: log_comparison_${DATE}_summary.txt" | tee -a log_comparison_$DATE.txt
-echo "- Wandb project: eagle-ppo-formal-comparison" | tee -a log_comparison_$DATE.txt
-echo "" | tee -a log_comparison_$DATE.txt
-
-echo "✅ Formal Training and Multi-Benchmark Evaluation Complete!" | tee -a log_comparison_$DATE.txt
-echo "📈 Both PPO policies have been trained and evaluated on all 5 benchmarks" | tee -a log_comparison_$DATE.txt
-echo "� Comprehensive speed analysis with 6 comparisons per benchmark" | tee -a log_comparison_$DATE.txt
-echo "�🔍 Check the summary file for detailed performance comparisons" | tee -a log_comparison_$DATE.txt
-
-echo ""
-echo "===================================================================="
-echo "🎉 EAGLE PPO Formal Training & Evaluation Complete!"
-echo "===================================================================="
-echo ""
-echo "📁 Main Results:"
-echo "   - Execution log:       log/$DATE/comparison.txt"
-echo "   - Performance summary: log/$DATE/summary.txt"
-echo ""
-echo "📂 Max-Entropy PPO Results: log/$DATE/max_entropy_ppo/"
-echo "📂 Standard PPO Results:    log/$DATE/standard_ppo/"
-echo "📂 Baseline Results:        log/$DATE/baseline_results/"
-echo ""
-echo "🔬 Benchmarks Evaluated:"
-echo "   ✓ MT-Bench (conversation)"
-echo "   ✓ HumanEval (coding)"
-echo "   ✓ GSM8K (math)"
-echo "   ✓ Alpaca (instructions)"
-echo "   ✓ CNN/DailyMail (summarization)"
-echo ""
-echo "📊 Comprehensive Analysis:"
-echo "   • 6 speed comparisons per benchmark"
-echo "   • Our methods vs EAGLE3 baseline"
-echo "   • Our methods vs standard LLaMA baseline"
-echo "   • EAGLE3 vs standard baseline"
-echo "   • Max-entropy vs Standard PPO"
-echo ""
-echo "📈 Analysis: Check log/$DATE/summary.txt for detailed performance comparison"
-echo "🌐 Wandb: eagle-ppo-formal-comparison project for training metrics"
-echo "===================================================================="
