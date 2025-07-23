@@ -586,6 +586,23 @@ def get_model_answers(
                     predicted_top_k = args.top_k
                     print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
 
+                # Create RL policy callback for dynamic parameter selection
+                def rl_policy_callback(context, step_info):
+                    """Callback function for RL policy parameter selection during generation"""
+                    if online_policy is not None:
+                        if args.online_inference_only:
+                            # Inference mode: use trained policy
+                            return online_policy.predict_parameters(context, training_mode=False)
+                        else:
+                            # Training mode: enable exploration and learning
+                            return online_policy.predict_parameters(context, training_mode=True)
+                    elif rl_policy is not None:
+                        # Offline RL policy
+                        return rl_policy.predict_parameters(context)
+                    else:
+                        # Fallback to defaults
+                        return args.total_token, args.depth, args.top_k
+
                 torch.cuda.synchronize()
                 start_time = time.time()
 
@@ -597,15 +614,29 @@ def get_model_answers(
                 while retry_count < max_retries and not success:
                     try:
                         with torch.no_grad():
-                            output_ids, new_token, idx = model.eagenerate(
-                                torch.as_tensor(input_ids).cuda(),
-                                temperature=temperature,
-                                log=True,
-                                is_llama3=True,
-                                total_tokens=predicted_total_tokens,
-                                depth=predicted_depth,
-                                tree_top_k=predicted_top_k,
-                            )
+                            if online_policy is not None or rl_policy is not None:
+                                # Use new RL-aware generation with dynamic parameter selection
+                                output_ids, new_token, idx = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    rl_policy_callback=rl_policy_callback,
+                                    total_tokens=predicted_total_tokens,  # Fallback defaults
+                                    depth=predicted_depth,
+                                    tree_top_k=predicted_top_k,
+                                )
+                            else:
+                                # Traditional generation with fixed parameters
+                                output_ids, new_token, idx = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    total_tokens=predicted_total_tokens,
+                                    depth=predicted_depth,
+                                    tree_top_k=predicted_top_k,
+                                )
                         success = True
                         
                     except RuntimeError as e:
