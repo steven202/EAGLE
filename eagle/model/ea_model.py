@@ -204,15 +204,7 @@ class EaModel(nn.Module):
             total_tokens=None,
             depth=None,
             tree_top_k=None,
-            rl_policy_callback=None,  # NEW: Callback for RL policy parameter selection
     ):
-        """
-        Enhanced EAGLE generation with optional RL-aware parameter selection.
-        
-        Args:
-            rl_policy_callback: Function(context, step_info) -> (total_tokens, depth, top_k)
-                If provided, will be called before each draft/verify step for dynamic parameter selection.
-        """
         if is_llama3:
             stop_token_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
 
@@ -221,44 +213,21 @@ class EaModel(nn.Module):
         original_depth = self.ea_layer.depth
         original_top_k = self.ea_layer.top_k
         
-        # Initialize generation state
-        generation_state = self._prepare_generation_state(
-            input_ids, temperature, top_p, top_k, max_length, is_llama3
-        )
-        
-        try:
-            if rl_policy_callback is not None:
-                # RL-aware generation with dynamic parameter selection
-                result = self._eagenerate_with_rl_policy(
-                    generation_state, max_new_tokens, max_length, log,
-                    rl_policy_callback, total_tokens, depth, tree_top_k
-                )
-            else:
-                # Traditional generation with fixed parameters
-                if total_tokens is not None:
-                    self.ea_layer.total_tokens = total_tokens - 1
-                if depth is not None:
-                    self.ea_layer.depth = depth
-                if tree_top_k is not None:
-                    self.ea_layer.top_k = tree_top_k
-                
-                result = self._eagenerate_traditional(
-                    generation_state, max_new_tokens, max_length, log
-                )
-        finally:
-            # Restore original parameters
-            self.ea_layer.total_tokens = original_total_tokens
-            self.ea_layer.depth = original_depth
-            self.ea_layer.top_k = original_top_k
-        
-        return result
-    
-    def _prepare_generation_state(self, input_ids, temperature, top_p, top_k, max_length, is_llama3):
-        """Prepare the generation state (KV cache, logits processor, etc.)"""
+        # Temporarily update parameters if provided
+        if total_tokens is not None:
+            self.ea_layer.total_tokens = total_tokens - 1  # Adjust as in line 163
+        if depth is not None:
+            self.ea_layer.depth = depth
+        if tree_top_k is not None:
+            self.ea_layer.top_k = tree_top_k
+
+
         if temperature > 1e-5:
             logits_processor = prepare_logits_processor(temperature=temperature, top_p=top_p, top_k=top_k)
         else:
             logits_processor = None
+        # assert input_ids.shape[0] == 1, "Only support batch size 1 for now!!"
+        # Avoid modifying the input_ids in-place
 
         padding = (torch.zeros(1, 1, dtype=torch.long) - 1).to(input_ids.device)
         input_ids = input_ids.clone()
@@ -276,165 +245,62 @@ class EaModel(nn.Module):
                 past_key_values,
                 past_key_values_data,
                 current_length_data,
-            ) = initialize_past_key_values(self.base_model, max_length=max_length)
+            ) = initialize_past_key_values(self.base_model,max_length=max_length)
             self.past_key_values = past_key_values
             self.past_key_values_data = past_key_values_data
             self.current_length_data = current_length_data
 
         input_len = input_ids.shape[1]
         reset_tree_mode(self)
-        
-        return {
-            'input_ids': input_ids,
-            'input_len': input_len,
-            'logits_processor': logits_processor,
-            'padding': padding,
-            'past_key_values': past_key_values,
-            'past_key_values_data': past_key_values_data,
-            'current_length_data': current_length_data,
-            'is_llama3': is_llama3,
-            'stop_token_id': self.tokenizer.convert_tokens_to_ids("<|eot_id|>") if is_llama3 else None,
-        }
-    
-    def _eagenerate_with_rl_policy(self, state, max_new_tokens, max_length, log, rl_policy_callback, 
-                                   default_total_tokens, default_depth, default_tree_top_k):
-        """RL-aware generation with dynamic parameter selection per draft/verify step"""
-        input_ids = state['input_ids']
-        input_len = state['input_len']
-        new_token = 0
-        step_count = 0
-        max_length = max_length - 64  # Reserve space for parameter changes
-        
-        # Track performance for RL feedback
-        step_performance = []
-        
-        while step_count < max_length and new_token < max_new_tokens:
-            # Get current context for policy decision
-            current_context = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
-            
-            # Step information for policy
-            step_info = {
-                'step_count': step_count,
-                'new_tokens_generated': new_token,
-                'current_length': input_ids.shape[1],
-                'input_length': input_len,
-                'recent_performance': step_performance[-5:] if step_performance else []
-            }
-            
-            # Get parameters from RL policy
-            try:
-                policy_total_tokens, policy_depth, policy_top_k = rl_policy_callback(current_context, step_info)
-                
-                # Validate parameters
-                if policy_total_tokens <= 0 or policy_depth <= 0 or policy_top_k <= 0:
-                    raise ValueError("Invalid policy parameters")
-                    
-            except Exception as e:
-                # Fallback to default parameters if policy fails
-                print(f"⚠️ RL policy failed: {e}, using default parameters")
-                policy_total_tokens = default_total_tokens or (self.ea_layer.total_tokens + 1)
-                policy_depth = default_depth or self.ea_layer.depth
-                policy_top_k = default_tree_top_k or self.ea_layer.top_k
-            
-            # Perform single draft+verify step with selected parameters
-            step_start_time = time.time()
-            step_result = self._draft_and_verify_step(
-                state, policy_total_tokens, policy_depth, policy_top_k
-            )
-            step_end_time = time.time()
-            
-            if step_result is None:
-                # Generation finished (EOS, etc.)
-                break
-                
-            # Update state with step results
-            input_ids = step_result['input_ids']
-            new_token = step_result['new_tokens']
-            accepted_tokens = step_result['accepted_tokens']
-            
-            # Calculate step performance for RL feedback
-            step_time = step_end_time - step_start_time
-            if accepted_tokens > 0 and step_time > 0:
-                tokens_per_second = accepted_tokens / step_time
-                step_performance.append({
-                    'step': step_count,
-                    'tokens_per_second': tokens_per_second,
-                    'accepted_tokens': accepted_tokens,
-                    'parameters': (policy_total_tokens, policy_depth, policy_top_k),
-                    'step_time': step_time
-                })
-            
-            step_count += 1
-            
-            # Check termination conditions
-            if state['is_llama3'] and state['stop_token_id'] in input_ids[0, input_len:].tolist():
-                break
-            if self.tokenizer.eos_token_id in input_ids[0, input_len:].tolist():
-                break
-            if input_ids.shape[1] > max_length:
-                break
-        
-        # Update final state
-        state['input_ids'] = input_ids
-        
-        if not log:
-            return input_ids
-        else:
-            return input_ids, new_token, step_count
-    
-    def _eagenerate_traditional(self, state, max_new_tokens, max_length, log):
-        """Traditional generation with fixed parameters (original implementation)"""
-        input_ids = state['input_ids']
-        input_len = state['input_len']
-        
-        # Initialize tree with current parameters (traditional approach)
+        # prefill
         draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
-            input_ids, self, state['past_key_values'], state['logits_processor']
+            input_ids, self, past_key_values, logits_processor, total_tokens, depth, tree_top_k
         )
         new_token = 0
         max_length = max_length - self.ea_layer.total_tokens - 10
-        
         for idx in range(max_length):
+            # with Timer("all"):
             self.base_model.model.tree_mask = tree_mask
+
             draft_tokens = draft_tokens.to(input_ids.device)
-            
             # Target model forward, get logits
             logits, hidden_state_new, outputs = tree_decoding(
                 self,
                 draft_tokens,
-                state['past_key_values'],
+                past_key_values,
                 tree_position_ids,
                 input_ids,
                 retrieve_indices,
             )
-            
-            draft_tokens = torch.cat((draft_tokens, state['padding']), dim=1)
+            # retrieve_indices=tree_buffers["retrieve_indices"]
+            # logits = logits[0, retrieve_indices]
+            draft_tokens = torch.cat((draft_tokens, padding), dim=1)
             candidates = draft_tokens[0, retrieve_indices]
-            
             # verification
             best_candidate, accept_length, sample_p = evaluate_posterior(
-                logits, candidates, state['logits_processor']
+                logits, candidates, logits_processor
             )
-            
-            # Update inputs
+            # print(accept_length)
+            # Adjusting the input sequence, draft model forward
             input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
                 input_ids,
                 candidates,
                 best_candidate,
                 accept_length,
                 retrieve_indices,
-                state['logits_processor'],
+                logits_processor,
                 new_token,
-                state['past_key_values_data'],
-                state['current_length_data'],
+                past_key_values_data,
+                current_length_data,
                 self,
                 hidden_state_new,
                 sample_p
             )
 
-            # Check termination conditions
-            if state['is_llama3'] and state['stop_token_id'] in input_ids[0, input_len:].tolist():
-                break
+            if is_llama3:
+                if stop_token_id in input_ids[0, input_len:].tolist():
+                    break
+
             if self.tokenizer.eos_token_id in input_ids[0, input_len:].tolist():
                 break
             if new_token > max_new_tokens:
@@ -442,90 +308,15 @@ class EaModel(nn.Module):
             if input_ids.shape[1] > max_length:
                 break
         
+        # Restore original parameters
+        self.ea_layer.total_tokens = original_total_tokens
+        self.ea_layer.depth = original_depth
+        self.ea_layer.top_k = original_top_k
+        
         if not log:
             return input_ids
         else:
             return input_ids, new_token, idx
-    
-    def _draft_and_verify_step(self, state, total_tokens, depth, top_k):
-        """Perform a single draft+verify step with given parameters"""
-        try:
-            # Temporarily update model parameters
-            original_total_tokens = self.ea_layer.total_tokens
-            original_depth = self.ea_layer.depth
-            original_top_k = self.ea_layer.top_k
-            
-            self.ea_layer.total_tokens = total_tokens - 1  # Adjust as needed
-            self.ea_layer.depth = depth
-            self.ea_layer.top_k = top_k
-            
-            # Re-initialize tree with new parameters
-            draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
-                state['input_ids'], self, state['past_key_values'], state['logits_processor'], 
-                total_tokens, depth, top_k
-            )
-            
-            # Single draft+verify step
-            self.base_model.model.tree_mask = tree_mask
-            draft_tokens = draft_tokens.to(state['input_ids'].device)
-            
-            # Target model forward, get logits
-            logits, hidden_state_new, outputs = tree_decoding(
-                self,
-                draft_tokens,
-                state['past_key_values'],
-                tree_position_ids,
-                state['input_ids'],
-                retrieve_indices,
-            )
-            
-            draft_tokens = torch.cat((draft_tokens, state['padding']), dim=1)
-            candidates = draft_tokens[0, retrieve_indices]
-            
-            # verification
-            best_candidate, accept_length, sample_p = evaluate_posterior(
-                logits, candidates, state['logits_processor']
-            )
-            
-            # Update inputs
-            input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
-                state['input_ids'],
-                candidates,
-                best_candidate,
-                accept_length,
-                retrieve_indices,
-                state['logits_processor'],
-                state.get('new_tokens_so_far', 0),
-                state['past_key_values_data'],
-                state['current_length_data'],
-                self,
-                hidden_state_new,
-                sample_p
-            )
-            
-            # Restore original parameters
-            self.ea_layer.total_tokens = original_total_tokens
-            self.ea_layer.depth = original_depth
-            self.ea_layer.top_k = original_top_k
-            
-            # Update state
-            state['input_ids'] = input_ids
-            
-            return {
-                'input_ids': input_ids,
-                'new_tokens': new_token,
-                'accepted_tokens': accept_length,
-                'draft_tokens': draft_tokens,
-                'retrieve_indices': retrieve_indices,
-                'tree_mask': tree_mask,
-                'tree_position_ids': tree_position_ids,
-                'hidden_state': hidden_state,
-                'sample_token': sample_token
-            }
-            
-        except Exception as e:
-            print(f"⚠️ Draft+verify step failed with params ({total_tokens}, {depth}, {top_k}): {e}")
-            return None
 
     @torch.no_grad()
     def naivegenerate(

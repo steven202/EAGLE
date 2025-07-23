@@ -79,59 +79,8 @@ class EagleParameterEnv(gym.Env):
     
     def _is_valid_combination(self, total_tokens, depth, top_k):
         """Check if parameter combination satisfies constraints"""
-        # Original constraint: total_tokens <= top_k^(depth-1)
         max_tokens_constraint = top_k ** (depth - 1)
         basic_constraint = total_tokens <= max_tokens_constraint
-        
-        # Additional KV cache constraint: approximate tree size should not exceed safe limits
-        # Empirical observation: tree expansion can be roughly estimated as total_tokens * depth
-        # But actual expansion is much larger due to tree branching
-        # EXTREMELY Conservative estimate to avoid KV cache overflow (2048 hard limit)
-        # tree_size_estimate = total_tokens * depth
-        # kv_cache_safe_limit = 400  # Extremely conservative limit (reduced from 800)
-        # kv_constraint = tree_size_estimate <= kv_cache_safe_limit
-        
-        # # Extra conservative constraint for any high-complexity combinations
-        # if depth >= 7:
-        #     # For depth 7+: extremely conservative
-        #     ultra_conservative_limit = 400
-        #     ultra_conservative_constraint = tree_size_estimate <= ultra_conservative_limit
-        # elif depth >= 6 and top_k >= 16:
-        #     # For depth 6+ with high top_k: very conservative
-        #     conservative_limit = 500
-        #     ultra_conservative_constraint = tree_size_estimate <= conservative_limit
-        # else:
-        #     ultra_conservative_constraint = True
-            
-        # # Empirical constraint based on observed failures:
-        # # tt=96, d=8, k=20 → actual tree ~2798 (fails), simple estimate was 768
-        # # tt=32, d=8, k=20 → actual tree ~2798 (fails), simple estimate was 256
-        # # The actual tree expansion is roughly 10-12x our simple estimate for depth=8!
-        # if depth >= 8:
-        #     # For depth 8: extremely conservative (observed 10-12x expansion)
-        #     empirical_expansion_factor = 12
-        # elif depth >= 7:
-        #     # For depth 7: very conservative (assume 8x expansion)
-        #     empirical_expansion_factor = 8
-        # elif depth >= 6:
-        #     # For depth 6: conservative (assume 5x expansion)
-        #     empirical_expansion_factor = 5
-        # else:
-        #     # For depth ≤ 5: moderate expansion
-        #     empirical_expansion_factor = 3
-        
-        # estimated_actual_tree_size = tree_size_estimate * empirical_expansion_factor
-        # empirical_constraint = estimated_actual_tree_size <= 1800  # Even more conservative margin
-        # # All constraints must pass
-        # is_valid = basic_constraint and kv_constraint and ultra_conservative_constraint and empirical_constraint
-        
-        # if not is_valid and hasattr(self, '_debug_constraint'):
-        #     print(f"❌ Invalid combination: tt={total_tokens}, d={depth}, k={top_k}")
-        #     print(f"   Basic: {basic_constraint} (tt <= k^(d-1) = {max_tokens_constraint})")
-        #     print(f"   KV cache: {kv_constraint} (tree_size={tree_size_estimate} <= {kv_cache_safe_limit})")
-        #     print(f"   Ultra Conservative: {ultra_conservative_constraint}")
-        #     print(f"   Empirical: {empirical_constraint} (estimated_actual={estimated_actual_tree_size} <= 2000)")
-            
         return basic_constraint
     
     def _action_to_params(self, action):
