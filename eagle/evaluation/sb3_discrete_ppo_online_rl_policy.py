@@ -538,7 +538,7 @@ class SB3DiscretePPOOnlineTreePolicy:
                 "step": self.step_count,
                 "questions_processed": self.questions_processed,
                 "mode": "Max-Entropy PPO" if self.enable_max_entropy else "Standard PPO",
-                "exploration_mode": "MAX-ENTROPY" if self.max_entropy_inference and not training_mode else "DETERMINISTIC" if not self.enable_max_entropy else "STOCHASTIC",
+                # "exploration_mode": "MAX-ENTROPY" if self.max_entropy_inference and not training_mode else "DETERMINISTIC" if not self.enable_max_entropy else "STOCHASTIC",
                 "tokens_per_second": self.tokens_per_second_history[-1] if self.tokens_per_second_history else 0.0,
                 "entropy": self.entropy_history[-1] if self.entropy_history else 0.0,
                 "update_count": self.update_count,
