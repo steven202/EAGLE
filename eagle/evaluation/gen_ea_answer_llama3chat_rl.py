@@ -42,8 +42,6 @@ try:
     from .ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
     from .discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
     from .sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
-    # OPTIMIZED POLICIES
-    from .optimized_sb3_discrete_ppo_online_rl_policy import OptimizedSB3DiscretePPOOnlineTreePolicy, calculate_optimized_sb3_discrete_ppo_reward
     from .optimized_online_rl_policy import OptimizedOnlineTreePolicy, calculate_optimized_online_reward
 except:
     from eagle.model.ea_model import EaModel
@@ -54,9 +52,6 @@ except:
     from eagle.evaluation.continuous_online_rl_policy import ContinuousOnlineTreePolicy, calculate_continuous_online_reward
     from eagle.evaluation.ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
     from eagle.evaluation.discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
-    from eagle.evaluation.sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
-    # OPTIMIZED POLICIES
-    from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy import OptimizedSB3DiscretePPOOnlineTreePolicy, calculate_optimized_sb3_discrete_ppo_reward
     from eagle.evaluation.optimized_online_rl_policy import OptimizedOnlineTreePolicy, calculate_optimized_online_reward
 
 
@@ -179,62 +174,23 @@ def get_model_answers(
         
         wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
         
-        # Choose between PPO, continuous, and discrete action space
-        if getattr(args, 'use_optimized_sb3_discrete_ppo', False):
-            # OPTIMIZED VERSION: EAGLE-3 features + action caching + SB3 PPO
+        # Choose between PPO, continuous, discrete action space, and optimized policies
+        if getattr(args, 'use_optimized_rl', False):
+            # NEW: Use optimized RL with layer feature concatenation and reduced action frequency
+            action_generation_freq = getattr(args, 'action_generation_freq', 10)
             enable_max_entropy = getattr(args, 'enable_max_entropy', True)
-            max_entropy_inference_enabled = getattr(args, 'max_entropy_inference', True) and enable_max_entropy
-            action_cache_steps = getattr(args, 'action_cache_steps', 10)
-            hidden_size = getattr(args, 'hidden_size', 4096)
             
-            mode_description = "OPTIMIZED SB3 Max-Entropy Discrete PPO" if enable_max_entropy else "OPTIMIZED SB3 Standard Discrete PPO"
-            print(f"🚀⚡ Using {mode_description} with EAGLE-3 features + action caching (every {action_cache_steps} steps)")
-            
-            online_policy = OptimizedSB3DiscretePPOOnlineTreePolicy(
-                learning_rate=args.online_lr,
-                n_steps=getattr(args, 'ppo_n_steps', 64),
-                batch_size=getattr(args, 'ppo_batch_size', 32),
-                n_epochs=getattr(args, 'ppo_epochs', 4),
-                gamma=getattr(args, 'ppo_gamma', 0.95),
-                gae_lambda=getattr(args, 'ppo_gae_lambda', 0.9),
-                clip_range=getattr(args, 'ppo_clip_range', 0.2),
-                ent_coef=0.01,  # Standard entropy coefficient (will be overridden if max-entropy enabled)
-                # Max-entropy specific parameters
-                enable_max_entropy=enable_max_entropy,
-                max_entropy_ent_coef=getattr(args, 'max_entropy_ent_coef', 0.1),
-                inference_temperature=getattr(args, 'inference_temperature', 1.5),
-                max_entropy_inference=max_entropy_inference_enabled,
-                # OPTIMIZATION parameters
-                action_cache_steps=action_cache_steps,
-                action_cache_enabled=getattr(args, 'action_cache_enabled', True),
-                hidden_size=hidden_size,
-                use_eagle3_features=getattr(args, 'use_eagle3_features', True),
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
-                wandb_project=args.wandb_project,
-                wandb_run_name=wandb_run_name,
-                checkpoint_dir=checkpoint_dir,
-                checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
-                max_checkpoints=getattr(args, 'max_checkpoints', 3)
-            )
-            reward_function = calculate_optimized_sb3_discrete_ppo_reward
-        elif getattr(args, 'use_optimized_dqn', False):
-            # OPTIMIZED VERSION: EAGLE-3 features + action caching + DQN
-            action_cache_steps = getattr(args, 'action_cache_steps', 10)
-            hidden_size = getattr(args, 'hidden_size', 4096)
-            
-            print(f"🚀⚡ Using OPTIMIZED DQN with EAGLE-3 features + action caching (every {action_cache_steps} steps)")
+            print(f"🚀⚡ Using Optimized Online RL Policy:")
+            print(f"   - Layer feature concatenation (no SBERT)")
+            print(f"   - Action generation frequency: every {action_generation_freq} steps")
+            print(f"   - Max-entropy mode: {'enabled' if enable_max_entropy else 'disabled'}")
             
             online_policy = OptimizedOnlineTreePolicy(
                 learning_rate=args.online_lr,
-                epsilon_start=args.online_epsilon_start,
-                epsilon_end=args.online_epsilon_end,
-                memory_size=args.online_memory_size,
-                batch_size=args.online_batch_size,
-                # OPTIMIZATION parameters
-                action_cache_steps=action_cache_steps,
-                action_cache_enabled=getattr(args, 'action_cache_enabled', True),
-                hidden_size=hidden_size,
-                use_eagle3_features=getattr(args, 'use_eagle3_features', True),
+                action_generation_freq=action_generation_freq,
+                inference_temperature=getattr(args, 'inference_temperature', 1.5),
+                max_entropy_inference=enable_max_entropy,
+                entropy_weight=getattr(args, 'entropy_weight', 0.1),
                 use_wandb=(not args.online_inference_only and not args.no_wandb),
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
@@ -467,20 +423,10 @@ def get_model_answers(
             full_context = " ".join([msg["content"] for msg in messages])
             
             if online_policy is not None:
-                # Check if this is an optimized policy
-                is_optimized_policy = hasattr(online_policy, 'use_eagle3_features') and online_policy.use_eagle3_features
-                
-                if is_optimized_policy:
-                    # Optimized RL: predict parameters using EAGLE-3 features (inference mode during warmup)
-                    # Note: hidden_states not available during warmup, so pass None
-                    predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                        context=full_context, hidden_states=None, training_mode=False  # No exploration during warmup
-                    )
-                else:
-                    # Traditional Online RL: predict parameters (inference mode during warmup)
-                    predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                        full_context, training_mode=False  # No exploration during warmup
-                    )
+                # Online RL: predict parameters (inference mode during warmup)
+                predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                    full_context, training_mode=False  # No exploration during warmup
+                )
                 print(f"Online RL predicted params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
             elif rl_policy is not None:
                 # Offline RL policy
@@ -684,37 +630,19 @@ def get_model_answers(
                 full_context = " ".join([msg["content"] for msg in messages])
                 
                 if online_policy is not None:
-                    # Check if this is an optimized policy
-                    is_optimized_policy = hasattr(online_policy, 'use_eagle3_features') and online_policy.use_eagle3_features
-                    
-                    if is_optimized_policy:
-                        # Optimized RL: predict parameters with appropriate training mode
-                        if args.online_inference_only:
-                            # Inference-only mode: no training, no exploration
-                            predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                                context=full_context, hidden_states=None, training_mode=False
-                            )
-                            # print(f"Optimized Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
-                        else:
-                            # Training mode: enable exploration and learning
-                            predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                                context=full_context, hidden_states=None, training_mode=True
-                            )
-                            print(f"Optimized Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                    # Online RL: predict parameters with appropriate training mode
+                    if args.online_inference_only:
+                        # Inference-only mode: no training, no exploration
+                        predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                            full_context, training_mode=False
+                        )
+                        # print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                     else:
-                        # Traditional Online RL: predict parameters with appropriate training mode
-                        if args.online_inference_only:
-                            # Inference-only mode: no training, no exploration
-                            predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                                full_context, training_mode=False
-                            )
-                            # print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
-                        else:
-                            # Training mode: enable exploration and learning
-                            predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                                full_context, training_mode=True
-                            )
-                            print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                        # Training mode: enable exploration and learning
+                        predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                            full_context, training_mode=True
+                        )
+                        print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                 elif rl_policy is not None:
                     # Offline RL policy
                     predicted_total_tokens, predicted_depth, predicted_top_k = rl_policy.predict_parameters(full_context)
@@ -1292,6 +1220,26 @@ if __name__ == "__main__":
         action="store_true",
         help="Use Stable Baselines 3 Discrete PPO for optimized and robust learning"
     )
+    
+    # Optimized RL arguments
+    parser.add_argument(
+        "--use-optimized-rl",
+        action="store_true",
+        help="Use optimized RL policy with layer feature concatenation and reduced action frequency"
+    )
+    parser.add_argument(
+        "--action-generation-freq",
+        type=int,
+        default=10,
+        help="Generate new action every N steps (default: 10). Higher values = faster inference, lower values = more responsive"
+    )
+    parser.add_argument(
+        "--entropy-weight",
+        type=float,
+        default=0.1,
+        help="Entropy regularization weight for max-entropy RL (higher = more exploration)"
+    )
+    
     parser.add_argument(
         "--ppo-epochs",
         type=int,
@@ -1423,7 +1371,10 @@ if __name__ == "__main__":
 
     # Print helpful information about RL vs fixed parameters
     if args.use_online_rl:
-        if getattr(args, 'use_sb3_discrete_ppo', False):
+        if getattr(args, 'use_optimized_rl', False):
+            action_generation_freq = getattr(args, 'action_generation_freq', 10)
+            action_space_type = f"Optimized RL (Layer Features + Every {action_generation_freq} Steps)"
+        elif getattr(args, 'use_sb3_discrete_ppo', False):
             enable_max_entropy = getattr(args, 'enable_max_entropy', True)  # Default: True (max-entropy enabled)
             mode_name = "SB3 Max-Entropy Discrete PPO" if enable_max_entropy else "SB3 Standard Discrete PPO"
             action_space_type = f"{mode_name} ({'Diverse Exploration' if enable_max_entropy else 'Standard Exploration'})"
@@ -1449,7 +1400,16 @@ if __name__ == "__main__":
         
         print(f"   Learning rate: {args.online_lr}")
         
-        if getattr(args, 'use_sb3_discrete_ppo', False):
+        if getattr(args, 'use_optimized_rl', False):
+            action_generation_freq = getattr(args, 'action_generation_freq', 10)
+            entropy_weight = getattr(args, 'entropy_weight', 0.1)
+            print(f"🚀⚡ Optimized RL Accelerations:")
+            print(f"   State Representation: EAGLE-3 layer feature concatenation (no SBERT)")
+            print(f"   Action Generation: Every {action_generation_freq} steps (vs every step)")
+            print(f"   Inference Speed: ~{action_generation_freq}x faster action prediction")
+            print(f"   State Dimension: 3 * hidden_size (typically ~12,288 for Llama)")
+            print(f"   Entropy weight: {entropy_weight} (for exploration)")
+        elif getattr(args, 'use_sb3_discrete_ppo', False):
             enable_max_entropy = getattr(args, 'enable_max_entropy', True)  # Default: True (max-entropy enabled)
             print(f"   SB3 Mode: {'Max-Entropy' if enable_max_entropy else 'Standard'} PPO")
             print(f"   SB3 PPO n_steps: {getattr(args, 'ppo_n_steps', 64)}")

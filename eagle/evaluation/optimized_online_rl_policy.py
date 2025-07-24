@@ -1,17 +1,18 @@
 """
-Optimized DQN Online RL Policy for Real-time EAGLE Parameter Optimization
-Optimizations:
-1. Layer Feature Concatenation (EAGLE-3 features instead of SBERT)
-2. Action Generation Frequency optimization (caching actions for N steps)
+Optimized RL Policy for EAGLE with Layer Feature Concatenation and Reduced Action Frequency
+Implements two key optimizations for faster RL inference:
+1. Uses EAGLE-3's 3k-dimensional concatenated layer features as state instead of SBERT
+2. Generates actions every N steps instead of every step (configurable)
 """
 
 import numpy as np
 import torch
 import torch.nn as nn
-import os
-import json
+import torch.optim as optim
 from collections import deque
 import random
+import json
+import os
 
 try:
     import wandb
@@ -20,60 +21,54 @@ except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: wandb not available. Install with: pip install wandb")
 
+
 class OptimizedOnlineTreePolicy:
-    """Optimized Max-Entropy Online RL Policy that learns tree parameters with EAGLE-3 features and action caching
-    
-    Optimizations:
-    1. Uses EAGLE-3 layer features instead of SBERT text embeddings
-    2. Action caching to reduce computation frequency (generate action every N steps)
+    """
+    Optimized Online RL Policy for EAGLE with:
+    1. Layer feature concatenation as state (no SBERT)
+    2. Configurable action generation frequency
     """
     
     def __init__(self, 
-                 learning_rate=3e-4,
+                 learning_rate=0.001,
                  epsilon_start=0.9,
                  epsilon_end=0.05,
                  epsilon_decay=0.995,
-                 memory_size=1000,
+                 memory_size=10000,
                  batch_size=32,
-                 target_update_freq=100,
-                 # Max-entropy RL parameters
+                 target_update_freq=10,
                  temperature=1.0,
                  entropy_weight=0.1,
                  inference_temperature=1.5,
                  max_entropy_inference=True,
-                 # OPTIMIZATION 2: Action caching parameters
-                 action_cache_steps=10,        # Generate action every N steps
-                 action_cache_enabled=True,    # Enable action caching
-                 # OPTIMIZATION 1: EAGLE-3 feature parameters
-                 hidden_size=4096,             # Model hidden size (k)
-                 use_eagle3_features=True,     # Use EAGLE-3 features instead of SBERT
+                 action_generation_freq=10,  # NEW: Generate action every N steps
                  use_wandb=True,
-                 wandb_project="eagle-optimized-online-rl",
+                 wandb_project="eagle-optimized-rl",
                  wandb_run_name=None,
-                 checkpoint_dir="optimized_dqn_checkpoints",
+                 checkpoint_dir="optimized_rl_checkpoints",
                  checkpoint_freq=100,
                  max_checkpoints=3):
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # OPTIMIZATION 1: EAGLE-3 features configuration
-        self.use_eagle3_features = use_eagle3_features
-        self.hidden_size = hidden_size
-        self.feature_dim = hidden_size  # After FC layer reduction: 3k -> k
-        
-        # OPTIMIZATION 2: Action caching configuration
-        self.action_cache_enabled = action_cache_enabled
-        self.action_cache_steps = action_cache_steps
-        self.cached_action = None
-        self.cached_params = None
-        self.cache_step_counter = 0
-        self.cache_hidden_states = None
-        
-        # Max-entropy RL configuration
+        # Learning parameters
+        self.learning_rate = learning_rate
+        self.epsilon = epsilon_start
+        self.epsilon_end = epsilon_end
+        self.epsilon_decay = epsilon_decay
+        self.memory_size = memory_size
+        self.batch_size = batch_size
+        self.target_update_freq = target_update_freq
         self.temperature = temperature
         self.entropy_weight = entropy_weight
         self.inference_temperature = inference_temperature
         self.max_entropy_inference = max_entropy_inference
+        
+        # NEW: Action generation frequency optimization
+        self.action_generation_freq = action_generation_freq
+        self.step_counter = 0
+        self.cached_action = None  # Cache last predicted action
+        self.cached_params = None  # Cache last predicted parameters
         
         # Resume mechanism configuration
         self.checkpoint_dir = checkpoint_dir
@@ -88,27 +83,36 @@ class OptimizedOnlineTreePolicy:
         # Initialize wandb logging
         self.use_wandb = use_wandb and WANDB_AVAILABLE
         if self.use_wandb:
-            wandb_run_name = wandb_run_name or f"optimized-eagle-dqn-{int(torch.randint(0, 10000, (1,)).item())}"
-            wandb.init(project=wandb_project, name=wandb_run_name, reinit=True)
-            wandb.config.update({
-                "learning_rate": learning_rate,
-                "epsilon_start": epsilon_start,
-                "epsilon_end": epsilon_end,
-                "epsilon_decay": epsilon_decay,
-                "temperature": temperature,
-                "entropy_weight": entropy_weight,
-                "action_cache_steps": action_cache_steps,
-                "action_cache_enabled": action_cache_enabled,
-                "use_eagle3_features": use_eagle3_features,
-                "hidden_size": hidden_size
-            })
+            if not wandb.run:
+                wandb.init(
+                    project=wandb_project,
+                    name=wandb_run_name,
+                    config={
+                        "learning_rate": learning_rate,
+                        "epsilon_start": epsilon_start,
+                        "epsilon_end": epsilon_end,
+                        "epsilon_decay": epsilon_decay,
+                        "memory_size": memory_size,
+                        "batch_size": batch_size,
+                        "target_update_freq": target_update_freq,
+                        "temperature": temperature,
+                        "entropy_weight": entropy_weight,
+                        "inference_temperature": inference_temperature,
+                        "max_entropy_inference": max_entropy_inference,
+                        "action_generation_freq": action_generation_freq,
+                        "device": str(self.device)
+                    }
+                )
+                print(f"🔗 Wandb logging initialized: {wandb.run.get_url()}")
+            else:
+                print(f"🔗 Using existing wandb run: {wandb.run.get_url()}")
         else:
-            print("Warning: Wandb logging disabled")
+            print("📊 Wandb logging disabled")
         
-        # Expanded parameter bins for more granularity - best combination ranges
+        # Parameter bins for discrete actions
+        self.total_tokens_bins = [32, 48, 64, 80, 96, 128]
         self.top_k_bins = [8, 12, 16, 20, 32]
         self.depth_bins = [3, 4, 5, 6, 7, 8]
-        self.total_tokens_bins = [32, 48, 64, 80, 96, 128]
         
         # Action space dimensions
         self.n_total_tokens = len(self.total_tokens_bins)
@@ -116,149 +120,142 @@ class OptimizedOnlineTreePolicy:
         self.n_top_k = len(self.top_k_bins)
         self.total_actions = self.n_total_tokens * self.n_depth * self.n_top_k
         
-        # Precompute valid actions to avoid runtime constraint violations
+        # Precompute valid actions
         self.valid_actions = self._precompute_valid_actions()
         print(f"Action space: {self.total_actions} total, {len(self.valid_actions)} valid")
         
-        # DQN parameters
-        self.learning_rate = learning_rate
-        self.epsilon = epsilon_start
-        self.epsilon_end = epsilon_end
-        self.epsilon_decay = epsilon_decay
-        self.memory_size = memory_size
-        self.batch_size = batch_size
-        self.target_update_freq = target_update_freq
-        
-        # Networks using EAGLE-3 features
-        self.q_network = self._build_network().to(self.device)
-        self.target_network = self._build_network().to(self.device)
-        self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=learning_rate)
-        
-        # Update target network
-        self.target_network.load_state_dict(self.q_network.state_dict())
+        # NEW: Use concatenated layer features as state instead of SBERT
+        # EAGLE-3 concatenates 3 layers: layer 2, middle layer, last-3 layer
+        # Each layer has hidden_size dimensions, so total is 3 * hidden_size
+        # We'll detect the actual dimension dynamically from the first input
+        self.state_dim = None  # Will be set dynamically (typically 3 * 4096 = 12288 for Llama)
+        self.q_network = None  # Will be built after first state
+        self.target_network = None
+        self.optimizer = None
         
         # Experience replay
         self.memory = deque(maxlen=memory_size)
+        
+        # Training counters
         self.step_count = 0
         
-        # Training state
-        self.last_state = None
-        self.last_action = None
-        self.last_params = None
-        self.last_exploration_mode = None
-        self.last_entropy = 0.0
-        
         # Performance tracking
-        self.reward_history = deque(maxlen=1000)
-        self.loss_history = deque(maxlen=1000)
-        self.entropy_history = deque(maxlen=1000)
+        self.reward_history = []
+        self.parameter_history = []
+        self.loss_history = []
+        self.tokens_per_second_history = []
+        self.entropy_history = []
+        self.action_diversity_history = []
         
-        print(f"OptimizedOnlineTreePolicy initialized:")
-        print(f"  - Valid actions: {len(self.valid_actions)}/{self.total_actions}")
-        print(f"  - OPTIMIZATION 1 - EAGLE-3 features: {'enabled' if use_eagle3_features else 'disabled'}")
-        print(f"  - Feature dimension: {self.feature_dim}")
-        print(f"  - OPTIMIZATION 2 - Action caching: {'enabled' if action_cache_enabled else 'disabled'}")
-        if action_cache_enabled:
-            print(f"    - Cache steps: {action_cache_steps} (generate action every {action_cache_steps} steps)")
-        print(f"  - Max-entropy inference: {'enabled' if max_entropy_inference else 'disabled'}")
-        if max_entropy_inference:
-            print(f"    - Inference temperature: {inference_temperature}")
-        print(f"  - Device: {self.device}")
-        print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
+        print(f"✅ Optimized Online RL Policy initialized with:")
+        print(f"   - Layer feature concatenation (no SBERT)")
+        print(f"   - Action generation frequency: every {action_generation_freq} steps")
+        print(f"   - Valid actions: {len(self.valid_actions)}/{self.total_actions}")
+        print(f"   - Max-entropy inference: {max_entropy_inference}")
     
-    def _build_network(self):
-        """Build Q-network for EAGLE-3 features"""
+    def _precompute_valid_actions(self):
+        """Precompute valid action indices based on constraint: total_tokens <= top_k^(depth-1)"""
+        valid_actions = []
+        for action in range(self.total_actions):
+            total_tokens, depth, top_k = self._action_to_params(action)
+            if self._is_valid_combination(total_tokens, depth, top_k):
+                valid_actions.append(action)
+        return valid_actions
+    
+    def _is_valid_combination(self, total_tokens, depth, top_k):
+        """Check if parameter combination satisfies constraint"""
+        return total_tokens <= top_k ** (depth - 1)
+    
+    def _build_network(self, state_dim):
+        """Build Q-network architecture optimized for high-dimensional layer features"""
+        # Optimized architecture for high-dimensional concatenated features
         network = nn.Sequential(
-            nn.Linear(self.feature_dim, 512),
+            # First layer: reduce high dimensionality
+            nn.Linear(state_dim, 1024),
             nn.ReLU(),
             nn.Dropout(0.2),
+            
+            # Second layer: further processing
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            
+            # Third layer: feature refinement
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.1),
+            
+            # Fourth layer: final processing
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, len(self.valid_actions))  # Output for valid actions only
+            
+            # Output layer: action values
+            nn.Linear(128, len(self.valid_actions))
         )
         
-        # Initialize weights
+        # Optimized weight initialization for high-dimensional inputs
         for layer in network:
             if isinstance(layer, nn.Linear):
-                nn.init.xavier_uniform_(layer.weight)
-                nn.init.constant_(layer.bias, 0.1)
+                # Use He initialization for ReLU networks
+                nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
+                nn.init.constant_(layer.bias, 0.01)  # Small positive bias
         
         return network
     
-    def _encode_state_from_hidden_states(self, hidden_states):
-        """OPTIMIZATION 1: Encode state from EAGLE-3 layer features instead of SBERT
+    def _encode_state(self, layer_features):
+        """
+        Encode state using EAGLE-3's concatenated layer features instead of SBERT
         
         Args:
-            hidden_states: Concatenated hidden states from EAGLE-3 (3k dimensions)
-                          or already reduced features (k dimensions)
+            layer_features: Concatenated features from EAGLE-3 layers (3k-dimensional)
+                          Shape: [seq_len, 3 * hidden_size] or [batch, seq_len, 3 * hidden_size]
         
         Returns:
-            torch.Tensor of shape (feature_dim,) ready for RL policy
+            torch.Tensor: State representation for RL policy
         """
-        if hidden_states is None:
-            # Return zero state if no hidden states available
-            return torch.zeros(self.feature_dim, device=self.device)
+        if layer_features is None:
+            # Fallback: return zero state if no features provided
+            if self.state_dim is None:
+                # Assume default Llama hidden size
+                self.state_dim = 3 * 4096
+            return torch.zeros(self.state_dim, device=self.device)
         
-        # Convert to tensor and ensure correct device
-        if isinstance(hidden_states, np.ndarray):
-            features = torch.FloatTensor(hidden_states).to(self.device)
-        elif isinstance(hidden_states, torch.Tensor):
-            features = hidden_states.to(self.device)
-        else:
-            features = torch.tensor(hidden_states, device=self.device, dtype=torch.float32)
+        # Convert to tensor if numpy
+        if isinstance(layer_features, np.ndarray):
+            layer_features = torch.from_numpy(layer_features)
+        
+        # Move to device
+        layer_features = layer_features.to(self.device)
         
         # Handle different input shapes
-        if len(features.shape) > 1:
-            # If batch dimension exists, take the first item
-            if features.shape[0] == 1:
-                features = features[0]  # Remove batch dimension
-            else:
-                features = features[-1]  # Take last sequence position
-        
-        # Handle different feature dimensions
-        if features.shape[-1] == self.hidden_size * 3:
-            # This is the 3k-dimensional concatenated features
-            # In practice, this should be reduced by the FC layer in EAGLE-3
-            # For now, we'll take the mean across the 3 feature groups
-            features = features.view(3, self.hidden_size).mean(dim=0)
-        elif features.shape[-1] == self.hidden_size:
-            # This is already the k-dimensional reduced features
+        if layer_features.dim() == 3:  # [batch, seq_len, features]
+            # Take the last token's features
+            layer_features = layer_features[0, -1, :]
+        elif layer_features.dim() == 2:  # [seq_len, features]
+            # Take the last token's features
+            layer_features = layer_features[-1, :]
+        elif layer_features.dim() == 1:  # [features]
+            # Already the right shape
             pass
         else:
-            # Unexpected dimension, pad or truncate to match expected size
-            if features.shape[-1] > self.hidden_size:
-                features = features[:self.hidden_size]
-            else:
-                padded = torch.zeros(self.hidden_size, device=self.device)
-                padded[:features.shape[-1]] = features
-                features = padded
+            raise ValueError(f"Unexpected layer_features shape: {layer_features.shape}")
         
-        return features
-    
-    @torch.no_grad()
-    def _encode_state_from_context(self, context):
-        """Fallback: Encode conversation context using SBERT (for backward compatibility)"""
-        if not hasattr(self, '_sbert_model'):
-            from sentence_transformers import SentenceTransformer
-            self._sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Initialize network on first call
+        if self.state_dim is None:
+            self.state_dim = layer_features.shape[-1]
+            print(f"🔧 Detected state dimension: {self.state_dim}")
+            
+            # Build networks
+            self.q_network = self._build_network(self.state_dim).to(self.device)
+            self.target_network = self._build_network(self.state_dim).to(self.device)
+            self.target_network.load_state_dict(self.q_network.state_dict())
+            
+            # Initialize optimizer
+            self.optimizer = optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
+            
+            print(f"🏗️  Networks initialized for state dimension: {self.state_dim}")
         
-        with torch.no_grad():
-            embedding = self._sbert_model.encode(context)
-        
-        # Adapt SBERT embedding to expected feature dimension
-        if embedding.shape[0] != self.feature_dim:
-            if embedding.shape[0] > self.feature_dim:
-                adapted = embedding[:self.feature_dim]
-            else:
-                adapted = np.zeros(self.feature_dim)
-                adapted[:embedding.shape[0]] = embedding
-        else:
-            adapted = embedding
-        
-        return torch.FloatTensor(adapted).to(self.device)
+        return layer_features.float()
     
     def _action_to_params(self, action):
         """Convert discrete action to parameter values"""
@@ -275,233 +272,190 @@ class OptimizedOnlineTreePolicy:
     
     def _params_to_action(self, total_tokens, depth, top_k):
         """Convert parameters to discrete action"""
-        try:
-            total_tokens_idx = self.total_tokens_bins.index(total_tokens)
-            depth_idx = self.depth_bins.index(depth)
-            top_k_idx = self.top_k_bins.index(top_k)
-            return total_tokens_idx * (self.n_depth * self.n_top_k) + depth_idx * self.n_top_k + top_k_idx
-        except ValueError:
-            # If parameters not in bins, return random action
-            return random.randint(0, self.total_actions - 1)
+        # Find closest bins
+        total_tokens_idx = np.argmin([abs(x - total_tokens) for x in self.total_tokens_bins])
+        depth_idx = np.argmin([abs(x - depth) for x in self.depth_bins])
+        top_k_idx = np.argmin([abs(x - top_k) for x in self.top_k_bins])
+        
+        action = total_tokens_idx * (self.n_depth * self.n_top_k) + depth_idx * self.n_top_k + top_k_idx
+        return action
     
-    def predict_parameters(self, context=None, hidden_states=None, training_mode=True):
-        """OPTIMIZED: Predict parameters using EAGLE-3 features with action caching"""
+    def predict_parameters(self, layer_features, training_mode=True):
+        """
+        Predict parameters with optimized action generation frequency
         
-        # OPTIMIZATION 2: Action caching logic
-        if self.action_cache_enabled and not training_mode:
-            # Check if we can use cached action
-            if (self.cached_params is not None and 
-                self.cache_step_counter < self.action_cache_steps):
-                
-                self.cache_step_counter += 1
-                
-                # Log cache hit
-                if self.use_wandb and self.cache_step_counter % 5 == 0:
-                    wandb.log({
-                        "cache_hit": 1,
-                        "cache_step": self.cache_step_counter,
-                        "cached_params": {
-                            "total_tokens": self.cached_params[0],
-                            "depth": self.cached_params[1], 
-                            "top_k": self.cached_params[2]
-                        }
-                    })
-                
-                return self.cached_params
+        Args:
+            layer_features: EAGLE-3 concatenated layer features (3k-dimensional)
+            training_mode: Whether in training mode
         
-        # OPTIMIZATION 1: Use EAGLE-3 features if available
-        if self.use_eagle3_features and hidden_states is not None:
-            # Encode state from EAGLE-3 layer features
-            state = self._encode_state_from_hidden_states(hidden_states)
-        else:
-            # Fallback to context-based encoding (if needed)
-            if context is not None:
-                state = self._encode_state_from_context(context)
-            else:
-                # No input available, use zero state
-                state = torch.zeros(self.feature_dim, device=self.device)
+        Returns:
+            tuple: (total_tokens, depth, top_k)
+        """
+        if self.q_network is None:
+            # Initialize with dummy state to build network
+            dummy_state = self._encode_state(layer_features)
         
-        # Max-entropy action selection with temperature-based sampling
-        if self.max_entropy_inference and not training_mode:
-            # Inference mode with max-entropy: use temperature-based sampling for diversity
-            action, entropy = self._sample_action_with_temperature(state, self.inference_temperature)
-            exploration_mode = "MAX-ENTROPY"
+        # NEW: Action generation frequency optimization
+        self.step_counter += 1
+        
+        # Only generate new action if:
+        # 1. No cached action exists, OR
+        # 2. Step counter is divisible by action_generation_freq
+        if self.cached_params is None or (self.step_counter % self.action_generation_freq) == 0:
+            # Generate new action
+            state = self._encode_state(layer_features)
             
-            # Log entropy for monitoring
-            self.entropy_history.append(entropy)
-            if self.use_wandb:
-                wandb.log({
-                    "inference_entropy": entropy,
-                    "inference_temperature": self.inference_temperature,
-                    "step": self.step_count
-                })
-        elif training_mode:
-            # Training mode: combine epsilon-greedy with temperature-based sampling
-            if random.random() < self.epsilon:
-                # Exploration: temperature-based sampling for diversity
-                action, entropy = self._sample_action_with_temperature(state, self.temperature)
-                exploration_mode = "EXPLORE-ENTROPY"
-                self.entropy_history.append(entropy)
+            if training_mode:
+                # Training mode with exploration
+                if self.max_entropy_inference:
+                    action = self._sample_action_with_temperature(state, self.inference_temperature)
+                else:
+                    # Epsilon-greedy exploration
+                    if random.random() < self.epsilon:
+                        action = random.choice(self.valid_actions)
+                    else:
+                        with torch.no_grad():
+                            q_values = self.q_network(state.unsqueeze(0))
+                            valid_q_values = q_values[0]
+                            action_idx = torch.argmax(valid_q_values).item()
+                            action = self.valid_actions[action_idx]
             else:
-                # Exploitation: still use some temperature for diversity
-                action, entropy = self._sample_action_with_temperature(state, self.temperature * 0.5)
-                exploration_mode = "EXPLOIT-ENTROPY"
-                self.entropy_history.append(entropy)
-        else:
-            # Standard inference mode: use softmax with low temperature
-            action, entropy = self._sample_action_with_temperature(state, 0.5)
-            exploration_mode = "INFERENCE"
-            self.entropy_history.append(entropy)
-        
-        # Convert action to parameters
-        total_tokens, depth, top_k = self._action_to_params(action)
-        
-        # Safety backup: clamp parameters if somehow invalid
-        total_tokens, depth, top_k = self._safe_clamp_params(total_tokens, depth, top_k)
-        
-        # OPTIMIZATION 2: Update action cache
-        if self.action_cache_enabled and not training_mode:
-            self.cached_params = (total_tokens, depth, top_k)
+                # Inference mode: deterministic or temperature-based
+                if self.max_entropy_inference:
+                    action = self._sample_action_with_temperature(state, self.inference_temperature)
+                else:
+                    with torch.no_grad():
+                        q_values = self.q_network(state.unsqueeze(0))
+                        valid_q_values = q_values[0]
+                        action_idx = torch.argmax(valid_q_values).item()
+                        action = self.valid_actions[action_idx]
+            
+            # Convert action to parameters and cache
             self.cached_action = action
-            self.cache_step_counter = 1  # Reset counter
-            self.cache_hidden_states = hidden_states
+            self.cached_params = self._action_to_params(action)
             
-            # Log cache update
-            if self.use_wandb:
-                wandb.log({
-                    "cache_update": 1,
-                    "new_cached_params": {
-                        "total_tokens": total_tokens,
-                        "depth": depth,
-                        "top_k": top_k
-                    }
-                })
+            if training_mode:
+                # Store current state for potential policy update
+                self.current_state = state
+                self.current_action = action
+            
+            # Decay epsilon for training
+            if training_mode and self.epsilon > self.epsilon_end:
+                self.epsilon *= self.epsilon_decay
+            
+            print(f"🎯 Generated new action at step {self.step_counter}: {self.cached_params}")
+        else:
+            # Use cached action
+            print(f"♻️  Using cached action at step {self.step_counter}: {self.cached_params}")
         
-        # Store state-action for learning
-        if training_mode:
-            self.last_state = state
-            self.last_action = action
-            self.last_params = (total_tokens, depth, top_k)
-            self.last_exploration_mode = exploration_mode
-            self.last_entropy = entropy
-        
-        self.step_count += 1
-        
-        return total_tokens, depth, top_k
+        return self.cached_params
     
     def _sample_action_with_temperature(self, state, temperature):
         """Sample action using temperature-based softmax for max-entropy exploration"""
         with torch.no_grad():
             q_values = self.q_network(state.unsqueeze(0))
+            valid_q_values = q_values[0]
             
-            if temperature > 0:
-                # Apply temperature scaling for max-entropy sampling
-                scaled_q_values = q_values / temperature
-                probs = torch.softmax(scaled_q_values, dim=-1)
-                
-                # Sample from the distribution
-                dist = torch.distributions.Categorical(probs)
-                action_idx = dist.sample()
-                
-                # Calculate entropy for monitoring
-                entropy = dist.entropy().item()
-                
-                # Convert valid action index to actual action
-                action = self.valid_actions[action_idx.item()]
-                
-                return action, entropy
-            else:
-                # Greedy action selection
-                action_idx = torch.argmax(q_values, dim=-1)
-                action = self.valid_actions[action_idx.item()]
-                return action, 0.0
+            # Apply temperature scaling
+            scaled_logits = valid_q_values / temperature
+            
+            # Softmax sampling
+            probs = torch.softmax(scaled_logits, dim=0)
+            action_idx = torch.multinomial(probs, 1).item()
+            
+            return self.valid_actions[action_idx]
     
     def update_policy(self, reward, generation_time=None, new_tokens=None):
-        """Update policy with received reward"""
-        if self.last_state is not None and self.last_action is not None:
-            # Add experience to replay buffer
-            # For DQN, we store (state, valid_action_index, reward, next_state, done)
-            valid_action_idx = self.valid_actions.index(self.last_action)
+        """Update policy with reward from last action including entropy regularization"""
+        if not hasattr(self, 'current_state') or not hasattr(self, 'current_action'):
+            return  # No previous experience to update
+        
+        # Store experience in replay buffer
+        # Note: We store the index in valid_actions, not the raw action
+        action_idx = self.valid_actions.index(self.current_action)
+        self.memory.append((
+            self.current_state,
+            action_idx,
+            reward,
+            None,  # next_state (will be set when we have it)
+            False  # done
+        ))
+        
+        # Performance tracking
+        self.reward_history.append(reward)
+        total_tokens, depth, top_k = self._action_to_params(self.current_action)
+        self.parameter_history.append([total_tokens, depth, top_k])
+        
+        if generation_time is not None and new_tokens is not None:
+            tokens_per_second = new_tokens / max(generation_time, 0.001)
+            self.tokens_per_second_history.append(tokens_per_second)
+        
+        # Calculate entropy for max-entropy RL
+        if hasattr(self, 'current_state'):
+            with torch.no_grad():
+                q_values = self.q_network(self.current_state.unsqueeze(0))
+                probs = torch.softmax(q_values[0], dim=0)
+                entropy = -torch.sum(probs * torch.log(probs + 1e-8)).item()
+                self.entropy_history.append(entropy)
+        
+        # Log to wandb
+        if self.use_wandb:
+            log_data = {
+                "reward": reward,
+                "epsilon": self.epsilon,
+                "step_count": self.step_count,
+                "total_tokens": total_tokens,
+                "depth": depth,
+                "top_k": top_k,
+                "action_generation_step": self.step_counter
+            }
             
-            # Since each inference is episodic, next_state is None and done=True
-            experience = (
-                self.last_state.clone().detach(),
-                valid_action_idx,
-                reward,
-                None,  # next_state (episodic)
-                True   # done
-            )
-            self.memory.append(experience)
-            
-            # Add to reward history
-            self.reward_history.append(reward)
-            
-            # Learn from batch if enough experiences
-            if len(self.memory) >= self.batch_size:
-                self._learn_from_batch()
-            
-            # Update target network periodically
-            if self.step_count % self.target_update_freq == 0:
-                self.target_network.load_state_dict(self.q_network.state_dict())
-            
-            # Decay epsilon
-            self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
-            
-            # Log to wandb
-            if self.use_wandb:
-                log_data = {
-                    "reward": reward,
-                    "epsilon": self.epsilon,
-                    "step": self.step_count,
-                    "avg_reward_100": np.mean(list(self.reward_history)[-100:]),
-                    "exploration_mode": self.last_exploration_mode,
-                    "entropy": self.last_entropy
-                }
-                
+            if generation_time is not None:
+                log_data["generation_time"] = generation_time
+            if new_tokens is not None:
+                log_data["new_tokens"] = new_tokens
                 if generation_time is not None:
-                    log_data["generation_time"] = generation_time
-                if new_tokens is not None:
-                    log_data["new_tokens"] = new_tokens
-                    if generation_time is not None and generation_time > 0:
-                        log_data["tokens_per_second"] = new_tokens / generation_time
-                
-                # Add parameter info
-                if self.last_params:
-                    log_data.update({
-                        "total_tokens": self.last_params[0],
-                        "depth": self.last_params[1],
-                        "top_k": self.last_params[2]
-                    })
-                
-                # Add loss if available
-                if len(self.loss_history) > 0:
-                    log_data["loss"] = self.loss_history[-1]
-                
-                wandb.log(log_data)
+                    log_data["tokens_per_second"] = new_tokens / max(generation_time, 0.001)
+            
+            if len(self.entropy_history) > 0:
+                log_data["entropy"] = self.entropy_history[-1]
+            
+            wandb.log(log_data)
+        
+        # Perform learning update if we have enough experience
+        if len(self.memory) >= self.batch_size:
+            self._dqn_update()
+        
+        # Update target network periodically
+        if self.step_count % self.target_update_freq == 0:
+            self.target_network.load_state_dict(self.q_network.state_dict())
+        
+        self.step_count += 1
     
-    def _learn_from_batch(self):
-        """Learn from a batch of experiences"""
-        if len(self.memory) < self.batch_size:
-            return
-        
-        # Sample batch
+    def _dqn_update(self):
+        """Perform DQN update with entropy regularization for max-entropy RL"""
+        # Sample batch from replay buffer
         batch = random.sample(self.memory, self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
-        
-        # Convert to tensors
-        states = torch.stack(states)
-        actions = torch.LongTensor(actions).to(self.device)
-        rewards = torch.FloatTensor(rewards).to(self.device)
-        dones = torch.BoolTensor(dones).to(self.device)
+        states = torch.stack([exp[0] for exp in batch])
+        actions = torch.tensor([exp[1] for exp in batch], device=self.device)
+        rewards = torch.tensor([exp[2] for exp in batch], dtype=torch.float32, device=self.device)
         
         # Current Q values
         current_q_values = self.q_network(states).gather(1, actions.unsqueeze(1))
         
-        # Target Q values (for episodic tasks, next_q_values = 0)
+        # Target Q values (simplified for now - using rewards directly)
         target_q_values = rewards.unsqueeze(1)
         
-        # Compute loss
-        loss = nn.MSELoss()(current_q_values, target_q_values)
+        # Compute loss with entropy regularization
+        td_loss = nn.MSELoss()(current_q_values, target_q_values)
+        
+        # Add entropy regularization for max-entropy RL
+        q_values_all = self.q_network(states)
+        probs = torch.softmax(q_values_all, dim=1)
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()
+        
+        # Total loss with entropy bonus
+        loss = td_loss - self.entropy_weight * entropy
         
         # Optimize
         self.optimizer.zero_grad()
@@ -511,232 +465,269 @@ class OptimizedOnlineTreePolicy:
         
         # Track loss
         self.loss_history.append(loss.item())
-    
-    def _precompute_valid_actions(self):
-        """Precompute valid actions based on constraints"""
-        valid_actions = []
-        for action in range(self.total_actions):
-            total_tokens, depth, top_k = self._action_to_params(action)
-            if self._is_valid_combination(total_tokens, depth, top_k):
-                valid_actions.append(action)
-        return valid_actions
-    
-    def _is_valid_combination(self, total_tokens, depth, top_k):
-        """Check if parameter combination satisfies constraints"""
-        # Constraint: total_tokens <= top_k^(depth-1)
-        max_tokens_constraint = top_k ** (depth - 1)
-        return total_tokens <= max_tokens_constraint
-    
-    def _safe_clamp_params(self, total_tokens, depth, top_k):
-        """Safely clamp parameters to valid ranges"""
-        # Clamp to bin ranges
-        total_tokens = max(min(total_tokens, max(self.total_tokens_bins)), min(self.total_tokens_bins))
-        depth = max(min(depth, max(self.depth_bins)), min(self.depth_bins))
-        top_k = max(min(top_k, max(self.top_k_bins)), min(self.top_k_bins))
         
-        # Ensure constraint satisfaction
-        max_allowed_tokens = top_k ** (depth - 1)
-        if total_tokens > max_allowed_tokens:
-            # Find closest valid total_tokens
-            valid_tokens = [t for t in self.total_tokens_bins if t <= max_allowed_tokens]
-            if valid_tokens:
-                total_tokens = max(valid_tokens)
-            else:
-                total_tokens = min(self.total_tokens_bins)
-        
-        return total_tokens, depth, top_k
+        if self.use_wandb:
+            wandb.log({
+                "loss": loss.item(),
+                "td_loss": td_loss.item(),
+                "entropy_regularization": entropy.item(),
+            })
     
     def save_checkpoint(self, checkpoint_name=None):
-        """Save model checkpoint"""
+        """Save training checkpoint with automatic cleanup of old checkpoints"""
         if checkpoint_name is None:
-            checkpoint_name = f"checkpoint_step_{self.questions_processed}"
+            checkpoint_name = f"checkpoint_step_{self.step_count}_q_{self.questions_processed}.pth"
         
-        checkpoint_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}.pth")
+        checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
         
-        # Save model state
-        torch.save({
+        if self.q_network is None:
+            print("⚠️  Warning: Cannot save checkpoint - networks not initialized")
+            return
+        
+        checkpoint_data = {
             'q_network_state_dict': self.q_network.state_dict(),
             'target_network_state_dict': self.target_network.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'epsilon': self.epsilon,
+            'step_count': self.step_count,
+            'step_counter': self.step_counter,
             'questions_processed': self.questions_processed,
             'training_seed': self.training_seed,
-            'step_count': self.step_count,
-            'epsilon': self.epsilon,
-            'reward_history': list(self.reward_history),
-            'loss_history': list(self.loss_history),
-            'entropy_history': list(self.entropy_history),
-            'cache_step_counter': self.cache_step_counter,
-            'cached_params': self.cached_params,
-            'action_cache_enabled': self.action_cache_enabled,
-            'action_cache_steps': self.action_cache_steps,
-            'use_eagle3_features': self.use_eagle3_features,
-            'hidden_size': self.hidden_size
-        }, checkpoint_path)
+            'reward_history': self.reward_history,
+            'parameter_history': self.parameter_history,
+            'loss_history': self.loss_history,
+            'tokens_per_second_history': self.tokens_per_second_history,
+            'entropy_history': self.entropy_history,
+            'action_diversity_history': self.action_diversity_history,
+            'total_tokens_bins': self.total_tokens_bins,
+            'depth_bins': self.depth_bins,
+            'top_k_bins': self.top_k_bins,
+            'valid_actions': self.valid_actions,
+            'state_dim': self.state_dim,
+            'action_generation_freq': self.action_generation_freq,
+            'cached_params': self.cached_params
+        }
         
-        print(f"✅ Saved checkpoint: {checkpoint_path}")
+        torch.save(checkpoint_data, checkpoint_path)
+        print(f"💾 Checkpoint saved: {checkpoint_path}")
         
         # Cleanup old checkpoints
         self._cleanup_old_checkpoints()
         
-        return checkpoint_path
+        # Log to wandb
+        if self.use_wandb:
+            wandb.log({"checkpoint_step": self.step_count})
     
     def load_checkpoint(self, checkpoint_path=None):
-        """Load model checkpoint"""
+        """Load training checkpoint and resume training"""
         if checkpoint_path is None:
-            checkpoint_path = self._find_latest_checkpoint()
+            # Find most recent checkpoint
+            checkpoints = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.pth')]
+            if not checkpoints:
+                print("⚠️  No checkpoints found for resuming")
+                return False
+            
+            # Sort by modification time
+            checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)))
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoints[-1])
         
-        if checkpoint_path and os.path.exists(checkpoint_path):
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        try:
+            checkpoint_data = torch.load(checkpoint_path, map_location=self.device)
             
-            # Load model states
-            self.q_network.load_state_dict(checkpoint['q_network_state_dict'])
-            self.target_network.load_state_dict(checkpoint['target_network_state_dict'])
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # Restore hyperparameters
+            self.total_tokens_bins = checkpoint_data.get('total_tokens_bins', self.total_tokens_bins)
+            self.depth_bins = checkpoint_data.get('depth_bins', self.depth_bins)
+            self.top_k_bins = checkpoint_data.get('top_k_bins', self.top_k_bins)
+            self.valid_actions = checkpoint_data.get('valid_actions', self.valid_actions)
+            self.state_dim = checkpoint_data.get('state_dim', self.state_dim)
+            self.action_generation_freq = checkpoint_data.get('action_generation_freq', self.action_generation_freq)
+            self.cached_params = checkpoint_data.get('cached_params', self.cached_params)
             
-            # Load training state
-            self.questions_processed = checkpoint.get('questions_processed', 0)
-            self.training_seed = checkpoint.get('training_seed', None)
-            self.step_count = checkpoint.get('step_count', 0)
-            self.epsilon = checkpoint.get('epsilon', self.epsilon)
-            self.reward_history = deque(checkpoint.get('reward_history', []), maxlen=1000)
-            self.loss_history = deque(checkpoint.get('loss_history', []), maxlen=1000)
-            self.entropy_history = deque(checkpoint.get('entropy_history', []), maxlen=1000)
-            self.cache_step_counter = checkpoint.get('cache_step_counter', 0)
-            self.cached_params = checkpoint.get('cached_params', None)
+            # Build networks if not already built
+            if self.q_network is None and self.state_dim is not None:
+                self.q_network = self._build_network(self.state_dim).to(self.device)
+                self.target_network = self._build_network(self.state_dim).to(self.device)
+                self.optimizer = optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
             
-            print(f"✅ Loaded checkpoint: {checkpoint_path}")
-            print(f"   Questions processed: {self.questions_processed}")
-            print(f"   Step count: {self.step_count}")
-            print(f"   Epsilon: {self.epsilon:.4f}")
+            if self.q_network is not None:
+                # Load network states
+                self.q_network.load_state_dict(checkpoint_data['q_network_state_dict'])
+                self.target_network.load_state_dict(checkpoint_data['target_network_state_dict'])
+                self.optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
+            
+            # Restore training state
+            self.epsilon = checkpoint_data.get('epsilon', self.epsilon)
+            self.step_count = checkpoint_data.get('step_count', 0)
+            self.step_counter = checkpoint_data.get('step_counter', 0)
+            self.questions_processed = checkpoint_data.get('questions_processed', 0)
+            self.training_seed = checkpoint_data.get('training_seed', None)
+            
+            # Restore history
+            self.reward_history = checkpoint_data.get('reward_history', [])
+            self.parameter_history = checkpoint_data.get('parameter_history', [])
+            self.loss_history = checkpoint_data.get('loss_history', [])
+            self.tokens_per_second_history = checkpoint_data.get('tokens_per_second_history', [])
+            self.entropy_history = checkpoint_data.get('entropy_history', [])
+            self.action_diversity_history = checkpoint_data.get('action_diversity_history', [])
+            
+            print(f"✅ Checkpoint loaded: {checkpoint_path}")
+            print(f"   Resumed at step {self.step_count}, questions processed: {self.questions_processed}")
+            print(f"   Action generation frequency: {self.action_generation_freq}")
+            print(f"   Cached params: {self.cached_params}")
             return True
-        else:
-            print(f"❌ Checkpoint not found: {checkpoint_path}")
+            
+        except Exception as e:
+            print(f"❌ Failed to load checkpoint from {checkpoint_path}: {e}")
             return False
     
-    def _find_latest_checkpoint(self):
-        """Find the latest checkpoint file"""
-        if not os.path.exists(self.checkpoint_dir):
-            return None
-        
-        checkpoints = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.pth')]
-        if not checkpoints:
-            return None
-        
-        # Sort by modification time
-        checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)), reverse=True)
-        return os.path.join(self.checkpoint_dir, checkpoints[0])
-    
     def _cleanup_old_checkpoints(self):
-        """Remove old checkpoints, keeping only the most recent ones"""
-        if not os.path.exists(self.checkpoint_dir):
-            return
-        
+        """Remove old checkpoints to save space"""
         checkpoints = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.pth')]
-        if len(checkpoints) <= self.max_checkpoints:
-            return
-        
-        # Sort by modification time
-        checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)), reverse=True)
-        
-        # Remove old checkpoints
-        for checkpoint in checkpoints[self.max_checkpoints:]:
-            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint)
-            try:
-                os.remove(checkpoint_path)
-                print(f"🗑️  Removed old checkpoint: {checkpoint}")
-            except Exception as e:
-                print(f"Warning: Could not remove {checkpoint}: {e}")
+        if len(checkpoints) > self.max_checkpoints:
+            # Sort by modification time
+            checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)))
+            
+            # Remove oldest checkpoints
+            for old_checkpoint in checkpoints[:-self.max_checkpoints]:
+                old_path = os.path.join(self.checkpoint_dir, old_checkpoint)
+                os.remove(old_path)
+                print(f"🗑️  Removed old checkpoint: {old_checkpoint}")
     
     def should_save_checkpoint(self):
-        """Check if we should save a checkpoint"""
+        """Check if it's time to save a checkpoint"""
         return self.questions_processed % self.checkpoint_freq == 0
     
-    def set_training_seed(self, seed):
-        """Set training seed for reproducible shuffling"""
-        self.training_seed = seed
-    
-    def get_resume_info(self):
-        """Get information for resuming training"""
-        return {
-            "questions_processed": self.questions_processed,
-            "training_seed": self.training_seed
-        }
-    
     def increment_questions_processed(self, count=1):
-        """Increment the number of questions processed"""
+        """Track processed questions for resume capability"""
         self.questions_processed += count
-    
-    def get_performance_stats(self):
-        """Get performance statistics"""
-        if len(self.reward_history) == 0:
-            return {
-                "avg_reward": 0.0, 
-                "reward_std": 0.0, 
-                "total_steps": self.step_count,
-                "cache_hit_rate": 0.0
-            }
         
-        rewards = list(self.reward_history)
-        cache_hit_rate = (self.cache_step_counter / max(self.step_count, 1)) if self.action_cache_enabled else 0.0
-        
-        return {
-            "avg_reward": np.mean(rewards),
-            "reward_std": np.std(rewards),
-            "total_steps": self.step_count,
-            "total_questions": self.questions_processed,
-            "epsilon": self.epsilon,
-            "avg_loss": np.mean(list(self.loss_history)[-100:]) if self.loss_history else 0.0,
-            "avg_entropy": np.mean(list(self.entropy_history)[-100:]) if self.entropy_history else 0.0,
-            "cache_hit_rate": cache_hit_rate
-        }
+        # Auto-save checkpoint if needed
+        if self.should_save_checkpoint():
+            self.save_checkpoint()
     
     def save(self, path):
-        """Save the entire policy"""
-        torch.save({
+        """Save the trained policy (final save)"""
+        if self.q_network is None:
+            print("⚠️  Warning: Cannot save policy - networks not initialized")
+            return
+        
+        final_data = {
             'q_network_state_dict': self.q_network.state_dict(),
             'target_network_state_dict': self.target_network.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'questions_processed': self.questions_processed,
-            'step_count': self.step_count,
             'epsilon': self.epsilon,
-            'action_cache_enabled': self.action_cache_enabled,
-            'action_cache_steps': self.action_cache_steps,
-            'use_eagle3_features': self.use_eagle3_features,
-            'hidden_size': self.hidden_size,
-            'valid_actions': self.valid_actions,
+            'step_count': self.step_count,
+            'step_counter': self.step_counter,
+            'questions_processed': self.questions_processed,
+            'training_seed': self.training_seed,
+            'reward_history': self.reward_history,
+            'parameter_history': self.parameter_history,
+            'loss_history': self.loss_history,
+            'tokens_per_second_history': self.tokens_per_second_history,
+            'entropy_history': self.entropy_history,
+            'action_diversity_history': self.action_diversity_history,
             'total_tokens_bins': self.total_tokens_bins,
             'depth_bins': self.depth_bins,
-            'top_k_bins': self.top_k_bins
-        }, path)
+            'top_k_bins': self.top_k_bins,
+            'valid_actions': self.valid_actions,
+            'state_dim': self.state_dim,
+            'action_generation_freq': self.action_generation_freq,
+            'cached_params': self.cached_params,
+            
+            # Save policy configuration for reproducibility
+            'config': {
+                'learning_rate': self.learning_rate,
+                'epsilon_start': self.epsilon,
+                'epsilon_end': self.epsilon_end,
+                'epsilon_decay': self.epsilon_decay,
+                'memory_size': self.memory_size,
+                'batch_size': self.batch_size,
+                'target_update_freq': self.target_update_freq,
+                'temperature': self.temperature,
+                'entropy_weight': self.entropy_weight,
+                'inference_temperature': self.inference_temperature,
+                'max_entropy_inference': self.max_entropy_inference,
+                'action_generation_freq': self.action_generation_freq
+            }
+        }
         
-        print(f"💾 Saved optimized DQN policy to: {path}")
+        torch.save(final_data, path)
+        print(f"💾 Final policy saved: {path}")
+        
+        # Upload to wandb if available
+        if self.use_wandb:
+            wandb.save(path)
+            wandb.log({
+                "final_step_count": self.step_count,
+                "final_questions_processed": self.questions_processed,
+                "avg_reward": np.mean(self.reward_history) if self.reward_history else 0,
+                "avg_tokens_per_second": np.mean(self.tokens_per_second_history) if self.tokens_per_second_history else 0
+            })
     
-    def load(self, path):
-        """Load the entire policy"""
-        if os.path.exists(path):
-            checkpoint = torch.load(path, map_location=self.device)
+    def load(self, load_path):
+        """Load a trained policy"""
+        try:
+            data = torch.load(load_path, map_location=self.device)
             
-            # Load model states
-            self.q_network.load_state_dict(checkpoint['q_network_state_dict'])
-            self.target_network.load_state_dict(checkpoint['target_network_state_dict'])
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # Load configuration if available
+            if 'config' in data:
+                config = data['config']
+                self.action_generation_freq = config.get('action_generation_freq', self.action_generation_freq)
+                print(f"📋 Loaded configuration with action generation frequency: {self.action_generation_freq}")
             
-            # Load metadata
-            self.questions_processed = checkpoint.get('questions_processed', 0)
-            self.step_count = checkpoint.get('step_count', 0)
-            self.epsilon = checkpoint.get('epsilon', self.epsilon)
+            # Restore hyperparameters
+            self.total_tokens_bins = data.get('total_tokens_bins', self.total_tokens_bins)
+            self.depth_bins = data.get('depth_bins', self.depth_bins)
+            self.top_k_bins = data.get('top_k_bins', self.top_k_bins)
+            self.valid_actions = data.get('valid_actions', self.valid_actions)
+            self.state_dim = data.get('state_dim', self.state_dim)
+            self.cached_params = data.get('cached_params', self.cached_params)
             
-            print(f"📂 Loaded optimized DQN policy from: {path}")
-            return True
-        else:
-            print(f"❌ Policy file not found: {path}")
+            # Build networks if state_dim is known
+            if self.state_dim is not None:
+                self.q_network = self._build_network(self.state_dim).to(self.device)
+                self.target_network = self._build_network(self.state_dim).to(self.device)
+                self.optimizer = optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
+                
+                # Load weights
+                self.q_network.load_state_dict(data['q_network_state_dict'])
+                self.target_network.load_state_dict(data['target_network_state_dict'])
+                
+                print(f"✅ Optimized RL policy loaded from {load_path}")
+                print(f"   State dimension: {self.state_dim}")
+                print(f"   Action generation frequency: {self.action_generation_freq}")
+                print(f"   Valid actions: {len(self.valid_actions)}")
+                return True
+            else:
+                print(f"⚠️  Policy loaded but networks will be built on first use")
+                return True
+                
+        except Exception as e:
+            print(f"❌ Failed to load optimized RL policy from {load_path}: {e}")
             return False
 
+
 def calculate_optimized_online_reward(generation_time, new_tokens, total_tokens, depth, top_k):
-    """Calculate reward for optimized online learning"""
+    """
+    Calculate reward for the optimized online RL policy.
+    Same as the original but with emphasis on efficiency gains from optimizations.
+    """
     if generation_time <= 0 or new_tokens <= 0:
         return 0.0
     
-    # Reward is simply tokens per second
+    # Primary metrics
     tokens_per_second = new_tokens / generation_time
-    return tokens_per_second
+    
+    # Reward components
+    speed_reward = np.log(tokens_per_second + 1) * 3.0  # Increased weight for speed
+    efficiency_bonus = 2.0 if tokens_per_second > 15 else 0.0  # Bonus for high efficiency
+    
+    # Parameter efficiency penalty (encourage simpler configurations)
+    complexity_penalty = (total_tokens + depth * 5 + top_k) * 0.01
+    
+    # Optimization bonus: reward faster inference from reduced action generation
+    optimization_bonus = 1.0  # Constant bonus for using optimized policy
+    
+    total_reward = speed_reward + efficiency_bonus - complexity_penalty + optimization_bonus
+    
+    return max(0.0, total_reward)  # Ensure non-negative reward
