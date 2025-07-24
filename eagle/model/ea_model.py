@@ -204,6 +204,10 @@ class EaModel(nn.Module):
             total_tokens=None,
             depth=None,
             tree_top_k=None,
+            # New step-wise RL parameters
+            rl_policy=None,
+            training_mode=False,
+            step_rewards_callback=None,
     ):
         if is_llama3:
             stop_token_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
@@ -213,7 +217,13 @@ class EaModel(nn.Module):
         original_depth = self.ea_layer.depth
         original_top_k = self.ea_layer.top_k
         
-        # Temporarily update parameters if provided
+        # For step-wise RL: track step-level metrics
+        step_rewards = []
+        step_actions = []
+        step_states = []
+        use_stepwise_rl = rl_policy is not None
+        
+        # Temporarily update parameters if provided (fallback values for non-RL mode)
         if total_tokens is not None:
             self.ea_layer.total_tokens = total_tokens - 1  # Adjust as in line 163
         if depth is not None:
@@ -252,13 +262,63 @@ class EaModel(nn.Module):
 
         input_len = input_ids.shape[1]
         reset_tree_mode(self)
+        
+        # For step-wise RL: get initial state for first prediction
+        if use_stepwise_rl:
+            # Encode current context for RL policy
+            current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+            initial_state = current_text
+            
+            # Predict initial parameters
+            step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                initial_state, training_mode=training_mode
+            )
+            
+            # Store step info for training
+            if training_mode:
+                step_states.append(initial_state)
+                step_actions.append((step_total_tokens, step_depth, step_top_k))
+            
+            print(f"Step 0 RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+        else:
+            # Use provided or default parameters
+            step_total_tokens = total_tokens
+            step_depth = depth
+            step_top_k = tree_top_k
+        
         # prefill
         draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
-            input_ids, self, past_key_values, logits_processor, total_tokens, depth, tree_top_k
+            input_ids, self, past_key_values, logits_processor, step_total_tokens, step_depth, step_top_k
         )
         new_token = 0
         max_length = max_length - self.ea_layer.total_tokens - 10
         for idx in range(max_length):
+            # For step-wise RL: predict parameters at each step (except first which was done above)
+            step_start_time = time.time()
+            
+            if use_stepwise_rl and idx > 0:  # Skip first iteration since we already predicted
+                # Get current context for RL policy
+                current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                current_state = current_text
+                
+                # Predict parameters for this step
+                step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                    current_state, training_mode=training_mode
+                )
+                
+                # Store step info for training
+                if training_mode:
+                    step_states.append(current_state)
+                    step_actions.append((step_total_tokens, step_depth, step_top_k))
+                if len(step_rewards) % 30 == 0:
+                    print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                # print(f"Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                
+                # Update model parameters for this step
+                self.ea_layer.total_tokens = step_total_tokens - 1 if step_total_tokens else self.ea_layer.total_tokens
+                self.ea_layer.depth = step_depth if step_depth else self.ea_layer.depth  
+                self.ea_layer.top_k = step_top_k if step_top_k else self.ea_layer.top_k
+            
             # with Timer("all"):
             self.base_model.model.tree_mask = tree_mask
 
@@ -281,6 +341,26 @@ class EaModel(nn.Module):
                 logits, candidates, logits_processor
             )
             # print(accept_length)
+            
+            # Calculate step reward for RL training
+            step_end_time = time.time()
+            step_time = step_end_time - step_start_time
+            step_tokens_generated = accept_length + 1  # Number of tokens accepted in this step
+            
+            if use_stepwise_rl and step_time > 0 and step_tokens_generated > 0:
+                # Calculate reward: tokens per second for this step
+                step_reward = step_tokens_generated / step_time
+                step_rewards.append(step_reward)
+                
+                # Update policy if in training mode
+                if training_mode and len(step_rewards) >= 1:
+                    try:
+                        rl_policy.update_policy(step_reward)
+                        if len(step_rewards) % 30 == 0:  # Log every 30 steps
+                            print(f"  Step {idx} reward: {step_reward:.2f} tok/s (accepted: {step_tokens_generated})")
+                    except Exception as e:
+                        print(f"  Warning: RL policy update failed at step {idx}: {e}")
+            
             # Adjusting the input sequence, draft model forward
             input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
                 input_ids,
@@ -313,10 +393,25 @@ class EaModel(nn.Module):
         self.ea_layer.depth = original_depth
         self.ea_layer.top_k = original_top_k
         
+        # Return step-wise RL information if used
+        if use_stepwise_rl and step_rewards_callback and training_mode:
+            step_rewards_callback({
+                'step_rewards': step_rewards,
+                'step_actions': step_actions, 
+                'step_states': step_states,
+                'total_steps': len(step_rewards)
+            })
+        
         if not log:
-            return input_ids
+            if use_stepwise_rl:
+                return input_ids, step_rewards, len(step_rewards)
+            else:
+                return input_ids
         else:
-            return input_ids, new_token, idx
+            if use_stepwise_rl:
+                return input_ids, new_token, idx, step_rewards, len(step_rewards)
+            else:
+                return input_ids, new_token, idx
 
     @torch.no_grad()
     def naivegenerate(

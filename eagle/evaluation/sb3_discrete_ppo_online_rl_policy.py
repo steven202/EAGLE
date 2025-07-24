@@ -403,7 +403,7 @@ class SB3DiscretePPOOnlineTreePolicy:
                             "step": self.step_count
                         })
                     
-                    print(f"   Max-entropy sampling: T={temperature:.1f}, H={entropy.item():.3f}")
+                    # print(f"   Max-entropy sampling: T={temperature:.1f}, H={entropy.item():.3f}")
                     return action.item()
                 else:
                     # Deterministic (argmax)
@@ -502,7 +502,7 @@ class SB3DiscretePPOOnlineTreePolicy:
             tps = new_tokens / generation_time
             self.tokens_per_second_history.append(tps)
         
-        print(f"  → Reward: {reward:.3f} for {self.last_params}")
+        # print(f"  → Reward: {reward:.3f} for {self.last_params}")
         
         # Update model every few steps
         if len(self.reward_history) % 32 == 0:  # Update every 32 steps
@@ -511,7 +511,7 @@ class SB3DiscretePPOOnlineTreePolicy:
             # you'd want to use a custom environment with proper episode handling
             
             self.update_count += 1
-            print(f"SB3 PPO Update #{self.update_count}: Manual reward integration")
+            # print(f"SB3 PPO Update #{self.update_count}: Manual reward integration")
         
         # Increment step counter
         self.step_count += 1
@@ -525,8 +525,8 @@ class SB3DiscretePPOOnlineTreePolicy:
             recent_rewards = self.reward_history[-10:] if len(self.reward_history) >= 10 else self.reward_history
             avg_recent_reward = sum(recent_rewards) / len(recent_rewards) if recent_rewards else 0
             
-            print(f"Online RL Update: Reward={reward:.3f}, Avg Recent Reward={avg_recent_reward:.3f}, Tokens/sec={tps:.1f}" if 'tps' in locals() else f"Online RL Update: Reward={reward:.3f}, Avg Recent Reward={avg_recent_reward:.3f}")
-            print(f"📊 Progress: {self.questions_processed}/{400 if hasattr(self, 'total_questions') else '?'} questions, Step: {self.step_count}, SB3 Updates: {self.update_count}")
+            # print(f"Online RL Update: Reward={reward:.3f}, Avg Recent Reward={avg_recent_reward:.3f}, Tokens/sec={tps:.1f}" if 'tps' in locals() else f"Online RL Update: Reward={reward:.3f}, Avg Recent Reward={avg_recent_reward:.3f}")
+            # print(f"📊 Progress: {self.questions_processed}/{400 if hasattr(self, 'total_questions') else '?'} questions, Step: {self.step_count}, SB3 Updates: {self.update_count}")
         
         # Wandb logging
         if self.use_wandb:
@@ -536,7 +536,12 @@ class SB3DiscretePPOOnlineTreePolicy:
                 "depth": self.last_params[1], 
                 "top_k": self.last_params[2],
                 "step": self.step_count,
-                "questions_processed": self.questions_processed
+                "questions_processed": self.questions_processed,
+                "mode": "Max-Entropy PPO" if self.enable_max_entropy else "Standard PPO",
+                "exploration_mode": "MAX-ENTROPY" if self.max_entropy_inference and not training_mode else "DETERMINISTIC" if not self.enable_max_entropy else "STOCHASTIC",
+                "tokens_per_second": self.tokens_per_second_history[-1] if self.tokens_per_second_history else 0.0,
+                "entropy": self.entropy_history[-1] if self.entropy_history else 0.0,
+                "update_count": self.update_count,
             }
             
             # Add tokens per second if available
@@ -545,10 +550,12 @@ class SB3DiscretePPOOnlineTreePolicy:
             
             # Add averaging windows
             if len(self.reward_history) >= 10:
-                log_data["avg_reward_10"] = np.mean(self.reward_history[-10:])
+                log_data["avg_reward_10"] = torch.mean(torch.tensor(self.reward_history[-10:])).item()
+                log_data["avg_tokens_per_second_10"] = torch.mean(torch.tensor(self.tokens_per_second_history[-10:])).item() if self.tokens_per_second_history else 0.0
             if len(self.reward_history) >= 50:
-                log_data["avg_reward_50"] = np.mean(self.reward_history[-50:])
-            
+                log_data["avg_reward_50"] = torch.mean(torch.tensor(self.reward_history[-50:])).item()
+                log_data["avg_tokens_per_second_50"] = torch.mean(torch.tensor(self.tokens_per_second_history[-50:])).item() if self.tokens_per_second_history else 0.0
+
             wandb.log(log_data)
     
     def save_checkpoint(self, checkpoint_name=None):
@@ -561,16 +568,27 @@ class SB3DiscretePPOOnlineTreePolicy:
         # Save SB3 model
         self.model.save(checkpoint_path)
         
-        # Save additional metadata
+        # Save additional metadata - convert tensors to JSON-serializable types
+        def convert_to_serializable(obj):
+            """Convert tensors and other objects to JSON-serializable types"""
+            if isinstance(obj, torch.Tensor):
+                return obj.item() if obj.numel() == 1 else obj.tolist()
+            elif isinstance(obj, list):
+                return [convert_to_serializable(item) for item in obj]
+            elif isinstance(obj, tuple):
+                return [convert_to_serializable(item) for item in obj]
+            else:
+                return obj
+        
         metadata = {
             'step_count': self.step_count,
             'update_count': self.update_count,
             'questions_processed': self.questions_processed,
             'training_seed': self.training_seed,
-            'reward_history': self.reward_history,
-            'parameter_history': self.parameter_history,
-            'tokens_per_second_history': self.tokens_per_second_history,
-            'entropy_history': self.entropy_history,
+            'reward_history': convert_to_serializable(self.reward_history),
+            'parameter_history': convert_to_serializable(self.parameter_history),
+            'tokens_per_second_history': convert_to_serializable(self.tokens_per_second_history),
+            'entropy_history': convert_to_serializable(self.entropy_history),
         }
         
         metadata_path = checkpoint_path + "_metadata.json"
@@ -705,18 +723,18 @@ class SB3DiscretePPOOnlineTreePolicy:
         stats = {
             'total_steps': self.step_count,
             'total_updates': self.update_count,
-            'avg_reward': np.mean(self.reward_history),
-            'recent_avg_reward': np.mean(recent_rewards),
-            'best_reward': max(self.reward_history),
+            'avg_reward': torch.mean(torch.tensor(self.reward_history)).item(),
+            'recent_avg_reward': torch.mean(torch.tensor(recent_rewards)).item(),
+            'best_reward': torch.max(torch.tensor(self.reward_history)).item(),
             'questions_processed': self.questions_processed
         }
         
         if self.tokens_per_second_history:
             recent_tps = self.tokens_per_second_history[-100:]
             stats.update({
-                'avg_tokens_per_second': np.mean(self.tokens_per_second_history),
-                'recent_avg_tokens_per_second': np.mean(recent_tps),
-                'best_tokens_per_second': max(self.tokens_per_second_history)
+                'avg_tokens_per_second': torch.mean(torch.tensor(self.tokens_per_second_history)).item(),
+                'recent_avg_tokens_per_second': torch.mean(torch.tensor(recent_tps)).item(),
+                'best_tokens_per_second': torch.max(torch.tensor(self.tokens_per_second_history)).item()
             })
         
         return stats

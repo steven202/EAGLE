@@ -6,9 +6,10 @@
 
 DATE=$(date '+%Y%m%d_%H%M')
 # DATE='20250721_1215'
+DATE='20250723_2117'
 MODEL_PATH="/home/guo/EAGLE_RL/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=200
+QUESTION_END=400
 
 # Create single unified log directory
 mkdir -p log/$DATE/{standard_ppo,max_entropy_ppo,baseline_results,evaluation}
@@ -41,7 +42,7 @@ echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
 echo "- NOTE: Max-entropy mode is now the default - no explicit flags needed" | tee -a log/$DATE/comparison.txt
 echo "" | tee -a log/$DATE/comparison.txt
 
-PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --base-model-path "$BASE_MODEL_PATH" \
     --ea-model-path "$MODEL_PATH" \
     --model-id "eagle-max-entropy-ppo-formal-$DATE" \
@@ -69,44 +70,45 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --question-begin 0 --question-end $QUESTION_END \
     2>&1 | tee -a log/$DATE/max_entropy_ppo/training.log
 
-# echo "" | tee -a log/$DATE/comparison.txt
-# echo "=== Phase 2: Training with STANDARD PPO - Non-Default Mode ===" | tee -a log/$DATE/comparison.txt
-# echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
-# echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
-# echo "- Standard exploration during training" | tee -a log/$DATE/comparison.txt
-# echo "- Training dataset: eagle/data/rl_training/question.jsonl" | tee -a log/$DATE/comparison.txt
-# echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
-# echo "- NOTE: Using --disable-max-entropy to override default max-entropy mode" | tee -a log/$DATE/comparison.txt
-# echo "" | tee -a log/$DATE/comparison.txt
+echo "" | tee -a log/$DATE/comparison.txt
+echo "=== Phase 2: Training with STANDARD PPO - Non-Default Mode ===" | tee -a log/$DATE/comparison.txt
+echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
+echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
+echo "- Standard exploration during training" | tee -a log/$DATE/comparison.txt
+echo "- Training dataset: eagle/data/rl_training/question.jsonl" | tee -a log/$DATE/comparison.txt
+echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
+echo "- NOTE: Using --disable-max-entropy to override default max-entropy mode" | tee -a log/$DATE/comparison.txt
+echo "" | tee -a log/$DATE/comparison.txt
 
-# PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-#     --base-model-path "$BASE_MODEL_PATH" \
-#     --ea-model-path "$MODEL_PATH" \
-#     --model-id "eagle-standard-ppo-formal-$DATE" \
-#     --bench-name "mt_bench" \
-#     --use-online-rl \
-#     --use-sb3-discrete-ppo \
-#     --disable-max-entropy \
-#     --online-lr 0.0003 \
-#     --ppo-n-steps 64 \
-#     --ppo-batch-size 32 \
-#     --ppo-epochs 4 \
-#     --ppo-clip-range 0.2 \
-#     --ppo-gamma 0.99 \
-#     --ppo-gae-lambda 0.95 \
-#     --ppo-ent-coef 0.01 \
-#     --ppo-vf-coef 0.5 \
-#     --online-policy-save-path "log/$DATE/standard_ppo/standard_ppo_policy.pth" \
-#     --temperature 0.0 \
-#     --use_eagle3 \
-#     --max-new-token 512 \
-#     --num-choices 1 \
-#     --checkpoint-dir "log/$DATE/standard_ppo/checkpoints" \
-#     --checkpoint-freq 50 \
-#     --online-repeat-factor 1 \
-#     --question-file eagle/data/rl_training/question.jsonl \
-#     --question-begin 0 --question-end $QUESTION_END \
-#     2>&1 | tee -a log/$DATE/standard_ppo/training.log
+python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+    --base-model-path "$BASE_MODEL_PATH" \
+    --ea-model-path "$MODEL_PATH" \
+    --model-id "eagle-standard-ppo-formal-$DATE" \
+    --bench-name "mt_bench" \
+    --use-online-rl \
+    --use-sb3-discrete-ppo \
+    --disable-max-entropy \
+    --use-stepwise-rl \
+    --online-lr 0.0003 \
+    --ppo-n-steps 64 \
+    --ppo-batch-size 32 \
+    --ppo-epochs 4 \
+    --ppo-clip-range 0.2 \
+    --ppo-gamma 0.99 \
+    --ppo-gae-lambda 0.95 \
+    --ppo-ent-coef 0.01 \
+    --ppo-vf-coef 0.5 \
+    --online-policy-save-path "log/$DATE/standard_ppo/standard_ppo_policy.pth" \
+    --temperature 0.0 \
+    --use_eagle3 \
+    --max-new-token 512 \
+    --num-choices 1 \
+    --checkpoint-dir "log/$DATE/standard_ppo/checkpoints" \
+    --checkpoint-freq 50 \
+    --online-repeat-factor 1 \
+    --question-file eagle/data/rl_training/question.jsonl \
+    --question-begin 0 --question-end $QUESTION_END \
+    2>&1 | tee -a log/$DATE/standard_ppo/training.log
 
 # echo "" | tee -a log/$DATE/comparison.txt
 echo "=== Phase 3: Multi-Benchmark Evaluation ===" | tee -a log/$DATE/comparison.txt
@@ -142,46 +144,52 @@ for i in "${!BENCHMARKS[@]}"; do
     echo "=== Evaluating on $benchmark_name - $benchmark ===" | tee -a log/$DATE/comparison.txt
     
     # Max-Entropy PPO Evaluation (now tested first - uses default behavior)
-    echo "Testing Max-Entropy PPO on $benchmark_name..." | tee -a log/$DATE/comparison.txt
-    python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-        --base-model-path "$BASE_MODEL_PATH" \
-        --ea-model-path "$MODEL_PATH" \
-        --model-id "eagle-max-entropy-ppo-$benchmark-$DATE" \
-        --bench-name "$benchmark" \
-        --use-online-rl \
-        --use-stepwise-rl \
-        --use-sb3-discrete-ppo \
-        --online-policy-path "log/$DATE/max_entropy_ppo/max_entropy_ppo_policy.pth" \
-        --online-inference-only \
-        --temperature 0.0 \
-        --use_eagle3 \
-        --num-choices 1 \
-        --answer-file "log/$DATE/max_entropy_ppo/evaluation/${benchmark}_results.jsonl" \
-        --no-wandb \
-        2>&1 | tee -a log/$DATE/max_entropy_ppo/evaluation/${benchmark}_test.log
+    # check if the evaluation file already exists, if not, run the evaluation
+    if [ ! -f "log/$DATE/max_entropy_ppo/evaluation/${benchmark}_results.jsonl" ]; then
+        echo "Testing Max-Entropy PPO on $benchmark_name..." | tee -a log/$DATE/comparison.txt
+        python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            --base-model-path "$BASE_MODEL_PATH" \
+            --ea-model-path "$MODEL_PATH" \
+            --model-id "eagle-max-entropy-ppo-$benchmark-$DATE" \
+            --bench-name "$benchmark" \
+            --use-online-rl \
+            --use-stepwise-rl \
+            --use-sb3-discrete-ppo \
+            --online-policy-path "log/$DATE/max_entropy_ppo/max_entropy_ppo_policy.pth" \
+            --online-inference-only \
+            --temperature 0.0 \
+            --use_eagle3 \
+            --num-choices 1 \
+            --answer-file "log/$DATE/max_entropy_ppo/evaluation/${benchmark}_results.jsonl" \
+            --no-wandb \
+            2>&1 | tee -a log/$DATE/max_entropy_ppo/evaluation/${benchmark}_test.log
+    else
+        echo "Max-Entropy PPO evaluation for $benchmark_name already exists, skipping..." | tee -a log/$DATE/comparison.txt
+    fi
     
-    # Standard PPO Evaluation (now tested second)
-    # echo "Testing Standard PPO on $benchmark_name..." | tee -a log/$DATE/comparison.txt
-    # python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-    #     --base-model-path "$BASE_MODEL_PATH" \
-    #     --ea-model-path "$MODEL_PATH" \
-    #     --model-id "eagle-standard-ppo-$benchmark-$DATE" \
-    #     --bench-name "$benchmark" \
-    #     --use-online-rl \
-    #     --use-sb3-discrete-ppo \
-    #     --disable-max-entropy \
-    #     --online-policy-path "log/$DATE/standard_ppo/standard_ppo_policy.pth" \
-    #     --online-inference-only \
-    #     --temperature 0.0 \
-    #     --use_eagle3 \
-    #     --max-new-token 512 \
-    #     --num-choices 1 \
-    #     --answer-file "log/$DATE/standard_ppo/evaluation/${benchmark}_results.jsonl" \
-    #     --no-wandb \
-    #     2>&1 | tee -a log/$DATE/standard_ppo/evaluation/${benchmark}_test.log
-    
-    echo "✅ Completed evaluation on $benchmark_name" | tee -a log/$DATE/comparison.txt
-    echo "" | tee -a log/$DATE/comparison.txt
+    if [ ! -f "log/$DATE/standard_ppo/evaluation/${benchmark}_results.jsonl" ]; then
+        # Standard PPO Evaluation (now tested second)
+        echo "Testing Standard PPO on $benchmark_name..." | tee -a log/$DATE/comparison.txt
+        python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            --base-model-path "$BASE_MODEL_PATH" \
+            --ea-model-path "$MODEL_PATH" \
+            --model-id "eagle-standard-ppo-$benchmark-$DATE" \
+            --bench-name "$benchmark" \
+            --use-online-rl \
+            --use-sb3-discrete-ppo \
+            --disable-max-entropy \
+            --online-policy-path "log/$DATE/standard_ppo/standard_ppo_policy.pth" \
+            --online-inference-only \
+            --temperature 0.0 \
+            --use_eagle3 \
+            --max-new-token 512 \
+            --num-choices 1 \
+            --answer-file "log/$DATE/standard_ppo/evaluation/${benchmark}_results.jsonl" \
+            --no-wandb \
+            2>&1 | tee -a log/$DATE/standard_ppo/evaluation/${benchmark}_test.log
+    else
+        echo "Standard PPO evaluation for $benchmark_name already exists, skipping..." | tee -a log/$DATE/comparison.txt
+    fi
 done
 
 echo "" | tee -a log/$DATE/comparison.txt
@@ -212,7 +220,7 @@ for benchmark in "${BENCHMARKS[@]}"; do
             --answer-file "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" \
             --temperature 0.0 \
             --use_eagle3 \
-            2>&1 | tee -a log/$DATE/baseline_${benchmark}_eagle3.log
+            2>&1 | tee -a log/$DATE/baseline_results/baseline_${benchmark}_eagle3.log
     else
         echo "EAGLE3 baseline for $benchmark already exists" | tee -a log/$DATE/comparison.txt
     fi
@@ -225,7 +233,7 @@ for benchmark in "${BENCHMARKS[@]}"; do
             --bench-name "$benchmark" \
             --answer-file "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" \
             --temperature 0.0 \
-            2>&1 | tee -a log/$DATE/baseline_${benchmark}_standard.log
+            2>&1 | tee -a log/$DATE/baseline_results/baseline_${benchmark}_standard.log
     else
         echo "Standard baseline for $benchmark already exists" | tee -a log/$DATE/comparison.txt
     fi

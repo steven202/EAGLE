@@ -34,7 +34,6 @@ from tqdm import tqdm
 
 try:
     from ..model.ea_model import EaModel
-    from ..model.ea_model_stepwise import StepwiseEaModel
     from ..model.kv_cache import initialize_past_key_values
     from ..model.utils import *
     from .rl_tree_policy import RLTreePolicy, calculate_real_reward
@@ -43,10 +42,8 @@ try:
     from .ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
     from .discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
     from .sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
-    from .stepwise_rl_policy import StepwiseSB3DiscretePPOPolicy, calculate_stepwise_reward
 except:
     from eagle.model.ea_model import EaModel
-    from eagle.model.ea_model_stepwise import StepwiseEaModel
     from eagle.model.kv_cache import initialize_past_key_values
     from eagle.model.utils import *
     from eagle.evaluation.rl_tree_policy import RLTreePolicy, calculate_real_reward
@@ -55,7 +52,6 @@ except:
     from eagle.evaluation.ppo_online_rl_policy import PPOOnlineTreePolicy, calculate_ppo_online_reward
     from eagle.evaluation.discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
     from eagle.evaluation.sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
-    from eagle.evaluation.stepwise_rl_policy import StepwiseSB3DiscretePPOPolicy, calculate_stepwise_reward
 
 
 
@@ -148,37 +144,18 @@ def get_model_answers(
 ):
     # temperature = 0.0
 
-    # Determine if using step-wise RL
-    use_stepwise_rl = getattr(args, 'use_stepwise_rl', False)
-    
-    if use_stepwise_rl:
-        # Use step-wise model for fine-grained RL control
-        print("🔄 Using Step-wise EAGLE Model for real-time RL parameter optimization")
-        model = StepwiseEaModel.from_pretrained(
-            base_model_path=base_model_path,
-            ea_model_path=ea_model_path,
-            total_token=args.total_token,
-            depth=args.depth,
-            top_k=args.top_k,
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-            device_map="auto",
-            use_eagle3=args.use_eagle3,
-        )
-    else:
-        # Use standard model
-        model = EaModel.from_pretrained(
-            base_model_path=base_model_path,
-            ea_model_path=ea_model_path,
-            total_token=args.total_token,
-            depth=args.depth,
-            top_k=args.top_k,
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-            # load_in_8bit=True,
-            device_map="auto",
-            use_eagle3=args.use_eagle3,
-        )
+    model = EaModel.from_pretrained(
+        base_model_path=base_model_path,
+        ea_model_path=ea_model_path,
+        total_token=args.total_token,
+        depth=args.depth,
+        top_k=args.top_k,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+        # load_in_8bit=True,
+        device_map="auto",
+        use_eagle3=args.use_eagle3,
+    )
 
     tokenizer = model.get_tokenizer()
 
@@ -197,32 +174,7 @@ def get_model_answers(
         wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
         
         # Choose between PPO, continuous, and discrete action space
-        if getattr(args, 'use_stepwise_rl', False):
-            # Step-wise RL for real-time parameter optimization per step
-            enable_max_entropy = getattr(args, 'enable_max_entropy', True)
-            mode_description = "Step-wise Max-Entropy PPO" if enable_max_entropy else "Step-wise Standard PPO"
-            print(f"🎯 Using {mode_description} for real-time step-by-step parameter optimization")
-            
-            online_policy = StepwiseSB3DiscretePPOPolicy(
-                learning_rate=args.online_lr,
-                n_steps=getattr(args, 'ppo_n_steps', 64),
-                batch_size=getattr(args, 'ppo_batch_size', 32),
-                n_epochs=getattr(args, 'ppo_epochs', 4),
-                gamma=getattr(args, 'ppo_gamma', 0.95),
-                gae_lambda=getattr(args, 'ppo_gae_lambda', 0.9),
-                clip_range=getattr(args, 'ppo_clip_range', 0.2),
-                ent_coef=getattr(args, 'max_entropy_ent_coef', 0.1) if enable_max_entropy else 0.01,
-                enable_max_entropy=enable_max_entropy,
-                inference_temperature=getattr(args, 'inference_temperature', 1.5),
-                max_entropy_inference=getattr(args, 'max_entropy_inference', True) and enable_max_entropy,
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
-                wandb_project=args.wandb_project,
-                wandb_run_name=wandb_run_name,
-                checkpoint_dir=checkpoint_dir,
-                checkpoint_freq=getattr(args, 'checkpoint_freq', 50),
-            )
-            reward_function = calculate_stepwise_reward
-        elif getattr(args, 'use_sb3_discrete_ppo', False):
+        if getattr(args, 'use_sb3_discrete_ppo', False):
             # Determine max-entropy mode settings (default: enabled)
             enable_max_entropy = getattr(args, 'enable_max_entropy', True)  # Default: True (max-entropy enabled)
             max_entropy_inference_enabled = getattr(args, 'max_entropy_inference', True) and enable_max_entropy  # Default: True if max-entropy enabled
@@ -447,22 +399,9 @@ def get_model_answers(
             
             if online_policy is not None:
                 # Online RL: predict parameters (inference mode during warmup)
-                if hasattr(online_policy, 'predict_parameters'):
-                    result = online_policy.predict_parameters(
-                        full_context, training_mode=False  # No exploration during warmup
-                    )
-                    # Handle different return formats (dict for stepwise, tuple for standard)
-                    if isinstance(result, dict):
-                        predicted_total_tokens = result['total_tokens']
-                        predicted_depth = result['depth']
-                        predicted_top_k = result['tree_top_k']
-                    else:
-                        predicted_total_tokens, predicted_depth, predicted_top_k = result
-                else:
-                    # Fallback for policies without predict_parameters
-                    predicted_total_tokens = args.total_token
-                    predicted_depth = args.depth
-                    predicted_top_k = args.top_k
+                predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                    full_context, training_mode=False  # No exploration during warmup
+                )
                 print(f"Online RL predicted params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
             elif rl_policy is not None:
                 # Offline RL policy
@@ -481,15 +420,37 @@ def get_model_answers(
             # Use no_grad for model inference to save memory and computation
             try:
                 with torch.no_grad():
-                    output_ids, new_token, idx = model.eagenerate(
-                        torch.as_tensor(input_ids).cuda(),
-                        temperature=temperature,
-                        log=True,
-                        is_llama3=True,
-                        total_tokens=predicted_total_tokens,
-                        depth=predicted_depth,
-                        tree_top_k=predicted_top_k,
-                    )
+                    if args.use_stepwise_rl and online_policy is not None:
+                        # Step-wise RL mode: pass RL policy to eagenerate
+                        result = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            is_llama3=True,
+                            total_tokens=predicted_total_tokens,  # Fallback values
+                            depth=predicted_depth,
+                            tree_top_k=predicted_top_k,
+                            rl_policy=online_policy,
+                            training_mode=False,  # No training during warmup
+                        )
+                        # Handle variable return values from step-wise RL
+                        if len(result) == 5:  # Step-wise RL with log=True
+                            output_ids, new_token, idx, step_rewards, step_count = result
+                            print(f"Warmup with step-wise RL completed: {new_token} tokens, {step_count} steps")
+                        else:  # Fallback to traditional
+                            output_ids, new_token, idx = result
+                            print(f"Warmup completed: {new_token} tokens generated")
+                    else:
+                        # Traditional mode: fixed parameters for entire generation
+                        output_ids, new_token, idx = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            is_llama3=True,
+                            total_tokens=predicted_total_tokens,
+                            depth=predicted_depth,
+                            tree_top_k=predicted_top_k,
+                        )
             except RuntimeError as e:
                 if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
@@ -502,15 +463,36 @@ def get_model_answers(
                 
                     try:
                         with torch.no_grad():
-                            output_ids, new_token, idx = model.eagenerate(
-                                torch.as_tensor(input_ids).cuda(),
-                                temperature=temperature,
-                                log=True,
-                                is_llama3=True,
-                                total_tokens=safe_total_tokens,
-                                depth=safe_depth,
-                                tree_top_k=safe_top_k,
-                            )
+                            if args.use_stepwise_rl and online_policy is not None:
+                                # Step-wise RL fallback mode
+                                result = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    total_tokens=safe_total_tokens,  # Conservative fallback
+                                    depth=safe_depth,
+                                    tree_top_k=safe_top_k,
+                                    rl_policy=online_policy,
+                                    training_mode=False,  # No training during fallback
+                                )
+                                # Handle variable return values from step-wise RL
+                                if len(result) == 5:  # Step-wise RL with log=True
+                                    output_ids, new_token, idx, step_rewards, step_count = result
+                                    print(f"Fallback warmup with step-wise RL: {new_token} tokens, {step_count} steps")
+                                else:  # Fallback to traditional
+                                    output_ids, new_token, idx = result
+                            else:
+                                # Traditional fallback mode  
+                                output_ids, new_token, idx = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    total_tokens=safe_total_tokens,
+                                    depth=safe_depth,
+                                    tree_top_k=safe_top_k,
+                                )
                     except RuntimeError as e2:
                         print(f"❌ Even ultra-conservative warmup failed: {e2}")
                         print("   Skipping warmup - proceeding with standard generation")
@@ -626,29 +608,15 @@ def get_model_answers(
                     # Online RL: predict parameters with appropriate training mode
                     if args.online_inference_only:
                         # Inference-only mode: no training, no exploration
-                        result = online_policy.predict_parameters(
+                        predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                             full_context, training_mode=False
                         )
-                        # Handle different return formats (dict for stepwise, tuple for standard)
-                        if isinstance(result, dict):
-                            predicted_total_tokens = result['total_tokens']
-                            predicted_depth = result['depth']
-                            predicted_top_k = result['tree_top_k']
-                        else:
-                            predicted_total_tokens, predicted_depth, predicted_top_k = result
                         print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                     else:
                         # Training mode: enable exploration and learning
-                        result = online_policy.predict_parameters(
+                        predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                             full_context, training_mode=True
                         )
-                        # Handle different return formats (dict for stepwise, tuple for standard)
-                        if isinstance(result, dict):
-                            predicted_total_tokens = result['total_tokens']
-                            predicted_depth = result['depth']
-                            predicted_top_k = result['tree_top_k']
-                        else:
-                            predicted_total_tokens, predicted_depth, predicted_top_k = result
                         print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                 elif rl_policy is not None:
                     # Offline RL policy
@@ -664,57 +632,40 @@ def get_model_answers(
                 torch.cuda.synchronize()
                 start_time = time.time()
 
-                # Choose generation method based on step-wise RL setting
-                use_stepwise = getattr(args, 'use_stepwise_rl', False) and isinstance(model, StepwiseEaModel)
+                # Use no_grad for model inference to save memory and computation
+                max_retries = 1 # default is 3, here, we set it to 1 for faster inference
+                retry_count = 0
+                success = False
                 
-                if use_stepwise:
-                    # Step-wise RL generation: real-time parameter optimization at each draft/verify step
-                    print(f"🎯 Using step-wise RL generation with policy control at each step")
-                    # try:
-                    with torch.no_grad():
-                        output_ids, generation_log = model.stepwise_eagenerate(
-                            torch.as_tensor(input_ids).cuda(),
-                            rl_policy=online_policy,
-                            reward_function=reward_function if online_policy else None,
-                            temperature=temperature,
-                            log=True,
-                            is_llama3=True,
-                            default_total_tokens=predicted_total_tokens,
-                            default_depth=predicted_depth,
-                            default_tree_top_k=predicted_top_k,
-                        )
-                        # Extract metrics for compatibility
-                        new_token = generation_log['total_tokens_generated']
-                        idx = generation_log['total_steps']
-                        
-                        # Log step-wise generation details
-                        if hasattr(args, 'log_stepwise_details') and args.log_stepwise_details:
-                            print(f"   Step-wise generation: {generation_log['total_steps']} steps, "
-                                    f"{generation_log['total_tokens_generated']} tokens, "
-                                    f"{generation_log.get('tokens_per_second', 0):.2f} tokens/sec")
-                            if generation_log.get('rl_decisions'):
-                                rl_decisions = generation_log['rl_decisions']
-                                avg_total_tokens = sum(d['total_tokens'] for d in rl_decisions if d['total_tokens']) / len([d for d in rl_decisions if d['total_tokens']]) if any(d['total_tokens'] for d in rl_decisions) else 0
-                                avg_depth = sum(d['depth'] for d in rl_decisions if d['depth']) / len([d for d in rl_decisions if d['depth']]) if any(d['depth'] for d in rl_decisions) else 0
-                                avg_top_k = sum(d['tree_top_k'] for d in rl_decisions if d['tree_top_k']) / len([d for d in rl_decisions if d['tree_top_k']]) if any(d['tree_top_k'] for d in rl_decisions) else 0
-                                print(f"   Avg RL params: total_tokens={avg_total_tokens:.1f}, depth={avg_depth:.1f}, top_k={avg_top_k:.1f}")
-                    success = True
-                    # except Exception as e:
-                    #     print(f"❌ Step-wise RL generation failed: {e}")
-                    #     print(f"   Falling back to standard generation...")
-                    #     success = False
-                else:
-                    # Standard generation with retry logic for robustness
-                    success = False
-                
-                # Standard generation (either as primary method or fallback)
-                if not success:
-                    max_retries = 1 # default is 3, here, we set it to 1 for faster inference
-                    retry_count = 0
-                    
-                    while retry_count < max_retries and not success:
-                        try:
-                            with torch.no_grad():
+                while retry_count < max_retries and not success:
+                    try:
+                        with torch.no_grad():
+                            if args.use_stepwise_rl and online_policy is not None:
+                                # Step-wise RL mode: pass RL policy and enable training
+                                training_mode = not args.online_inference_only
+                                result = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    is_llama3=True,
+                                    total_tokens=predicted_total_tokens,  # Fallback values
+                                    depth=predicted_depth,
+                                    tree_top_k=predicted_top_k,
+                                    rl_policy=online_policy,
+                                    training_mode=training_mode,
+                                )
+                                # Handle variable return values from step-wise RL
+                                if len(result) == 5:  # Step-wise RL with log=True
+                                    output_ids, new_token, idx, step_rewards, step_count = result
+                                    if training_mode:
+                                        print(f"Step-wise RL training: {new_token} tokens, {step_count} steps, avg reward: {sum(step_rewards)/len(step_rewards):.2f}")
+                                    else:
+                                        print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                                else:  # Fallback to traditional
+                                    output_ids, new_token, idx = result
+                                    print(f"Step-wise RL (fallback): {new_token} tokens, {idx+1} steps")
+                            else:
+                                # Traditional mode: fixed parameters for entire generation
                                 output_ids, new_token, idx = model.eagenerate(
                                     torch.as_tensor(input_ids).cuda(),
                                     temperature=temperature,
@@ -724,35 +675,37 @@ def get_model_answers(
                                     depth=predicted_depth,
                                     tree_top_k=predicted_top_k,
                                 )
-                            success = True
+                        success = True
+                        
+                    except RuntimeError as e:
+                        if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
+                            retry_count += 1
+                            print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k} (attempt {retry_count}/{max_retries})")
+                            print(f"   Error: {e}")
                             
-                        except RuntimeError as e:
-                            if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
-                                retry_count += 1
-                                print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k} (attempt {retry_count}/{max_retries})")
-                                print(f"   Error: {e}")
+                            if retry_count < max_retries:
+                                print(f"   Trying more conservative parameters...")
+                                # Make parameters increasingly conservative with each retry
+                                if retry_count == 1:
+                                    # First retry: moderate reduction
+                                    predicted_total_tokens = min(32, predicted_total_tokens // 2)
+                                    predicted_depth = max(3, min(predicted_depth, 4))  
+                                    predicted_top_k = max(4, min(predicted_top_k, 8))
+                                elif retry_count == 2:
+                                    # Second retry: very conservative
+                                    predicted_total_tokens = 16
+                                    predicted_depth = 3
+                                    predicted_top_k = 4
                                 
-                                if retry_count < max_retries:
-                                    print(f"   Trying more conservative parameters...")
-                                    # Make parameters increasingly conservative with each retry
-                                    if retry_count == 1:
-                                        # First retry: moderate reduction
-                                        predicted_total_tokens = min(32, predicted_total_tokens // 2)
-                                        predicted_depth = max(3, min(predicted_depth, 4))  
-                                        predicted_top_k = max(4, min(predicted_top_k, 8))
-                                    elif retry_count == 2:
-                                        # Second retry: very conservative
-                                        predicted_total_tokens = 16
-                                        predicted_depth = 3
-                                        predicted_top_k = 4
-                                    
-                                    print(f"   Using safer params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
-                                else:
-                                    print(f"   All retries failed. Skipping this question...")
-                                    break
+                                print(f"   Using safer params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                             else:
-                                # Re-raise non-KV cache related errors
-                                raise e                # If all retries failed, skip this entire question
+                                print(f"   All retries failed. Skipping this question...")
+                                break
+                        else:
+                            # Re-raise non-KV cache related errors
+                            raise e
+                
+                # If all retries failed, skip this entire question
                 if not success:
                     print(f"⏭️  Skipping question {question_count}/{len(questions)} due to persistent KV cache errors")
                     question_failed = True
@@ -792,8 +745,7 @@ def get_model_answers(
                 output = output.strip()
 
                 # Online RL: Update policy with reward from this generation (if training enabled)
-                # Note: Step-wise RL handles updates internally, so only update for non-stepwise policies
-                if online_policy is not None and not args.online_inference_only and not getattr(args, 'use_stepwise_rl', False):
+                if online_policy is not None and not args.online_inference_only:
                     # Convert tensor values to Python scalars
                     new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
                     
@@ -820,23 +772,6 @@ def get_model_answers(
                                 "progress_reward": online_reward,
                                 "progress_tokens_per_sec": new_token_scalar/total_time,
                                 "progress_step": online_policy.step_count
-                            })
-                elif getattr(args, 'use_stepwise_rl', False) and online_policy is not None and not args.online_inference_only:
-                    # Step-wise RL already handles updates internally, just log summary if available
-                    if hasattr(locals(), 'generation_log') and generation_log.get('steps'):
-                        avg_reward = sum(s.get('reward', 0) for s in generation_log['steps'] if 'reward' in s) / len([s for s in generation_log['steps'] if 'reward' in s]) if any('reward' in s for s in generation_log['steps']) else 0
-                        total_steps = len(generation_log['steps'])
-                        print(f"Step-wise RL Summary: {total_steps} steps, avg reward={avg_reward:.3f}, "
-                              f"tokens/sec={generation_log.get('tokens_per_second', 0):.1f}")
-                        
-                        # Wandb logging for step-wise summary
-                        if online_policy.use_wandb:
-                            import wandb
-                            wandb.log({
-                                "stepwise_avg_reward": avg_reward,
-                                "stepwise_total_steps": total_steps,
-                                "stepwise_tokens_per_sec": generation_log.get('tokens_per_second', 0),
-                                "stepwise_generation_count": online_policy.steps_taken if hasattr(online_policy, 'steps_taken') else 0
                             })
 
                 # Collect RL training data if requested
@@ -1222,16 +1157,6 @@ if __name__ == "__main__":
         help="Use Stable Baselines 3 Discrete PPO for optimized and robust learning"
     )
     parser.add_argument(
-        "--use-stepwise-rl",
-        action="store_true",
-        help="Use step-wise RL for real-time parameter optimization at each draft/verify step (requires --use-online-rl)"
-    )
-    parser.add_argument(
-        "--log-stepwise-details",
-        action="store_true",
-        help="Log detailed step-wise generation information (only with --use-stepwise-rl)"
-    )
-    parser.add_argument(
         "--ppo-epochs",
         type=int,
         default=10,
@@ -1315,6 +1240,20 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable max-entropy inference and use deterministic inference (SB3 PPO only)"
     )
+    
+    # Step-wise RL arguments
+    parser.add_argument(
+        "--use-stepwise-rl",
+        action="store_true",
+        help="Enable step-wise RL: predict parameters at each draft step instead of once per turn (requires --use-online-rl)"
+    )
+    parser.add_argument(
+        "--stepwise-reward-type",
+        type=str,
+        default="tokens_per_second",
+        choices=["tokens_per_second", "acceptance_rate", "combined"],
+        help="Type of reward to use for step-wise RL training (step-wise RL only)"
+    )
 
     args = parser.parse_args()
     
@@ -1333,17 +1272,22 @@ if __name__ == "__main__":
     # Handle max-entropy inference argument
     if getattr(args, 'no_max_entropy_inference', False):
         args.max_entropy_inference = False
+    
+    # Validate step-wise RL arguments
+    if getattr(args, 'use_stepwise_rl', False):
+        if not args.use_online_rl:
+            print("❌ Error: --use-stepwise-rl requires --use-online-rl")
+            print("   Step-wise RL can only be used with online RL policies that support real-time learning")
+            exit(1)
+        print("🔀 Step-wise RL enabled: Parameters will be predicted at each draft step")
+        print(f"   Reward type: {getattr(args, 'stepwise_reward_type', 'tokens_per_second')}")
 
     for k,v in vars(args).items():
         print(f"{k}={v}")
 
     # Print helpful information about RL vs fixed parameters
     if args.use_online_rl:
-        # Determine action space type for display - prioritize step-wise RL
-        if getattr(args, 'use_stepwise_rl', False):
-            enable_max_entropy = getattr(args, 'enable_max_entropy', True)
-            action_space_type = f"Step-wise {'Max-Entropy' if enable_max_entropy else 'Standard'} PPO (Real-time per step)"
-        elif getattr(args, 'use_sb3_discrete_ppo', False):
+        if getattr(args, 'use_sb3_discrete_ppo', False):
             enable_max_entropy = getattr(args, 'enable_max_entropy', True)  # Default: True (max-entropy enabled)
             mode_name = "SB3 Max-Entropy Discrete PPO" if enable_max_entropy else "SB3 Standard Discrete PPO"
             action_space_type = f"{mode_name} ({'Diverse Exploration' if enable_max_entropy else 'Standard Exploration'})"
@@ -1357,18 +1301,19 @@ if __name__ == "__main__":
             action_space_type = "Discrete (DQN)"
             
         print(f"\n🚀 Online RL Mode: Real-time learning and parameter optimization ({action_space_type})")
+        
+        # Step-wise RL information
+        if getattr(args, 'use_stepwise_rl', False):
+            print(f"🔀 Step-wise RL: Parameters predicted at each draft step (vs once per turn)")
+            print(f"   Reward type: {getattr(args, 'stepwise_reward_type', 'tokens_per_second')}")
+            print(f"   Training granularity: Sub-turn level (fine-grained optimization)")
+        else:
+            print(f"🎯 Turn-wise RL: Parameters predicted once per turn (traditional)")
+            print(f"   Training granularity: Turn level (coarse-grained optimization)")
+        
         print(f"   Learning rate: {args.online_lr}")
         
-        if getattr(args, 'use_stepwise_rl', False):
-            enable_max_entropy = getattr(args, 'enable_max_entropy', True)
-            print(f"   Step-wise Mode: {'Max-Entropy' if enable_max_entropy else 'Standard'} PPO (Real-time per step)")
-            print(f"   Step-wise policy updates: After each draft/verify step")
-            print(f"   Step memory size: {getattr(args, 'step_memory_size', 1000)}")
-            print(f"   Step context: Enhanced with recent performance metrics")
-            print(f"   Checkpoint frequency: Every {getattr(args, 'checkpoint_freq', 50)} steps")
-            if getattr(args, 'log_stepwise_details', False):
-                print(f"   Detailed step logging: Enabled")
-        elif getattr(args, 'use_sb3_discrete_ppo', False):
+        if getattr(args, 'use_sb3_discrete_ppo', False):
             enable_max_entropy = getattr(args, 'enable_max_entropy', True)  # Default: True (max-entropy enabled)
             print(f"   SB3 Mode: {'Max-Entropy' if enable_max_entropy else 'Standard'} PPO")
             print(f"   SB3 PPO n_steps: {getattr(args, 'ppo_n_steps', 64)}")
@@ -1407,9 +1352,6 @@ if __name__ == "__main__":
         
         if getattr(args, 'use_ppo', False) or getattr(args, 'continuous_action_space', False):
             print(f"   Action Space: Continuous (total_tokens: 16-128, depth: 2-8, top_k: 2-32)")
-        elif getattr(args, 'use_stepwise_rl', False):
-            print(f"   Action Space: Step-wise discrete (parameters selected per draft/verify step)")
-            print(f"   Step optimization: Real-time parameter adaptation during generation")
         else:
             print(f"   Action Space: Discrete (valid combinations from 6×6×5=180 total bins)")
         if not args.online_inference_only:
@@ -1422,10 +1364,14 @@ if __name__ == "__main__":
         print("\n🤖 Offline RL Policy Mode: Tree parameters will be predicted dynamically by RL policy")
         print(f"   Fallback parameters: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
         print(f"   RL policy path: {args.rl_policy_path}")
+        if getattr(args, 'use_stepwise_rl', False):
+            print("⚠️  Warning: Step-wise RL ignored in offline RL mode (requires online learning)")
     else:
         print(f"\n⚙️  Fixed Parameter Mode: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
         if args.collect_rl_data:
             print("   Data collection enabled for future RL training")
+        if getattr(args, 'use_stepwise_rl', False):
+            print("⚠️  Warning: Step-wise RL ignored in fixed parameter mode (requires online RL)")
 
     args.model_id = args.model_id + "-temperature-" + str(args.temperature)
     if args.num_gpus_total // args.num_gpus_per_model > 1:
