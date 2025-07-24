@@ -289,7 +289,7 @@ class EaModel(nn.Module):
                 step_states.append(initial_state)
                 step_actions.append((step_total_tokens, step_depth, step_top_k))
             
-            print(f"Step 0 RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+            # print(f"Step 0 RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
         else:
             # Use provided or default parameters
             step_total_tokens = total_tokens
