@@ -199,7 +199,7 @@ echo "Generating baseline results for comprehensive comparison..." | tee -a log/
 echo "" | tee -a log/$DATE/comparison.txt
 
 # Create consolidated results summary
-echo "Performance Summary Report" > log/$DATE/summary.txt
+echo "Performance Summary Report" >> log/$DATE/summary.txt
 echo "=========================" >> log/$DATE/summary.txt
 echo "Training Date: $DATE" >> log/$DATE/summary.txt
 echo "Model: $MODEL_PATH" >> log/$DATE/summary.txt
