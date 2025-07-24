@@ -163,7 +163,7 @@ class OnlineTreePolicy:
         
         print(f"Max-Entropy Online RL Policy initialized:")
         print(f"  - State dim: {self.state_dim}")
-        print(f"  - Action space: {self.total_actions} total ({self.n_total_tokens}×{self.n_depth}×{self.n_top_k})")
+        print(f"  - Action space: {self.total_actions} total ({self.n_total_tokens}x{self.n_depth}x{self.n_top_k})")
         print(f"  - Valid actions: {len(self.valid_actions)} ({len(self.valid_actions)/self.total_actions*100:.1f}%)")
         print(f"  - Constraint: total_tokens ≤ top_k^(depth-1)")
         print(f"  - Learning rate: {learning_rate}")
@@ -179,25 +179,7 @@ class OnlineTreePolicy:
         print(f"  - Learning rate: {learning_rate}")
         print(f"  - Device: {self.device}")
         print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
-        
-        # Show some example valid/invalid combinations
         print(f"valid: tt≤k^(d-1)")
-        # for i, action in enumerate(self.valid_actions[:3]):
-        #     tt, d, k = self._action_to_params(action)
-        #     max_tt = k**(d-1)
-        #     print(f"    • tt={tt}, d={d}, k={k} → max_tt={max_tt} ✓")
-        
-        # if len(self.valid_actions) < self.total_actions:
-        #     print(f"  - Example invalid:")
-        #     invalid_count = 0
-        #     for action in range(self.total_actions):
-        #         if action not in self.valid_actions:
-        #             tt, d, k = self._action_to_params(action)
-        #             max_tt = k**(d-1)
-        #             print(f"    • tt={tt}, d={d}, k={k} → max_tt={max_tt} ✗")
-        #             invalid_count += 1
-        #             if invalid_count >= 2:  # Show max 2 examples
-        #                 break
     
     def _build_network(self):
         """Build Q-network architecture with better initialization"""
@@ -301,12 +283,13 @@ class OnlineTreePolicy:
             self.last_entropy = entropy
             
             # Debug print for training mode with entropy info
-            max_tokens = top_k ** (depth - 1)
-            print(f"Max-Entropy RL {exploration_mode} (ε={self.epsilon:.3f}, H={entropy:.3f}): tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
+            # max_tokens = top_k ** (depth - 1)
+            # print(f"Max-Entropy RL {exploration_mode} (ε={self.epsilon:.3f}, H={entropy:.3f}): tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
         else:
+            pass
             # Inference mode
-            max_tokens = top_k ** (depth - 1)
-            print(f"Max-Entropy RL {exploration_mode} (T={self.inference_temperature:.1f}, H={entropy:.3f}): tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
+            # max_tokens = top_k ** (depth - 1)
+            # print(f"Max-Entropy RL {exploration_mode} (T={self.inference_temperature:.1f}, H={entropy:.3f}): tt={total_tokens}, d={depth}, k={top_k} (max={max_tokens})")
         
         return total_tokens, depth, top_k
     
@@ -349,7 +332,7 @@ class OnlineTreePolicy:
         if hasattr(self, 'last_entropy') and self.entropy_weight > 0:
             entropy_bonus = self.entropy_weight * self.last_entropy
             augmented_reward = reward + entropy_bonus
-            print(f"  → Entropy bonus: {entropy_bonus:.3f} (H={self.last_entropy:.3f}, w={self.entropy_weight})")
+            # print(f"  → Entropy bonus: {entropy_bonus:.3f} (H={self.last_entropy:.3f}, w={self.entropy_weight})")
         else:
             augmented_reward = reward
         
@@ -379,14 +362,14 @@ class OnlineTreePolicy:
         
         # Debug info for learning with entropy info
         explore_str = getattr(self, 'last_exploration_mode', 'UNKNOWN')
-        entropy_str = f", H={getattr(self, 'last_entropy', 0):.3f}" if hasattr(self, 'last_entropy') else ""
-        print(f"  → Reward: {reward:.3f} (aug: {augmented_reward:.3f}) for {self.last_params} ({explore_str}{entropy_str})")
+        # entropy_str = f", H={getattr(self, 'last_entropy', 0):.3f}" if hasattr(self, 'last_entropy') else ""
+        # print(f"  → Reward: {reward:.3f} (aug: {augmented_reward:.3f}) for {self.last_params} ({explore_str}{entropy_str})")
         
         # Learn from experience if we have enough samples
         if len(self.memory) >= self.batch_size:
             loss = self._learn_from_batch()
             self.loss_history.append(loss)
-            print(f"  → Policy updated! Memory: {len(self.memory)}/{self.memory.maxlen}")
+            # print(f"  → Policy updated! Memory: {len(self.memory)}/{self.memory.maxlen}")
         
         # Update exploration rate
         old_epsilon = self.epsilon
@@ -437,16 +420,18 @@ class OnlineTreePolicy:
             
             # Add recent performance metrics
             if len(self.reward_history) >= 10:
-                log_dict["avg_reward_10"] = np.mean(self.reward_history[-10:])
+                log_dict["avg_reward_10"] = torch.mean(torch.tensor(self.reward_history[-10:])).item()
+                log_dict["avg_tokens_per_second_10"] = torch.mean(torch.tensor(self.tokens_per_second_history[-10:])).item()
             if len(self.reward_history) >= 50:
-                log_dict["avg_reward_50"] = np.mean(self.reward_history[-50:])
-            
+                log_dict["avg_reward_50"] = torch.mean(torch.tensor(self.reward_history[-50:])).item()
+                log_dict["avg_tokens_per_second_50"] = torch.mean(torch.tensor(self.tokens_per_second_history[-50:])).item()
+
             wandb.log(log_dict)
             
         # Show statistics every 10 steps
         if self.step_count % 10 == 0:
             recent_rewards = self.reward_history[-10:]
-            avg_reward = np.mean(recent_rewards)
+            avg_reward = torch.mean(torch.tensor(recent_rewards)).item()
             print(f"Step {self.step_count}: Recent avg reward: {avg_reward:.3f}, ε={self.epsilon:.3f}")
             
             # Show parameter diversity
@@ -741,8 +726,8 @@ class OnlineTreePolicy:
         
         return {
             'total_episodes': len(self.reward_history),
-            'avg_reward_recent': np.mean(recent_rewards),
-            'avg_reward_overall': np.mean(self.reward_history),
+            'avg_reward_recent': torch.mean(torch.tensor(recent_rewards)).item(),
+            'avg_reward_overall': torch.mean(torch.tensor(self.reward_history)).item(),
             'epsilon': self.epsilon,
             'most_used_params': sorted(param_stats.items(), key=lambda x: x[1], reverse=True)[:5],
             'reward_trend': recent_rewards[-10:] if len(recent_rewards) >= 10 else recent_rewards

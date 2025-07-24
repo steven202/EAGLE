@@ -1120,7 +1120,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-checkpoints",
         type=int,
-        default=3,
+        default=1,
         help="Maximum number of checkpoints to keep (older ones are automatically deleted)"
     )
     parser.add_argument(
