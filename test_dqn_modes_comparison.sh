@@ -5,7 +5,8 @@
 # NOTE: Max-Entropy DQN is now the DEFAULT mode. Use --disable-max-entropy for Standard DQN.
 
 DATE=$(date '+%Y%m%d_%H%M')
-DATE='20250723_2341'
+DATE='20250724_0357'
+DATE="${DATE}_dqn"
 MODEL_PATH="/home/guo/EAGLE_RL/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
 QUESTION_END=200
@@ -45,7 +46,7 @@ echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
 echo "- NOTE: Max-entropy mode is now the default - no explicit flags needed" | tee -a log/$DATE/comparison.txt
 echo "" | tee -a log/$DATE/comparison.txt
 
-python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --base-model-path "$BASE_MODEL_PATH" \
     --ea-model-path "$MODEL_PATH" \
     --model-id "eagle-max-entropy-dqn-formal-$DATE" \
@@ -80,7 +81,7 @@ echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
 echo "- NOTE: Using --disable-max-entropy to override default max-entropy mode" | tee -a log/$DATE/comparison.txt
 echo "" | tee -a log/$DATE/comparison.txt
 
-python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --base-model-path "$BASE_MODEL_PATH" \
     --ea-model-path "$MODEL_PATH" \
     --model-id "eagle-standard-dqn-formal-$DATE" \

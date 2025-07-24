@@ -417,7 +417,7 @@ def get_model_answers(
             torch.cuda.synchronize()
             start_time = time.time()
 
-            # Use no_grad for model inference to save memory and computation
+            # Use no_grad for warmup since it's always inference mode
             try:
                 with torch.no_grad():
                     if args.use_stepwise_rl and online_policy is not None:
@@ -639,10 +639,13 @@ def get_model_answers(
                 
                 while retry_count < max_retries and not success:
                     try:
-                        with torch.no_grad():
+                        # Conditionally use torch.no_grad() only during inference mode
+                        training_mode = not args.online_inference_only
+                        
+                        if training_mode and online_policy is not None:
+                            # Training mode: allow gradients for RL policy learning
                             if args.use_stepwise_rl and online_policy is not None:
                                 # Step-wise RL mode: pass RL policy and enable training
-                                training_mode = not args.online_inference_only
                                 result = model.eagenerate(
                                     torch.as_tensor(input_ids).cuda(),
                                     temperature=temperature,
@@ -675,6 +678,40 @@ def get_model_answers(
                                     depth=predicted_depth,
                                     tree_top_k=predicted_top_k,
                                 )
+                        else:
+                            # Inference mode: use torch.no_grad() for memory efficiency
+                            with torch.no_grad():
+                                if args.use_stepwise_rl and online_policy is not None:
+                                    # Step-wise RL mode: pass RL policy but disable training
+                                    result = model.eagenerate(
+                                        torch.as_tensor(input_ids).cuda(),
+                                        temperature=temperature,
+                                        log=True,
+                                        is_llama3=True,
+                                        total_tokens=predicted_total_tokens,  # Fallback values
+                                        depth=predicted_depth,
+                                        tree_top_k=predicted_top_k,
+                                        rl_policy=online_policy,
+                                        training_mode=False,  # Inference only
+                                    )
+                                    # Handle variable return values from step-wise RL
+                                    if len(result) == 5:  # Step-wise RL with log=True
+                                        output_ids, new_token, idx, step_rewards, step_count = result
+                                        print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                                    else:  # Fallback to traditional
+                                        output_ids, new_token, idx = result
+                                        print(f"Step-wise RL (fallback): {new_token} tokens, {idx+1} steps")
+                                else:
+                                    # Traditional mode: fixed parameters for entire generation
+                                    output_ids, new_token, idx = model.eagenerate(
+                                        torch.as_tensor(input_ids).cuda(),
+                                        temperature=temperature,
+                                        log=True,
+                                        is_llama3=True,
+                                        total_tokens=predicted_total_tokens,
+                                        depth=predicted_depth,
+                                        tree_top_k=predicted_top_k,
+                                    )
                         success = True
                         
                     except RuntimeError as e:

@@ -7,9 +7,10 @@
 DATE=$(date '+%Y%m%d_%H%M')
 # DATE='20250721_1215'
 DATE='20250723_2117'
+DATE="${DATE}_ppo"
 MODEL_PATH="/home/guo/EAGLE_RL/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=400
+QUESTION_END=600
 
 # Create single unified log directory
 mkdir -p log/$DATE/{standard_ppo,max_entropy_ppo,baseline_results,evaluation}
@@ -42,7 +43,7 @@ echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
 echo "- NOTE: Max-entropy mode is now the default - no explicit flags needed" | tee -a log/$DATE/comparison.txt
 echo "" | tee -a log/$DATE/comparison.txt
 
-python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --base-model-path "$BASE_MODEL_PATH" \
     --ea-model-path "$MODEL_PATH" \
     --model-id "eagle-max-entropy-ppo-formal-$DATE" \
@@ -80,7 +81,7 @@ echo "- Auto-resume: Enabled" | tee -a log/$DATE/comparison.txt
 echo "- NOTE: Using --disable-max-entropy to override default max-entropy mode" | tee -a log/$DATE/comparison.txt
 echo "" | tee -a log/$DATE/comparison.txt
 
-python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --base-model-path "$BASE_MODEL_PATH" \
     --ea-model-path "$MODEL_PATH" \
     --model-id "eagle-standard-ppo-formal-$DATE" \

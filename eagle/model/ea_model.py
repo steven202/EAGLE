@@ -190,7 +190,6 @@ class EaModel(nn.Module):
         else:
             return outputs, hidden_states
 
-    @torch.no_grad()
     def eagenerate(
             self,
             input_ids,
@@ -265,14 +264,25 @@ class EaModel(nn.Module):
         
         # For step-wise RL: get initial state for first prediction
         if use_stepwise_rl:
-            # Encode current context for RL policy
-            current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
-            initial_state = current_text
-            
-            # Predict initial parameters
-            step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                initial_state, training_mode=training_mode
-            )
+            if training_mode:
+                # Encode current context for RL policy
+                current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                initial_state = current_text
+                
+                # Predict initial parameters
+                step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                    initial_state, training_mode=training_mode
+                )
+            else:
+                with torch.no_grad():
+                    # Encode current context for RL policy
+                    current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                    initial_state = current_text
+                    
+                    # Predict initial parameters
+                    step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                        initial_state, training_mode=training_mode
+                    )
             
             # Store step info for training
             if training_mode:
@@ -286,10 +296,11 @@ class EaModel(nn.Module):
             step_depth = depth
             step_top_k = tree_top_k
         
-        # prefill
-        draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
-            input_ids, self, past_key_values, logits_processor, step_total_tokens, step_depth, step_top_k
-        )
+        # prefill - model inference, disable gradients for efficiency
+        with torch.no_grad():
+            draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
+                input_ids, self, past_key_values, logits_processor, step_total_tokens, step_depth, step_top_k
+            )
         new_token = 0
         max_length = max_length - self.ea_layer.total_tokens - 10
         for idx in range(max_length):
@@ -297,22 +308,40 @@ class EaModel(nn.Module):
             step_start_time = time.time()
             
             if use_stepwise_rl and idx > 0:  # Skip first iteration since we already predicted
-                # Get current context for RL policy
-                current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
-                current_state = current_text
-                
-                # Predict parameters for this step
-                step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                    current_state, training_mode=training_mode
-                )
-                
-                # Store step info for training
                 if training_mode:
-                    step_states.append(current_state)
-                    step_actions.append((step_total_tokens, step_depth, step_top_k))
-                if len(step_rewards) % 30 == 0:
-                    print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
-                # print(f"Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                    # Get current context for RL policy
+                    current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                    current_state = current_text
+                    
+                    # Predict parameters for this step
+                    step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                        current_state, training_mode=training_mode
+                    )
+                    
+                    # Store step info for training
+                    if training_mode:
+                        step_states.append(current_state)
+                        step_actions.append((step_total_tokens, step_depth, step_top_k))
+                    if len(step_rewards) % 30 == 0:
+                        print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                else:
+                    with torch.no_grad():
+                        # Get current context for RL policy
+                        current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                        current_state = current_text
+                        
+                        # Predict parameters for this step
+                        step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                            current_state, training_mode=training_mode
+                        )
+                        
+                        # Store step info for training
+                        if training_mode:
+                            step_states.append(current_state)
+                            step_actions.append((step_total_tokens, step_depth, step_top_k))
+                        if len(step_rewards) % 30 == 0:
+                            print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                        # print(f"Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
                 
                 # Update model parameters for this step
                 self.ea_layer.total_tokens = step_total_tokens - 1 if step_total_tokens else self.ea_layer.total_tokens
@@ -322,25 +351,27 @@ class EaModel(nn.Module):
             # with Timer("all"):
             self.base_model.model.tree_mask = tree_mask
 
-            draft_tokens = draft_tokens.to(input_ids.device)
-            # Target model forward, get logits
-            logits, hidden_state_new, outputs = tree_decoding(
-                self,
-                draft_tokens,
-                past_key_values,
-                tree_position_ids,
-                input_ids,
-                retrieve_indices,
-            )
-            # retrieve_indices=tree_buffers["retrieve_indices"]
-            # logits = logits[0, retrieve_indices]
-            draft_tokens = torch.cat((draft_tokens, padding), dim=1)
-            candidates = draft_tokens[0, retrieve_indices]
-            # verification
-            best_candidate, accept_length, sample_p = evaluate_posterior(
-                logits, candidates, logits_processor
-            )
-            # print(accept_length)
+            # Model inference parts: disable gradients for efficiency
+            with torch.no_grad():
+                draft_tokens = draft_tokens.to(input_ids.device)
+                # Target model forward, get logits
+                logits, hidden_state_new, outputs = tree_decoding(
+                    self,
+                    draft_tokens,
+                    past_key_values,
+                    tree_position_ids,
+                    input_ids,
+                    retrieve_indices,
+                )
+                # retrieve_indices=tree_buffers["retrieve_indices"]
+                # logits = logits[0, retrieve_indices]
+                draft_tokens = torch.cat((draft_tokens, padding), dim=1)
+                candidates = draft_tokens[0, retrieve_indices]
+                # verification
+                best_candidate, accept_length, sample_p = evaluate_posterior(
+                    logits, candidates, logits_processor
+                )
+                # print(accept_length)
             
             # Calculate step reward for RL training
             step_end_time = time.time()
@@ -362,20 +393,21 @@ class EaModel(nn.Module):
                         print(f"  Warning: RL policy update failed at step {idx}: {e}")
             
             # Adjusting the input sequence, draft model forward
-            input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
-                input_ids,
-                candidates,
-                best_candidate,
-                accept_length,
-                retrieve_indices,
-                logits_processor,
-                new_token,
-                past_key_values_data,
-                current_length_data,
-                self,
-                hidden_state_new,
-                sample_p
-            )
+            with torch.no_grad():
+                input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
+                    input_ids,
+                    candidates,
+                    best_candidate,
+                    accept_length,
+                    retrieve_indices,
+                    logits_processor,
+                    new_token,
+                    past_key_values_data,
+                    current_length_data,
+                    self,
+                    hidden_state_new,
+                    sample_p
+                )
 
             if is_llama3:
                 if stop_token_id in input_ids[0, input_len:].tolist():

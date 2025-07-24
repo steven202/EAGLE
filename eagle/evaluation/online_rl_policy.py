@@ -202,10 +202,11 @@ class OnlineTreePolicy:
                 nn.init.constant_(layer.bias, 0.1)  # Small positive bias
         
         return network
-    
+    @torch.no_grad()
     def _encode_state(self, context):
         """Encode conversation context using SBERT"""
-        embedding = self.sbert_model.encode(context)
+        with torch.no_grad():
+            embedding = self.sbert_model.encode(context)
         return torch.FloatTensor(embedding).to(self.device)
     
     def _action_to_params(self, action):
@@ -374,14 +375,14 @@ class OnlineTreePolicy:
         # Update exploration rate
         old_epsilon = self.epsilon
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
-        if abs(old_epsilon - self.epsilon) > 0.001:
-            print(f"  → Exploration decreased: {old_epsilon:.3f} → {self.epsilon:.3f}")
+        # if abs(old_epsilon - self.epsilon) > 0.001:
+            # print(f"  → Exploration decreased: {old_epsilon:.3f} → {self.epsilon:.3f}")
         
         # Update target network periodically
         self.step_count += 1
         if self.step_count % self.target_update_freq == 0:
             self.target_network.load_state_dict(self.q_network.state_dict())
-            print(f"Step {self.step_count}: Updated target network, epsilon={self.epsilon:.3f}")
+            # print(f"Step {self.step_count}: Updated target network, epsilon={self.epsilon:.3f}")
         
         # Wandb logging for real-time tracking with entropy metrics
         if self.use_wandb:
@@ -432,12 +433,12 @@ class OnlineTreePolicy:
         if self.step_count % 10 == 0:
             recent_rewards = self.reward_history[-10:]
             avg_reward = torch.mean(torch.tensor(recent_rewards)).item()
-            print(f"Step {self.step_count}: Recent avg reward: {avg_reward:.3f}, ε={self.epsilon:.3f}")
+            # print(f"Step {self.step_count}: Recent avg reward: {avg_reward:.3f}, ε={self.epsilon:.3f}")
             
             # Show parameter diversity
             recent_params = self.parameter_history[-10:]
             unique_params = len(set(recent_params))
-            print(f"  → Parameter diversity: {unique_params}/10 unique combinations")
+            # print(f"  → Parameter diversity: {unique_params}/10 unique combinations")
             
     def save_checkpoint(self, checkpoint_name=None):
         """Save training checkpoint with automatic cleanup of old checkpoints"""
@@ -483,7 +484,7 @@ class OnlineTreePolicy:
         }
         
         torch.save(checkpoint_data, checkpoint_path)
-        print(f"💾 Checkpoint saved: {checkpoint_path}")
+        # print(f"💾 Checkpoint saved: {checkpoint_path}")
         
         # Cleanup old checkpoints
         self._cleanup_old_checkpoints()
@@ -501,10 +502,10 @@ class OnlineTreePolicy:
                     "step_count": self.step_count,
                     "questions_processed": self.questions_processed,
                     "epsilon": self.epsilon,
-                    "avg_reward_recent": np.mean(self.reward_history[-10:]) if len(self.reward_history) >= 10 else np.mean(self.reward_history) if self.reward_history else 0
+                    "avg_reward_recent": torch.mean(torch.tensor(self.reward_history[-10:])).item() if len(self.reward_history) >= 10 else torch.mean(torch.tensor(self.reward_history)).item() if self.reward_history else 0
                 }
                 wandb.log_artifact(artifact)
-                print(f"🔗 Checkpoint logged to wandb: {artifact.name}")
+                # print(f"🔗 Checkpoint logged to wandb: {artifact.name}")
             except Exception as e:
                 print(f"⚠️  Failed to log checkpoint artifact to wandb: {e}")
                 print("   Checkpoint still saved locally successfully")
@@ -668,8 +669,18 @@ class OnlineTreePolicy:
         """Learn from a batch of experiences using DQN with valid action masking"""
         batch = random.sample(self.memory, self.batch_size)
         
-        # Convert states to numpy array first, then to tensor (more efficient)
-        state_data = np.array([exp['state'].detach().cpu().numpy() for exp in batch])
+        # Convert states to tensor, handling both tensor and numpy array inputs
+        state_list = []
+        for exp in batch:
+            state = exp['state']
+            if isinstance(state, torch.Tensor):
+                # Already a tensor, just ensure it's on CPU and convert to numpy
+                state_list.append(state.cpu().numpy())
+            else:
+                # Already a numpy array
+                state_list.append(state)
+        
+        state_data = np.array(state_list)
         states = torch.FloatTensor(state_data).to(self.device)  # No requires_grad needed for inputs
         actions = torch.LongTensor([exp['action'] for exp in batch]).to(self.device)
         rewards = torch.FloatTensor([exp['reward'] for exp in batch]).to(self.device)
@@ -700,13 +711,13 @@ class OnlineTreePolicy:
         self.optimizer.step()
         
         if self.step_count % 50 == 0:
-            avg_reward = np.mean(self.reward_history[-50:]) if self.reward_history else 0
+            avg_reward = torch.mean(torch.tensor(self.reward_history[-50:])).item() if self.reward_history else 0
             print(f"Step {self.step_count}: Loss={loss.item():.4f}, Avg Reward={avg_reward:.4f}, Valid Actions: {len(self.valid_actions)}")
             
             # Show constraint compliance
             recent_params = self.parameter_history[-20:] if len(self.parameter_history) >= 20 else self.parameter_history
             violations = sum(1 for tt, d, k in recent_params if tt > k**(d-1))
-            print(f"  → Constraint violations in last {len(recent_params)} actions: {violations} ({violations/len(recent_params)*100:.1f}%)")
+            print(f"  → Constraint violations in last {len(recent_params)} actions: {violations} ({violations/len(recent_params)*100 if len(recent_params) != 0 else 0:.1f}%)")
         
         return loss.item()  # Return loss value for logging
     
@@ -773,7 +784,7 @@ class OnlineTreePolicy:
                     "final_epsilon": self.epsilon,
                     "total_steps": self.step_count,
                     "questions_processed": self.questions_processed,
-                    "final_avg_reward": np.mean(self.reward_history[-50:]) if len(self.reward_history) >= 50 else np.mean(self.reward_history),
+                    "final_avg_reward": torch.mean(torch.tensor(self.reward_history[-50:])).item() if len(self.reward_history) >= 50 else torch.mean(torch.tensor(self.reward_history)).item(),
                     "parameter_diversity": len(set(self.parameter_history[-100:])) if len(self.parameter_history) >= 100 else len(set(self.parameter_history)),
                     "valid_actions": len(self.valid_actions),
                     "total_actions": self.total_actions,
