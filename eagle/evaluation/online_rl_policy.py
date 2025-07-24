@@ -715,9 +715,9 @@ class OnlineTreePolicy:
             print(f"Step {self.step_count}: Loss={loss.item():.4f}, Avg Reward={avg_reward:.4f}, Valid Actions: {len(self.valid_actions)}")
             
             # Show constraint compliance
-            recent_params = self.parameter_history[-20:] if len(self.parameter_history) >= 20 else self.parameter_history
-            violations = sum(1 for tt, d, k in recent_params if tt > k**(d-1))
-            print(f"  → Constraint violations in last {len(recent_params)} actions: {violations} ({violations/len(recent_params)*100 if len(recent_params) != 0 else 0:.1f}%)")
+            # recent_params = self.parameter_history[-20:] if len(self.parameter_history) >= 20 else self.parameter_history
+            # violations = sum(1 for tt, d, k in recent_params if tt > k**(d-1))
+            # print(f"  → Constraint violations in last {len(recent_params)} actions: {violations} ({violations/len(recent_params)*100 if len(recent_params) != 0 else 0:.1f}%)")
         
         return loss.item()  # Return loss value for logging
     

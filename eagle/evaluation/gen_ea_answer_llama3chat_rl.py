@@ -611,7 +611,7 @@ def get_model_answers(
                         predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                             full_context, training_mode=False
                         )
-                        print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                        # print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                     else:
                         # Training mode: enable exploration and learning
                         predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
@@ -663,7 +663,8 @@ def get_model_answers(
                                     if training_mode:
                                         print(f"Step-wise RL training: {new_token} tokens, {step_count} steps, avg reward: {sum(step_rewards)/len(step_rewards):.2f}")
                                     else:
-                                        print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                                        # print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                                        pass
                                 else:  # Fallback to traditional
                                     output_ids, new_token, idx = result
                                     print(f"Step-wise RL (fallback): {new_token} tokens, {idx+1} steps")
@@ -697,7 +698,8 @@ def get_model_answers(
                                     # Handle variable return values from step-wise RL
                                     if len(result) == 5:  # Step-wise RL with log=True
                                         output_ids, new_token, idx, step_rewards, step_count = result
-                                        print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                                        # print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                                        pass
                                     else:  # Fallback to traditional
                                         output_ids, new_token, idx = result
                                         print(f"Step-wise RL (fallback): {new_token} tokens, {idx+1} steps")
