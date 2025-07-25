@@ -264,37 +264,47 @@ class EaModel(nn.Module):
         
         # For step-wise RL: get initial state for first prediction
         if use_stepwise_rl:
-            # Get initial state for first prediction
-            if hasattr(rl_policy, 'action_generation_freq'):  # Check if using optimized RL policy
-                # For optimized policy: we need layer features, but they're not available yet
-                # Use None for now - the policy will handle this gracefully
-                initial_state = None
-                print("🚀⚡ Using Optimized RL Policy with layer feature concatenation")
-            else:
-                # Traditional text-based state for non-optimized policies
-                current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
-                initial_state = current_text
-                print("🎯 Using Traditional RL Policy with text-based state")
+            # Check if this is an optimized policy that supports EAGLE-3 features
+            is_optimized_policy = hasattr(rl_policy, 'use_eagle3_features') and rl_policy.use_eagle3_features
             
             if training_mode:
-                # Predict initial parameters
-                step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                    initial_state, training_mode=training_mode
-                )
-            else:
-                with torch.no_grad():
-                    # Predict initial parameters
+                # Encode current context for RL policy
+                current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                initial_state = current_text
+                
+                # For optimized policies, we don't have hidden states yet, so pass None initially
+                if is_optimized_policy:
+                    step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                        context=initial_state, hidden_states=None, training_mode=training_mode
+                    )
+                else:
+                    # Traditional policy interface
                     step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
                         initial_state, training_mode=training_mode
                     )
+            else:
+                with torch.no_grad():
+                    # Encode current context for RL policy
+                    current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                    initial_state = current_text
+                    
+                    # For optimized policies, we don't have hidden states yet, so pass None initially
+                    if is_optimized_policy:
+                        step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                            context=initial_state, hidden_states=None, training_mode=training_mode
+                        )
+                    else:
+                        # Traditional policy interface
+                        step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                            initial_state, training_mode=training_mode
+                        )
             
             # Store step info for training
             if training_mode:
                 step_states.append(initial_state)
                 step_actions.append((step_total_tokens, step_depth, step_top_k))
             
-            policy_type = "Optimized" if hasattr(rl_policy, 'action_generation_freq') else "Traditional"
-            print(f"Initial {policy_type} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+            # print(f"Step 0 RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
         else:
             # Use provided or default parameters
             step_total_tokens = total_tokens
@@ -313,59 +323,55 @@ class EaModel(nn.Module):
             step_start_time = time.time()
             
             if use_stepwise_rl and idx > 0:  # Skip first iteration since we already predicted
-                # Extract layer features for optimized RL policy
-                layer_features = None
-                if hasattr(rl_policy, 'action_generation_freq'):  # Check if using optimized RL policy
-                    # Use EAGLE-3 layer features instead of text
-                    if self.use_eagle3 and hasattr(outputs, 'hidden_states') and outputs.hidden_states:
-                        # Extract concatenated features from the three layers used in EAGLE-3
-                        layer_features = outputs.hidden_states  # Already concatenated in tree_decoding
-                        current_state = layer_features
-                    else:
-                        # Fallback: extract from current hidden state
-                        current_state = hidden_state_new if 'hidden_state_new' in locals() else None
-                else:
-                    # Traditional text-based state for non-optimized policies
-                    current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
-                    current_state = current_text
+                # Check if this is an optimized policy that supports EAGLE-3 features
+                is_optimized_policy = hasattr(rl_policy, 'use_eagle3_features') and rl_policy.use_eagle3_features
                 
                 if training_mode:
-                    # Predict parameters for this step
-                    step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                        current_state, training_mode=training_mode
-                    )
+                    # Get current context for RL policy
+                    current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                    current_state = current_text
                     
-                    # Store step info for training
-                    if hasattr(rl_policy, 'action_generation_freq'):
-                        # For optimized policy, store layer features
-                        step_states.append(layer_features if layer_features is not None else current_state)
+                    # For optimized policies, pass EAGLE-3 hidden states if available
+                    if is_optimized_policy and 'hidden_state' in locals():
+                        step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                            context=current_state, hidden_states=hidden_state, training_mode=training_mode
+                        )
                     else:
-                        # For traditional policy, store text
-                        step_states.append(current_state)
-                    step_actions.append((step_total_tokens, step_depth, step_top_k))
-                    
-                    if len(step_rewards) % 30 == 0:
-                        policy_type = "Optimized" if hasattr(rl_policy, 'action_generation_freq') else "Traditional"
-                        print(f"  Step {idx} {policy_type} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
-                else:
-                    with torch.no_grad():
-                        # Predict parameters for this step
+                        # Traditional policy interface
                         step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
                             current_state, training_mode=training_mode
                         )
+                    
+                    # Store step info for training
+                    if training_mode:
+                        step_states.append(current_state)
+                        step_actions.append((step_total_tokens, step_depth, step_top_k))
+                    if len(step_rewards) % 30 == 0:
+                        print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                else:
+                    with torch.no_grad():
+                        # Get current context for RL policy
+                        current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                        current_state = current_text
+                        
+                        # For optimized policies, pass EAGLE-3 hidden states if available
+                        if is_optimized_policy and 'hidden_state' in locals():
+                            step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                                context=current_state, hidden_states=hidden_state, training_mode=training_mode
+                            )
+                        else:
+                            # Traditional policy interface
+                            step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                                current_state, training_mode=training_mode
+                            )
                         
                         # Store step info for training
-                        if hasattr(rl_policy, 'action_generation_freq'):
-                            # For optimized policy, store layer features
-                            step_states.append(layer_features if layer_features is not None else current_state)
-                        else:
-                            # For traditional policy, store text
+                        if training_mode:
                             step_states.append(current_state)
-                        step_actions.append((step_total_tokens, step_depth, step_top_k))
-                        
+                            step_actions.append((step_total_tokens, step_depth, step_top_k))
                         if len(step_rewards) % 30 == 0:
-                            policy_type = "Optimized" if hasattr(rl_policy, 'action_generation_freq') else "Traditional"
-                            print(f"  Step {idx} {policy_type} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                            print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                        # print(f"Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
                 
                 # Update model parameters for this step
                 self.ea_layer.total_tokens = step_total_tokens - 1 if step_total_tokens else self.ea_layer.total_tokens
