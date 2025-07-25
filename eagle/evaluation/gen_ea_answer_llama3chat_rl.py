@@ -898,7 +898,7 @@ def get_model_answers(
                     online_policy.update_policy(online_reward, total_time, new_token_scalar)
                     
                     # Print learning progress periodically
-                    if online_policy.step_count % 20 == 0:
+                    if not args.online_inference_only and online_policy.step_count % 20 == 0:
                         stats = online_policy.get_performance_stats()
                         print(f"Online RL Update: Reward={online_reward:.3f}, "
                               f"Avg Recent Reward={stats.get('avg_reward_recent', 0):.3f}, "

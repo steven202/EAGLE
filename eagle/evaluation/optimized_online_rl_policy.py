@@ -471,8 +471,11 @@ class OptimizedOnlineTreePolicy:
             )
             self.memory.append(experience)
             
+            # Convert reward to float to avoid tensor serialization issues
+            reward_value = reward.item() if hasattr(reward, 'item') else float(reward)
+            
             # Add to reward history
-            self.reward_history.append(reward)
+            self.reward_history.append(reward_value)
             
             # Learn from batch if enough experiences
             if len(self.memory) >= self.batch_size:
@@ -488,10 +491,10 @@ class OptimizedOnlineTreePolicy:
             # Log to wandb
             if self.use_wandb:
                 log_data = {
-                    "reward": reward,
+                    "reward": reward_value,
                     "epsilon": self.epsilon,
                     "step": self.step_count,
-                    "avg_reward_100": torch.mean(torch.tensor(list(self.reward_history)[-100:])).item(),
+                    "avg_reward_100": sum(list(self.reward_history)[-100:]) / min(len(self.reward_history), 100),
                     "exploration_mode": self.last_exploration_mode,
                     "entropy": self.last_entropy
                 }
@@ -595,6 +598,28 @@ class OptimizedOnlineTreePolicy:
         
         checkpoint_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}.pth")
         
+        # Convert tensors to Python numbers for JSON/pickle serialization
+        reward_history_serializable = []
+        for reward in self.reward_history:
+            if hasattr(reward, 'item'):  # PyTorch tensor
+                reward_history_serializable.append(reward.item())
+            else:
+                reward_history_serializable.append(float(reward))
+        
+        loss_history_serializable = []
+        for loss in self.loss_history:
+            if hasattr(loss, 'item'):  # PyTorch tensor
+                loss_history_serializable.append(loss.item())
+            else:
+                loss_history_serializable.append(float(loss))
+        
+        entropy_history_serializable = []
+        for entropy in self.entropy_history:
+            if hasattr(entropy, 'item'):  # PyTorch tensor
+                entropy_history_serializable.append(entropy.item())
+            else:
+                entropy_history_serializable.append(float(entropy))
+        
         # Save model state
         torch.save({
             'q_network_state_dict': self.q_network.state_dict(),
@@ -604,9 +629,9 @@ class OptimizedOnlineTreePolicy:
             'training_seed': self.training_seed,
             'step_count': self.step_count,
             'epsilon': self.epsilon,
-            'reward_history': list(self.reward_history),
-            'loss_history': list(self.loss_history),
-            'entropy_history': list(self.entropy_history),
+            'reward_history': reward_history_serializable,
+            'loss_history': loss_history_serializable,
+            'entropy_history': entropy_history_serializable,
             'cache_step_counter': self.cache_step_counter,
             'cached_params': self.cached_params,
             'action_cache_enabled': self.action_cache_enabled,
@@ -721,14 +746,26 @@ class OptimizedOnlineTreePolicy:
         rewards = list(self.reward_history)
         cache_hit_rate = (self.cache_step_counter / max(self.step_count, 1)) if self.action_cache_enabled else 0.0
         
+        # Since rewards are now stored as floats, we can compute stats directly
+        avg_reward = sum(rewards) / len(rewards)
+        variance = sum((r - avg_reward) ** 2 for r in rewards) / len(rewards)
+        reward_std = variance ** 0.5
+        
+        # Loss and entropy histories should also contain floats now
+        recent_losses = list(self.loss_history)[-100:]
+        avg_loss = sum(recent_losses) / len(recent_losses) if recent_losses else 0.0
+        
+        recent_entropies = list(self.entropy_history)[-100:]
+        avg_entropy = sum(recent_entropies) / len(recent_entropies) if recent_entropies else 0.0
+        
         return {
-            "avg_reward": torch.mean(torch.tensor(rewards)).item(),
-            "reward_std": torch.std(torch.tensor(rewards)).item(),
+            "avg_reward": avg_reward,
+            "reward_std": reward_std,
             "total_steps": self.step_count,
             "total_questions": self.questions_processed,
             "epsilon": self.epsilon,
-            "avg_loss": torch.mean(torch.tensor(list(self.loss_history)[-100:])).item() if self.loss_history else 0.0,
-            "avg_entropy": torch.mean(torch.tensor(list(self.entropy_history)[-100:])).item() if self.entropy_history else 0.0,
+            "avg_loss": avg_loss,
+            "avg_entropy": avg_entropy,
             "cache_hit_rate": cache_hit_rate
         }
     

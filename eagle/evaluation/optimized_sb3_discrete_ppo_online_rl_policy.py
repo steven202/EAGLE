@@ -551,8 +551,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     def update_policy(self, reward, generation_time=None, new_tokens=None):
         """Update policy with received reward"""
         if self.last_state is not None and self.last_action is not None:
+            # Convert reward to float to avoid tensor serialization issues
+            reward_value = reward.item() if hasattr(reward, 'item') else float(reward)
+            
             # Add to reward history
-            self.reward_history.append(reward)
+            self.reward_history.append(reward_value)
             
             # Store experience for SB3 learning
             # Note: SB3 handles the experience collection automatically during training
@@ -560,9 +563,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             # Log to wandb
             if self.use_wandb:
                 log_data = {
-                    "reward": reward,
+                    "reward": reward_value,
                     "step": self.step_count,
-                    "avg_reward_100": torch.mean(torch.tensor(list(self.reward_history)[-100:])).item(),
+                    "avg_reward_100": sum(list(self.reward_history)[-100:]) / min(len(self.reward_history), 100),
                 }
                 
                 if generation_time is not None:
@@ -598,11 +601,20 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         # Save additional state
         state_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}_state.json")
+        
+        # Convert tensors to Python numbers for JSON serialization
+        reward_history_serializable = []
+        for reward in self.reward_history:
+            if hasattr(reward, 'item'):  # PyTorch tensor
+                reward_history_serializable.append(reward.item())
+            else:
+                reward_history_serializable.append(float(reward))
+        
         state = {
             "questions_processed": self.questions_processed,
             "training_seed": self.training_seed,
             "step_count": self.step_count,
-            "reward_history": list(self.reward_history),
+            "reward_history": reward_history_serializable,
             "cache_step_counter": self.cache_step_counter,
             "cached_params": self.cached_params,
             "enable_max_entropy": self.enable_max_entropy,
@@ -714,9 +726,14 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             return {"avg_reward": 0.0, "reward_std": 0.0, "total_steps": self.step_count}
         
         rewards = list(self.reward_history)
+        # Since rewards are now stored as floats, we can compute stats directly
+        avg_reward = sum(rewards) / len(rewards)
+        variance = sum((r - avg_reward) ** 2 for r in rewards) / len(rewards)
+        reward_std = variance ** 0.5
+        
         return {
-            "avg_reward": torch.mean(torch.tensor(rewards)).item(),
-            "reward_std": torch.std(torch.tensor(rewards)).item(),
+            "avg_reward": avg_reward,
+            "reward_std": reward_std,
             "total_steps": self.step_count,
             "total_questions": self.questions_processed,
             "cache_hit_rate": (self.cache_step_counter / max(self.step_count, 1)) if self.action_cache_enabled else 0.0
