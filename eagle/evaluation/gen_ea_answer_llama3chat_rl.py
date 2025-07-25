@@ -177,6 +177,23 @@ def get_model_answers(
         # Setup checkpoint directory
         checkpoint_dir = args.checkpoint_dir if hasattr(args, 'checkpoint_dir') and args.checkpoint_dir else "checkpoints"
         
+        # Setup wandb authentication if needed
+        if not args.online_inference_only and not args.no_wandb:
+            try:
+                import wandb
+                # Use environment variable for API key (set WANDB_API_KEY in your environment)
+                wandb_api_key = os.environ.get('WANDB_API_KEY')
+                if wandb_api_key:
+                    wandb.login(key=wandb_api_key)
+                    print("✅ wandb authentication successful")
+                else:
+                    print("⚠️  WANDB_API_KEY environment variable not set")
+                    print("   Set it with: export WANDB_API_KEY=your_api_key")
+                    print("   Continuing without wandb logging...")
+            except Exception as e:
+                print(f"⚠️  wandb authentication failed: {e}")
+                print("   Continuing without wandb logging...")
+        
         wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
         
         # Choose between PPO, continuous, and discrete action space
