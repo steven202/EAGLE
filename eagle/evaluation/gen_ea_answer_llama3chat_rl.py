@@ -386,7 +386,9 @@ def get_model_answers(
                             print(f"📋 Resuming from question {questions_to_skip+1}/{len(questions) + questions_to_skip}")
                         elif questions_to_skip >= len(questions):
                             print("⚠️  All questions already processed in checkpoint")
+                            print(f"processed {questions_to_skip} questions")
                             questions = []
+                            exit(0)
                     else:
                         print("⚠️  No training seed in checkpoint, shuffling with default seed")
                         training_seed = getattr(args, 'training_seed', 42)
