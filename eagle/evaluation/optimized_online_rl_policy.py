@@ -242,25 +242,47 @@ class OptimizedOnlineTreePolicy:
     
     @torch.no_grad()
     def _encode_state_from_context(self, context):
-        """Fallback: Encode conversation context using SBERT (for backward compatibility)"""
+        """Fallback: Encode conversation context using intelligent SBERT→EAGLE-3 mapping"""
         if not hasattr(self, '_sbert_model'):
             from sentence_transformers import SentenceTransformer
             self._sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
         
         with torch.no_grad():
-            embedding = self._sbert_model.encode(context)
+            sbert_embedding = self._sbert_model.encode(context)  # Shape: (384,)
         
-        # Adapt SBERT embedding to expected feature dimension
-        if embedding.shape[0] != self.feature_dim:
-            if embedding.shape[0] > self.feature_dim:
-                adapted = embedding[:self.feature_dim]
-            else:
-                adapted = np.zeros(self.feature_dim)
-                adapted[:embedding.shape[0]] = embedding
-        else:
-            adapted = embedding
+        # SOLUTION: Intelligent feature mapping instead of zero-padding
+        # Use learned projection to maintain feature density and avoid 90% padding
+        if not hasattr(self, '_feature_mapper'):
+            # Create a learnable mapping from SBERT (384) to EAGLE-3 space (4096)
+            self._feature_mapper = torch.nn.Sequential(
+                torch.nn.Linear(384, self.feature_dim),
+                torch.nn.LayerNorm(self.feature_dim),  # Normalize to match EAGLE-3 scale
+                torch.nn.Tanh()  # Keep values in reasonable range
+            ).to(self.device)
+            
+            # Initialize with small weights to start conservative
+            with torch.no_grad():
+                for module in self._feature_mapper:
+                    if isinstance(module, torch.nn.Linear):
+                        torch.nn.init.xavier_uniform_(module.weight, gain=0.1)
+                        torch.nn.init.zeros_(module.bias)
+
+            print(f"🔧 Created SBERT→EAGLE-3 feature mapper for DQN policy (384→{self.feature_dim})")
+            print("   This avoids sparse padding and maintains feature density")
         
-        return torch.FloatTensor(adapted).to(self.device)
+        # Map SBERT features to EAGLE-3 compatible space
+        sbert_tensor = torch.FloatTensor(sbert_embedding).unsqueeze(0).to(self.device)
+        mapped_features = self._feature_mapper(sbert_tensor).squeeze(0)
+        
+        # Log the mapping for monitoring
+        if not hasattr(self, '_mapping_warned'):
+            print(f"⚠️  Using SBERT fallback with learned mapping:")
+            print(f"   Input: SBERT {sbert_embedding.shape} → Output: {mapped_features.shape}")
+            print(f"   Feature density: 100% (no zero padding)")
+            print(f"   Recommendation: Use EAGLE-3 features for best performance")
+            self._mapping_warned = True
+        
+        return mapped_features
     
     def _action_to_params(self, action):
         """Convert discrete action to parameter values"""
@@ -298,7 +320,7 @@ class OptimizedOnlineTreePolicy:
                 self.cache_step_counter += 1
                 
                 # Log cache hit
-                if self.use_wandb and self.cache_step_counter % 5 == 0:
+                if training_mode and self.use_wandb and self.cache_step_counter % 5 == 0:
                     wandb.log({
                         "cache_hit": 1,
                         "cache_step": self.cache_step_counter,
@@ -315,10 +337,26 @@ class OptimizedOnlineTreePolicy:
         if self.use_eagle3_features and hidden_states is not None:
             # Encode state from EAGLE-3 layer features
             state = self._encode_state_from_hidden_states(hidden_states)
+            
+            # Track usage for monitoring
+            if training_mode and self.use_wandb:
+                wandb.log({
+                    "feature_source": "eagle3",
+                    "sbert_usage": 0,
+                    "eagle3_usage": 1
+                })
         else:
             # Fallback to context-based encoding (if needed)
             if context is not None:
                 state = self._encode_state_from_context(context)
+                
+                # Track usage for monitoring
+                if training_mode and self.use_wandb:
+                    wandb.log({
+                        "feature_source": "sbert_mapped",
+                        "sbert_usage": 1,
+                        "eagle3_usage": 0
+                    })
             else:
                 # No input available, use zero state
                 state = torch.zeros(self.feature_dim, device=self.device)
@@ -331,7 +369,7 @@ class OptimizedOnlineTreePolicy:
             
             # Log entropy for monitoring
             self.entropy_history.append(entropy)
-            if self.use_wandb:
+            if training_mode and self.use_wandb:
                 wandb.log({
                     "inference_entropy": entropy,
                     "inference_temperature": self.inference_temperature,
@@ -369,7 +407,7 @@ class OptimizedOnlineTreePolicy:
             self.cache_hidden_states = hidden_states
             
             # Log cache update
-            if self.use_wandb:
+            if training_mode and self.use_wandb:
                 wandb.log({
                     "cache_update": 1,
                     "new_cached_params": {
