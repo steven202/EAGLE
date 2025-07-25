@@ -169,15 +169,13 @@ class OptimizedOnlineTreePolicy:
     def _build_network(self):
         """Build Q-network for EAGLE-3 features"""
         network = nn.Sequential(
-            nn.Linear(self.feature_dim, 512),
+            nn.Linear(self.feature_dim, 64),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(512, 256),
+            nn.Linear(64, 64),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, len(self.valid_actions))  # Output for valid actions only
+            nn.Linear(64, len(self.valid_actions))  # Output for valid actions only
         )
         
         # Initialize weights
