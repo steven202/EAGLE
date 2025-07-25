@@ -413,7 +413,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 ENTROPY_ARGS="--disable-max-entropy"
             fi
             
-            PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
                 --base-model-path $BASE_MODEL_PATH \
                 --model-id ${policy_dir}_$benchmark \

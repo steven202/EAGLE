@@ -415,7 +415,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 ENTROPY_ARGS="--disable-max-entropy"
             fi
             
-            PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
                 --base-model-path $BASE_MODEL_PATH \
                 --model-id ${policy_dir}_$benchmark \
@@ -471,7 +471,7 @@ for benchmark in "${BENCHMARKS[@]}"; do
     echo "Generating EAGLE3 baseline for $benchmark..." | tee -a log/$DATE/comparison.txt
     
     if [ ! -f log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl ]; then
-        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+        python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
             --ea-model-path $MODEL_PATH \
             --base-model-path $BASE_MODEL_PATH \
             --model-id eagle3_baseline_$benchmark \
@@ -494,7 +494,7 @@ for benchmark in "${BENCHMARKS[@]}"; do
     echo "Generating Standard LLaMA baseline for $benchmark..." | tee -a log/$DATE/comparison.txt
     
     if [ ! -f log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl ]; then
-        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+        python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
             --ea-model-path $MODEL_PATH \
             --base-model-path $BASE_MODEL_PATH \
             --model-id baseline_llama31_8b_$benchmark \
