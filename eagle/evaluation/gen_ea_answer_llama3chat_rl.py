@@ -513,7 +513,7 @@ def get_model_answers(
                 predicted_total_tokens = args.total_token
                 predicted_depth = args.depth
                 predicted_top_k = args.top_k
-                print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                # print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
             
             torch.cuda.synchronize()
             start_time = time.time()
@@ -748,7 +748,7 @@ def get_model_answers(
                     predicted_total_tokens = args.total_token
                     predicted_depth = args.depth
                     predicted_top_k = args.top_k
-                    print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                    # print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
 
                 torch.cuda.synchronize()
                 start_time = time.time()
