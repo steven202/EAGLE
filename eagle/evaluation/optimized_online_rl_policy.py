@@ -211,13 +211,13 @@ class OptimizedOnlineTreePolicy:
         """
         if hidden_states is None:
             # Return zero state if no hidden states available
-            return torch.zeros(self.feature_dim, device=self.device)
+            return torch.zeros(self.feature_dim, device=self.device, dtype=torch.float32)
         
-        # Convert to tensor and ensure correct device
+        # Convert to tensor and ensure correct device and dtype
         if isinstance(hidden_states, np.ndarray):
             features = torch.FloatTensor(hidden_states).to(self.device)
         elif isinstance(hidden_states, torch.Tensor):
-            features = hidden_states.to(self.device)
+            features = hidden_states.float().to(self.device)  # Ensure float32 dtype
         else:
             features = torch.tensor(hidden_states, device=self.device, dtype=torch.float32)
         
@@ -245,11 +245,12 @@ class OptimizedOnlineTreePolicy:
             if features.shape[-1] > self.hidden_size:
                 features = features[:self.hidden_size]
             else:
-                padded = torch.zeros(self.hidden_size, device=self.device)
+                padded = torch.zeros(self.hidden_size, device=self.device, dtype=torch.float32)
                 padded[:features.shape[-1]] = features
                 features = padded
         
-        return features
+        # Ensure final tensor is float32 for network compatibility
+        return features.float()
     
     @torch.no_grad()
     def _encode_state_from_context(self, context):
@@ -497,6 +498,8 @@ class OptimizedOnlineTreePolicy:
     def _sample_action_with_temperature(self, state, temperature):
         """Sample action using temperature-based softmax for max-entropy exploration"""
         with torch.no_grad():
+            # Ensure state tensor has correct dtype (float32) to match network weights
+            state = state.float()
             q_values = self.q_network(state.unsqueeze(0))
             
             if temperature > 0:
