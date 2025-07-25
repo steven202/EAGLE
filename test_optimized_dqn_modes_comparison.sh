@@ -8,29 +8,29 @@
 #  --use-context-only-state \
 DATE=$(date '+%Y%m%d_%H%M')
 DATE="${DATE}_optimized_dqn"
-DATE='20250725_0725_optimized_dqn'
+# DATE='20250725_0725_optimized_dqn'
 MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=200
+QUESTION_END=1000
 
 # EXECUTION MODE CONFIGURATION
 # Set these to "true" or "false" to control which modes to run
 
 # State representation modes
 RUN_STANDARD="true"          # Run without --use-context-only-state  
-RUN_CONTEXT_ONLY="false"      # Run with --use-context-only-state
-RUN_BOTH_STATES="false"      # If true, runs both state modes regardless of above settings
+RUN_CONTEXT_ONLY="true"      # Run with --use-context-only-state
+RUN_BOTH_STATES="true"      # If true, runs both state modes regardless of above settings
 
 # Entropy modes  
 RUN_MAX_ENTROPY="true"       # Run with max-entropy DQN
-RUN_NO_MAX_ENTROPY="false"    # Run without max-entropy (standard DQN)
-RUN_BOTH_ENTROPY="false"     # If true, runs both entropy modes regardless of above settings
+RUN_NO_MAX_ENTROPY="true"    # Run without max-entropy (standard DQN)
+RUN_BOTH_ENTROPY="true"     # If true, runs both entropy modes regardless of above settings
 
 # Benchmark names for testing
 BENCHMARKS=("mt_bench" "humaneval" "gsm8k" "alpaca" "sum" "qa")
 BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natural Questions")
-BENCHMARKS=("gsm8k" "mt_bench")
-BENCHMARK_NAMES=("GSM8K" "MT-Bench")
+# BENCHMARKS=("gsm8k" "mt_bench")
+# BENCHMARK_NAMES=("GSM8K" "MT-Bench")
 # BENCHMARKS=("gsm8k")
 # BENCHMARKS=("gsm8k")
 
