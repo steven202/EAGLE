@@ -7,7 +7,8 @@
 
 DATE=$(date '+%Y%m%d_%H%M')
 DATE="${DATE}_optimized_dqn"
-MODEL_PATH="/home/guo/EAGLE_RL/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
+DATE='20250724_2135_optimized_dqn'
+MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
 QUESTION_END=200
 
@@ -42,7 +43,7 @@ echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -
 echo "" | tee -a log/$DATE/comparison.txt
 
 PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-    --model-path $MODEL_PATH \
+    --ea-model-path $MODEL_PATH \
     --base-model-path $BASE_MODEL_PATH \
     --model-id optimized_max_entropy_dqn \
     --question-file eagle/data/rl_training/question.jsonl \
@@ -52,7 +53,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --num-choices 1 \
     --num-gpus-per-model 1 \
     --num-gpus-total 1 \
-    --max-gpu-memory 80GiB \
+    --max-gpu-memory "80GiB" \
     --dtype float16 \
     --temperature 0.0 \
     --use-online-rl \
@@ -72,6 +73,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --total-token 60 \
     --depth 7 \
     --top-k 10 \
+    --use-stepwise-rl \
     --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_dqn/training.log
 
 echo "" | tee -a log/$DATE/comparison.txt
@@ -85,7 +87,7 @@ echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -
 echo "" | tee -a log/$DATE/comparison.txt
 
 PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-    --model-path $MODEL_PATH \
+    --ea-model-path $MODEL_PATH \
     --base-model-path $BASE_MODEL_PATH \
     --model-id optimized_standard_dqn \
     --question-file eagle/data/rl_training/question.jsonl \
@@ -95,7 +97,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --num-choices 1 \
     --num-gpus-per-model 1 \
     --num-gpus-total 1 \
-    --max-gpu-memory 80GiB \
+    --max-gpu-memory "80GiB" \
     --dtype float16 \
     --temperature 0.0 \
     --use-online-rl \
@@ -116,6 +118,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --total-token 60 \
     --depth 7 \
     --top-k 10 \
+    --use-stepwise-rl \
     --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_dqn/training.log
 
 echo "" | tee -a log/$DATE/comparison.txt
@@ -152,7 +155,7 @@ for i in "${!BENCHMARKS[@]}"; do
     echo "=== Evaluating $benchmark_name with Optimized Max-Entropy DQN ===" | tee -a log/$DATE/comparison.txt
     
     PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-        --model-path $MODEL_PATH \
+        --ea-model-path $MODEL_PATH \
         --base-model-path $BASE_MODEL_PATH \
         --model-id optimized_max_entropy_dqn_$benchmark \
         --question-file eagle/data/$benchmark/question.jsonl \
@@ -162,7 +165,7 @@ for i in "${!BENCHMARKS[@]}"; do
         --num-choices 1 \
         --num-gpus-per-model 1 \
         --num-gpus-total 1 \
-        --max-gpu-memory 80GiB \
+        --max-gpu-memory "80GiB" \
         --dtype float16 \
         --temperature 0.0 \
         --use-online-rl \
@@ -176,12 +179,13 @@ for i in "${!BENCHMARKS[@]}"; do
         --total-token 60 \
         --depth 7 \
         --top-k 10 \
+        --use-stepwise-rl \
         --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_dqn/evaluation/${benchmark}_evaluation.log
     
     echo "=== Evaluating $benchmark_name with Optimized Standard DQN ===" | tee -a log/$DATE/comparison.txt
     
     PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-        --model-path $MODEL_PATH \
+        --ea-model-path $MODEL_PATH \
         --base-model-path $BASE_MODEL_PATH \
         --model-id optimized_standard_dqn_$benchmark \
         --question-file eagle/data/$benchmark/question.jsonl \
@@ -191,7 +195,7 @@ for i in "${!BENCHMARKS[@]}"; do
         --num-choices 1 \
         --num-gpus-per-model 1 \
         --num-gpus-total 1 \
-        --max-gpu-memory 80GiB \
+        --max-gpu-memory "80GiB" \
         --dtype float16 \
         --temperature 0.0 \
         --use-online-rl \
@@ -206,6 +210,7 @@ for i in "${!BENCHMARKS[@]}"; do
         --total-token 60 \
         --depth 7 \
         --top-k 10 \
+        --use-stepwise-rl \
         --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_dqn/evaluation/${benchmark}_evaluation.log
 done
 
@@ -221,7 +226,7 @@ for benchmark in "${BENCHMARKS[@]}"; do
     echo "Baseline evaluation on $benchmark..." | tee -a log/$DATE/comparison.txt
     
     PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-        --model-path $MODEL_PATH \
+        --ea-model-path $MODEL_PATH \
         --base-model-path $BASE_MODEL_PATH \
         --model-id baseline_llama31_8b_$benchmark \
         --question-file eagle/data/$benchmark/question.jsonl \
@@ -231,7 +236,7 @@ for benchmark in "${BENCHMARKS[@]}"; do
         --num-choices 1 \
         --num-gpus-per-model 1 \
         --num-gpus-total 1 \
-        --max-gpu-memory 80GiB \
+        --max-gpu-memory "80GiB" \
         --dtype float16 \
         --temperature 0.0 \
         --total-token 60 \

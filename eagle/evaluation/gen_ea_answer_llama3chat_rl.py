@@ -1138,7 +1138,8 @@ if __name__ == "__main__":
         default="mc_sim_7b_63",
     )
     parser.add_argument(
-        "--use_eagle3",
+        "--use-eagle3", "--use_eagle3",
+        dest="use_eagle3",
         action="store_true"
     )
     parser.add_argument(
@@ -1219,7 +1220,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--online-repeat-factor",
         type=int,
-        default=5,
+        default=1,
         help="Number of times to repeat questions during online RL training (inference mode ignores this)"
     )
     parser.add_argument(
@@ -1390,9 +1391,59 @@ if __name__ == "__main__":
         choices=["tokens_per_second", "acceptance_rate", "combined"],
         help="Type of reward to use for step-wise RL training (step-wise RL only)"
     )
+    
+    # Optimized RL arguments - Layer Features + Action Caching
+    parser.add_argument(
+        "--use-optimized-rl",
+        action="store_true",
+        help="Use optimized RL policy with layer feature concatenation and reduced action frequency"
+    )
+    parser.add_argument(
+        "--use-optimized-sb3-discrete-ppo",
+        action="store_true",
+        help="Use optimized SB3 Discrete PPO with EAGLE-3 features and action caching"
+    )
+    parser.add_argument(
+        "--use-optimized-dqn",
+        action="store_true",
+        help="Use optimized DQN with EAGLE-3 features and action caching"
+    )
+    parser.add_argument(
+        "--action-cache-steps",
+        type=int,
+        default=10,
+        help="Generate action every N steps for action caching optimization (optimized policies only)"
+    )
+    parser.add_argument(
+        "--action-cache-enabled",
+        action="store_true",
+        default=True,
+        help="Enable action caching optimization (optimized policies only)"
+    )
+    parser.add_argument(
+        "--use-eagle3-features",
+        action="store_true",
+        default=True,
+        help="Use EAGLE-3 layer features instead of SBERT text embeddings (optimized policies only)"
+    )
+    parser.add_argument(
+        "--hidden-size",
+        type=int,
+        default=4096,
+        help="Hidden size for EAGLE-3 layer features (typically 4096 for LLaMA models)"
+    )
+
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="float16",
+        choices=["float16", "float32", "bfloat16"],
+        help="Model data type"
+    )
 
     args = parser.parse_args()
     
+
     # Handle max-entropy mode defaults and overrides
     if getattr(args, 'disable_max_entropy', False):
         args.enable_max_entropy = False

@@ -513,7 +513,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 log_data = {
                     "reward": reward,
                     "step": self.step_count,
-                    "avg_reward_100": np.mean(list(self.reward_history)[-100:]),
+                    "avg_reward_100": torch.mean(torch.tensor(list(self.reward_history)[-100:])).item(),
                 }
                 
                 if generation_time is not None:
@@ -662,8 +662,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         rewards = list(self.reward_history)
         return {
-            "avg_reward": np.mean(rewards),
-            "reward_std": np.std(rewards),
+            "avg_reward": torch.mean(torch.tensor(rewards)).item(),
+            "reward_std": torch.std(torch.tensor(rewards)).item(),
             "total_steps": self.step_count,
             "total_questions": self.questions_processed,
             "cache_hit_rate": (self.cache_step_counter / max(self.step_count, 1)) if self.action_cache_enabled else 0.0

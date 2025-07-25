@@ -29,7 +29,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --num-choices 1 \
     --num-gpus-per-model 1 \
     --num-gpus-total 1 \
-    --max-gpu-memory 80GiB \
+    --max-gpu-memory "80GiB" \
     --dtype float16 \
     --temperature 0.0 \
     --use-online-rl \
@@ -68,7 +68,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --num-choices 1 \
     --num-gpus-per-model 1 \
     --num-gpus-total 1 \
-    --max-gpu-memory 80GiB \
+    --max-gpu-memory "80GiB" \
     --dtype float16 \
     --temperature 0.0 \
     --use-online-rl \
@@ -110,7 +110,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --num-choices 1 \
     --num-gpus-per-model 1 \
     --num-gpus-total 1 \
-    --max-gpu-memory 80GiB \
+    --max-gpu-memory "80GiB" \
     --dtype float16 \
     --temperature 0.0 \
     --use-online-rl \

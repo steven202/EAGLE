@@ -453,7 +453,7 @@ class OptimizedOnlineTreePolicy:
                     "reward": reward,
                     "epsilon": self.epsilon,
                     "step": self.step_count,
-                    "avg_reward_100": np.mean(list(self.reward_history)[-100:]),
+                    "avg_reward_100": torch.mean(torch.tensor(list(self.reward_history)[-100:])).item(),
                     "exploration_mode": self.last_exploration_mode,
                     "entropy": self.last_entropy
                 }
@@ -680,13 +680,13 @@ class OptimizedOnlineTreePolicy:
         cache_hit_rate = (self.cache_step_counter / max(self.step_count, 1)) if self.action_cache_enabled else 0.0
         
         return {
-            "avg_reward": np.mean(rewards),
-            "reward_std": np.std(rewards),
+            "avg_reward": torch.mean(torch.tensor(rewards)).item(),
+            "reward_std": torch.std(torch.tensor(rewards)).item(),
             "total_steps": self.step_count,
             "total_questions": self.questions_processed,
             "epsilon": self.epsilon,
-            "avg_loss": np.mean(list(self.loss_history)[-100:]) if self.loss_history else 0.0,
-            "avg_entropy": np.mean(list(self.entropy_history)[-100:]) if self.entropy_history else 0.0,
+            "avg_loss": torch.mean(torch.tensor(list(self.loss_history)[-100:])).item() if self.loss_history else 0.0,
+            "avg_entropy": torch.mean(torch.tensor(list(self.entropy_history)[-100:])).item() if self.entropy_history else 0.0,
             "cache_hit_rate": cache_hit_rate
         }
     
