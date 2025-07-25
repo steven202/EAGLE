@@ -428,7 +428,8 @@ def update_inference_inputs(
         current_length_data,
         model,
         hidden_state_new,
-        sample_p
+        sample_p,
+        return_hidden_states=False
 ):
     prev_input_len = input_ids.shape[1]
     # Map the best candidate indices to the original indices in the sequence
@@ -470,7 +471,10 @@ def update_inference_inputs(
 
     new_token += accept_length + 1
 
-    return input_ids, draft_tokens, retrieve_indices,tree_mask,tree_position_ids, new_token, None, token
+    # Return hidden states only if explicitly requested (for RL policies)
+    # Otherwise return None for backward compatibility
+    hidden_state_return = accept_hidden_state_new if return_hidden_states else None
+    return input_ids, draft_tokens, retrieve_indices,tree_mask,tree_position_ids, new_token, hidden_state_return, token
 
 
 if __name__ == "__main__":

@@ -130,11 +130,13 @@ class OptimizedEagleParameterEnv(gym.Env):
         
         # Handle different input shapes
         if len(features.shape) > 1:
-            # If batch dimension exists, take the first item
-            if features.shape[0] == 1:
-                features = features[0]  # Remove batch dimension
-            else:
-                features = features[-1]  # Take last sequence position
+            # If we have (batch, sequence, features), take the last sequence position
+            if len(features.shape) == 3:  # (batch, sequence, features)
+                features = features[0, -1]  # Take last sequence position from first batch
+            elif features.shape[0] == 1:  # (1, features) - remove batch dimension
+                features = features[0]
+            else:  # (sequence, features) - take last sequence position
+                features = features[-1]
         
         # Handle different feature dimensions
         if features.shape[-1] == self.hidden_size * 3:
@@ -352,6 +354,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         Returns:
             tuple: (total_tokens, depth, top_k)
         """
+        if hidden_states is None:
+            # return default total_tokens, depth, top_k = (96, 8, 20)
+            return 96, 8, 20
         # OPTIMIZATION 2: Action caching logic
         if self.action_cache_enabled and not training_mode:
             # Check if we can use cached action
@@ -532,6 +537,10 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     })
                 
                 wandb.log(log_data)
+            
+            # Save checkpoint periodically
+            if self.should_save_checkpoint():
+                self.save_checkpoint()
     
     def save_checkpoint(self, checkpoint_name=None):
         """Save model checkpoint"""

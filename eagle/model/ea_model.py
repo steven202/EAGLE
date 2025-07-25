@@ -274,9 +274,10 @@ class EaModel(nn.Module):
                 
                 # For optimized policies, we don't have hidden states yet, so pass None initially
                 if is_optimized_policy:
-                    step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                        context=initial_state, hidden_states=None, training_mode=training_mode
-                    )
+                    # step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                        # context=initial_state, hidden_states=None, training_mode=training_mode
+                    # )
+                    step_total_tokens, step_depth, step_top_k = (96, 8, 20)
                 else:
                     # Traditional policy interface
                     step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
@@ -290,9 +291,10 @@ class EaModel(nn.Module):
                     
                     # For optimized policies, we don't have hidden states yet, so pass None initially
                     if is_optimized_policy:
-                        step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                            context=initial_state, hidden_states=None, training_mode=training_mode
-                        )
+                        # step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                        #     context=initial_state, hidden_states=None, training_mode=training_mode
+                        # )
+                        step_total_tokens, step_depth, step_top_k = (96, 8, 20)
                     else:
                         # Traditional policy interface
                         step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
@@ -436,7 +438,8 @@ class EaModel(nn.Module):
                     current_length_data,
                     self,
                     hidden_state_new,
-                    sample_p
+                    sample_p,
+                    return_hidden_states=use_stepwise_rl  # Return hidden states for RL policies
                 )
 
             if is_llama3:

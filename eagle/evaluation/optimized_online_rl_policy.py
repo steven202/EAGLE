@@ -212,11 +212,13 @@ class OptimizedOnlineTreePolicy:
         
         # Handle different input shapes
         if len(features.shape) > 1:
-            # If batch dimension exists, take the first item
-            if features.shape[0] == 1:
-                features = features[0]  # Remove batch dimension
-            else:
-                features = features[-1]  # Take last sequence position
+            # If we have (batch, sequence, features), take the last sequence position
+            if len(features.shape) == 3:  # (batch, sequence, features)
+                features = features[0, -1]  # Take last sequence position from first batch
+            elif features.shape[0] == 1:  # (1, features) - remove batch dimension
+                features = features[0]
+            else:  # (sequence, features) - take last sequence position
+                features = features[-1]
         
         # Handle different feature dimensions
         if features.shape[-1] == self.hidden_size * 3:
@@ -478,6 +480,10 @@ class OptimizedOnlineTreePolicy:
                     log_data["loss"] = self.loss_history[-1]
                 
                 wandb.log(log_data)
+            
+            # Save checkpoint periodically
+            if self.should_save_checkpoint():
+                self.save_checkpoint()
     
     def _learn_from_batch(self):
         """Learn from a batch of experiences"""

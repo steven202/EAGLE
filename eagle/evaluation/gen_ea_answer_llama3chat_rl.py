@@ -473,9 +473,10 @@ def get_model_answers(
                 if is_optimized_policy:
                     # Optimized RL: predict parameters using EAGLE-3 features (inference mode during warmup)
                     # Note: hidden_states not available during warmup, so pass None
-                    predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                        context=full_context, hidden_states=None, training_mode=False  # No exploration during warmup
-                    )
+                    # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                        # context=full_context, hidden_states=None, training_mode=False  # No exploration during warmup
+                    # )
+                    predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
                 else:
                     # Traditional Online RL: predict parameters (inference mode during warmup)
                     predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
@@ -691,15 +692,17 @@ def get_model_answers(
                         # Optimized RL: predict parameters with appropriate training mode
                         if args.online_inference_only:
                             # Inference-only mode: no training, no exploration
-                            predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                                context=full_context, hidden_states=None, training_mode=False
-                            )
+                            # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                                # context=full_context, hidden_states=None, training_mode=False
+                            # )
+                            predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
                             # print(f"Optimized Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                         else:
                             # Training mode: enable exploration and learning
-                            predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
-                                context=full_context, hidden_states=None, training_mode=True
-                            )
+                            # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                                # context=full_context, hidden_states=None, training_mode=True
+                            # )
+                            predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
                             print(f"Optimized Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                     else:
                         # Traditional Online RL: predict parameters with appropriate training mode

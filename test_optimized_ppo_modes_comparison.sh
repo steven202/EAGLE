@@ -67,6 +67,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --use-eagle3-features \
     --hidden-size 4096 \
     --checkpoint-dir log/$DATE/optimized_max_entropy_ppo/checkpoints \
+    --online-policy-save-path log/$DATE/optimized_max_entropy_ppo/optimized_max_entropy_ppo_policy_sb3.zip \
     --checkpoint-freq 50 \
     --wandb-project eagle-optimized-sb3-ppo \
     --total-token 60 \
@@ -110,6 +111,7 @@ PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
     --use-eagle3-features \
     --hidden-size 4096 \
     --checkpoint-dir log/$DATE/optimized_standard_ppo/checkpoints \
+    --online-policy-save-path log/$DATE/optimized_standard_ppo/optimized_standard_ppo_policy_sb3.zip \
     --checkpoint-freq 50 \
     --wandb-project eagle-optimized-sb3-ppo \
     --total-token 60 \
