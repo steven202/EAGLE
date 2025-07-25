@@ -703,7 +703,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     
     def should_save_checkpoint(self):
         """Check if we should save a checkpoint"""
-        return self.questions_processed % self.checkpoint_freq == 0
+        return self.step_count % self.checkpoint_freq == 0
     
     def set_training_seed(self, seed):
         """Set training seed for reproducible shuffling"""
