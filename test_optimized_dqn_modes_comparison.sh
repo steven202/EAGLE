@@ -8,29 +8,29 @@
 #  --use-context-only-state \
 DATE=$(date '+%Y%m%d_%H%M')
 DATE="${DATE}_optimized_dqn"
-DATE='20250725_0725_optimized_dqn'
+# DATE='20250725_0725_optimized_dqn'
 MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=200
+QUESTION_END=1000
 
 # EXECUTION MODE CONFIGURATION
 # Set these to "true" or "false" to control which modes to run
 
 # State representation modes
 RUN_STANDARD="true"          # Run without --use-context-only-state  
-RUN_CONTEXT_ONLY="false"      # Run with --use-context-only-state
-RUN_BOTH_STATES="false"      # If true, runs both state modes regardless of above settings
+RUN_CONTEXT_ONLY="true"      # Run with --use-context-only-state
+RUN_BOTH_STATES="true"      # If true, runs both state modes regardless of above settings
 
 # Entropy modes  
 RUN_MAX_ENTROPY="true"       # Run with max-entropy DQN
-RUN_NO_MAX_ENTROPY="false"    # Run without max-entropy (standard DQN)
-RUN_BOTH_ENTROPY="false"     # If true, runs both entropy modes regardless of above settings
+RUN_NO_MAX_ENTROPY="true"    # Run without max-entropy (standard DQN)
+RUN_BOTH_ENTROPY="true"     # If true, runs both entropy modes regardless of above settings
 
 # Benchmark names for testing
 BENCHMARKS=("mt_bench" "humaneval" "gsm8k" "alpaca" "sum" "qa")
 BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natural Questions")
-BENCHMARKS=("gsm8k" "mt_bench")
-BENCHMARK_NAMES=("GSM8K" "MT-Bench")
+# BENCHMARKS=("gsm8k" "mt_bench")
+# BENCHMARK_NAMES=("GSM8K" "MT-Bench")
 # BENCHMARKS=("gsm8k")
 # BENCHMARKS=("gsm8k")
 
@@ -464,53 +464,37 @@ echo "Model: $MODEL_PATH" >> log/$DATE/summary.txt
 echo "Base Model: $BASE_MODEL_PATH" >> log/$DATE/summary.txt
 echo "" >> log/$DATE/summary.txt
 
-# Generate baseline results for all benchmarks (EAGLE3 and Standard LLaMA)
-echo "=== Generating EAGLE3 and Standard LLaMA Baseline Results ===" | tee -a log/$DATE/comparison.txt
+# Generate baseline results for all benchmarks (LLaMA 3.1 8B)
+echo "=== Generating LLaMA 3.1 8B Baseline Results ===" | tee -a log/$DATE/comparison.txt
 
 for benchmark in "${BENCHMARKS[@]}"; do
-    echo "Generating EAGLE3 baseline for $benchmark..." | tee -a log/$DATE/comparison.txt
+    echo "Generating baseline for $benchmark..." | tee -a log/$DATE/comparison.txt
     
-    if [ ! -f log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl ]; then
-        python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-            --ea-model-path $MODEL_PATH \
-            --base-model-path $BASE_MODEL_PATH \
-            --model-id eagle3_baseline_$benchmark \
-            --question-file eagle/data/$benchmark/question.jsonl \
-            --question-begin 0 \
-            --question-end -1 \
-            --answer-file log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl \
-            --num-choices 1 \
-            --num-gpus-per-model 1 \
-            --num-gpus-total 1 \
-            --max-gpu-memory "80GiB" \
-            --dtype float16 \
+    # Generate EAGLE3 baseline
+    if [ ! -f "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" ]; then
+        python -m eagle.evaluation.gen_ea_answer_llama3chat \
+            --ea-model-path "$MODEL_PATH" \
+            --base-model-path "$BASE_MODEL_PATH" \
+            --bench-name "$benchmark" \
+            --answer-file "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" \
             --temperature 0.0 \
-            --total-token 60 \
-            --depth 7 \
-            --top-k 10 \
-            --use_eagle3 2>&1 | tee log/$DATE/baseline_results/${benchmark}_eagle3_baseline.log
+            --use_eagle3 \
+            2>&1 | tee -a log/$DATE/baseline_results/baseline_${benchmark}_eagle3.log
+    else
+        echo "EAGLE3 baseline for $benchmark already exists" | tee -a log/$DATE/comparison.txt
     fi
     
-    echo "Generating Standard LLaMA baseline for $benchmark..." | tee -a log/$DATE/comparison.txt
-    
-    if [ ! -f log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl ]; then
-        python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-            --ea-model-path $MODEL_PATH \
-            --base-model-path $BASE_MODEL_PATH \
-            --model-id baseline_llama31_8b_$benchmark \
-            --question-file eagle/data/$benchmark/question.jsonl \
-            --question-begin 0 \
-            --question-end -1 \
-            --answer-file log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl \
-            --num-choices 1 \
-            --num-gpus-per-model 1 \
-            --num-gpus-total 1 \
-            --max-gpu-memory "80GiB" \
-            --dtype float16 \
+    # Generate standard baseline
+    if [ ! -f "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" ]; then
+        python -m eagle.evaluation.gen_baseline_answer_llama3chat \
+            --ea-model-path "$MODEL_PATH" \
+            --base-model-path "$BASE_MODEL_PATH" \
+            --bench-name "$benchmark" \
+            --answer-file "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" \
             --temperature 0.0 \
-            --total-token 60 \
-            --depth 7 \
-            --top-k 10 2>&1 | tee log/$DATE/baseline_results/${benchmark}_baseline.log
+            2>&1 | tee -a log/$DATE/baseline_results/baseline_${benchmark}_standard.log
+    else
+        echo "Standard baseline for $benchmark already exists" | tee -a log/$DATE/comparison.txt
     fi
 done
 
@@ -526,64 +510,85 @@ for i in "${!BENCHMARKS[@]}"; do
     echo "Benchmark: $benchmark_name - $benchmark" >> log/$DATE/summary.txt
     echo "===========================================" >> log/$DATE/summary.txt
     
-    # Define result files
-    max_file="log/$DATE/optimized_max_entropy_dqn/evaluation/${benchmark}_results.jsonl"
-    std_file="log/$DATE/optimized_standard_dqn/evaluation/${benchmark}_results.jsonl"
+    # Define baseline files
     eagle3_file="log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl"
     baseline_file="log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl"
     
-    if [ -f "$max_file" ] && [ -f "$std_file" ] && [ -f "$eagle3_file" ] && [ -f "$baseline_file" ]; then
-        echo "✅ All result files found for $benchmark_name" | tee -a log/$DATE/comparison.txt
+    # Create list of result files for this benchmark
+    RESULT_FILES=()
+    RESULT_LABELS=()
+    
+    for j in "${!POLICIES_TO_EVALUATE[@]}"; do
+        policy_dir="${POLICIES_TO_EVALUATE[$j]}"
+        policy_label="${POLICY_LABELS[$j]}"
+        result_file="log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
         
-        # Speed comparison using existing speed.py tool (6 comprehensive comparisons like test_expanded_action_space.sh)
+        if [ -f "$result_file" ]; then
+            RESULT_FILES+=("$result_file")
+            RESULT_LABELS+=("$policy_label")
+        fi
+    done
+    
+    if [ ${#RESULT_FILES[@]} -gt 0 ] && [ -f "$eagle3_file" ] && [ -f "$baseline_file" ]; then
+        echo "✅ Found ${#RESULT_FILES[@]} policy results and baseline files for $benchmark_name" | tee -a log/$DATE/comparison.txt
+        
+        # Speed comparison using existing speed.py tool
         if [ -f "eagle/evaluation/speed.py" ]; then
             echo "" >> log/$DATE/summary.txt
-            echo "1. Max-Entropy DQN vs EAGLE3 Baseline:" >> log/$DATE/summary.txt
-            python eagle/evaluation/speed.py \
-                --ea-file "$max_file" \
-                --baseline-file "$eagle3_file" \
-                --tokenizer-path "$BASE_MODEL_PATH" \
-                2>&1 | tee -a log/$DATE/summary.txt
             
-            echo "" >> log/$DATE/summary.txt
-            echo "2. Max-Entropy DQN vs Standard LLaMA Baseline:" >> log/$DATE/summary.txt
-            python eagle/evaluation/speed.py \
-                --ea-file "$max_file" \
-                --baseline-file "$baseline_file" \
-                --tokenizer-path "$BASE_MODEL_PATH" \
-                2>&1 | tee -a log/$DATE/summary.txt
+            # Compare each policy against baselines
+            for k in "${!RESULT_FILES[@]}"; do
+                policy_file="${RESULT_FILES[$k]}"
+                policy_label="${RESULT_LABELS[$k]}"
+                
+                echo "$((k*2+1)). $policy_label vs EAGLE3 Baseline:" >> log/$DATE/summary.txt
+                python eagle/evaluation/speed.py \
+                    --ea-file "$policy_file" \
+                    --baseline-file "$eagle3_file" \
+                    --tokenizer-path "$BASE_MODEL_PATH" \
+                    2>&1 | tee -a log/$DATE/summary.txt
+                
+                echo "" >> log/$DATE/summary.txt
+                echo "$((k*2+2)). $policy_label vs Standard LLaMA Baseline:" >> log/$DATE/summary.txt
+                python eagle/evaluation/speed.py \
+                    --ea-file "$policy_file" \
+                    --baseline-file "$baseline_file" \
+                    --tokenizer-path "$BASE_MODEL_PATH" \
+                    2>&1 | tee -a log/$DATE/summary.txt
+                echo "" >> log/$DATE/summary.txt
+            done
             
-            echo "" >> log/$DATE/summary.txt
-            echo "3. EAGLE3 Baseline vs Standard LLaMA Baseline:" >> log/$DATE/summary.txt
+            # Compare baselines against each other
+            echo "EAGLE3 Baseline vs Standard LLaMA Baseline:" >> log/$DATE/summary.txt
             python eagle/evaluation/speed.py \
                 --ea-file "$eagle3_file" \
                 --baseline-file "$baseline_file" \
                 --tokenizer-path "$BASE_MODEL_PATH" \
                 2>&1 | tee -a log/$DATE/summary.txt
             
-            echo "" >> log/$DATE/summary.txt
-            echo "4. Standard DQN vs EAGLE3 Baseline:" >> log/$DATE/summary.txt
-            python eagle/evaluation/speed.py \
-                --ea-file "$std_file" \
-                --baseline-file "$eagle3_file" \
-                --tokenizer-path "$BASE_MODEL_PATH" \
-                2>&1 | tee -a log/$DATE/summary.txt
-            
-            echo "" >> log/$DATE/summary.txt
-            echo "5. Standard DQN vs Standard LLaMA Baseline:" >> log/$DATE/summary.txt
-            python eagle/evaluation/speed.py \
-                --ea-file "$std_file" \
-                --baseline-file "$baseline_file" \
-                --tokenizer-path "$BASE_MODEL_PATH" \
-                2>&1 | tee -a log/$DATE/summary.txt
-            
-            echo "" >> log/$DATE/summary.txt
-            echo "6. Max-Entropy DQN vs Standard DQN:" >> log/$DATE/summary.txt
-            python eagle/evaluation/speed.py \
-                --ea-file "$max_file" \
-                --baseline-file "$std_file" \
-                --tokenizer-path "$BASE_MODEL_PATH" \
-                2>&1 | tee -a log/$DATE/summary.txt
+            # Compare policies against each other if we have multiple
+            if [ ${#RESULT_FILES[@]} -gt 1 ]; then
+                echo "" >> log/$DATE/summary.txt
+                echo "Policy Comparisons:" >> log/$DATE/summary.txt
+                for k in "${!RESULT_FILES[@]}"; do
+                    for l in "${!RESULT_FILES[@]}"; do
+                        if [ $k -lt $l ]; then
+                            policy1_file="${RESULT_FILES[$k]}"
+                            policy1_label="${RESULT_LABELS[$k]}"
+                            policy2_file="${RESULT_FILES[$l]}"
+                            policy2_label="${RESULT_LABELS[$l]}"
+                            
+                            echo "$policy1_label vs $policy2_label:" >> log/$DATE/summary.txt
+                            python eagle/evaluation/speed.py \
+                                --ea-file "$policy1_file" \
+                                --baseline-file "$policy2_file" \
+                                --tokenizer-path "$BASE_MODEL_PATH" \
+                                2>&1 | tee -a log/$DATE/summary.txt
+                            echo "" >> log/$DATE/summary.txt
+                        fi
+                    done
+                done
+            fi
                 
         else
             echo "Speed analysis tool not found" >> log/$DATE/summary.txt
@@ -592,16 +597,22 @@ for i in "${!BENCHMARKS[@]}"; do
         # Basic statistics
         echo "" >> log/$DATE/summary.txt
         echo "Result File Statistics:" >> log/$DATE/summary.txt
-        echo "Max-Entropy DQN: $(wc -l < "$max_file") samples" >> log/$DATE/summary.txt
-        echo "Standard DQN: $(wc -l < "$std_file") samples" >> log/$DATE/summary.txt
+        for k in "${!RESULT_FILES[@]}"; do
+            policy_file="${RESULT_FILES[$k]}"
+            policy_label="${RESULT_LABELS[$k]}"
+            echo "$policy_label: $(wc -l < "$policy_file") samples" >> log/$DATE/summary.txt
+        done
         echo "EAGLE3 Baseline: $(wc -l < "$eagle3_file") samples" >> log/$DATE/summary.txt
         echo "Standard Baseline: $(wc -l < "$baseline_file") samples" >> log/$DATE/summary.txt
         
     else
         echo "❌ Missing result files for $benchmark_name" | tee -a log/$DATE/comparison.txt
         echo "Required files:" | tee -a log/$DATE/comparison.txt
-        echo "  Max-Entropy DQN: $max_file $([ -f "$max_file" ] && echo "✅" || echo "❌")" | tee -a log/$DATE/comparison.txt
-        echo "  Standard DQN: $std_file $([ -f "$std_file" ] && echo "✅" || echo "❌")" | tee -a log/$DATE/comparison.txt
+        for k in "${!RESULT_FILES[@]}"; do
+            policy_file="${RESULT_FILES[$k]}"
+            policy_label="${RESULT_LABELS[$k]}"
+            echo "  $policy_label: $policy_file $([ -f "$policy_file" ] && echo "✅" || echo "❌")" | tee -a log/$DATE/comparison.txt
+        done
         echo "  EAGLE3 Baseline: $eagle3_file $([ -f "$eagle3_file" ] && echo "✅" || echo "❌")" | tee -a log/$DATE/comparison.txt
         echo "  Standard Baseline: $baseline_file $([ -f "$baseline_file" ] && echo "✅" || echo "❌")" | tee -a log/$DATE/comparison.txt
         echo "Missing result files - check evaluation and baseline generation logs" >> log/$DATE/summary.txt
@@ -672,6 +683,10 @@ echo "Algorithm: Optimized DQN" >> log/$DATE/summary.txt
 echo "Optimizations: EAGLE-3 features + Action caching + Flexible execution" >> log/$DATE/summary.txt
 echo "Training questions: $QUESTION_END" >> log/$DATE/summary.txt
 echo "Benchmarks evaluated: ${BENCHMARKS[*]}" >> log/$DATE/summary.txt
+echo "Policies evaluated: ${#POLICIES_TO_EVALUATE[@]}" >> log/$DATE/summary.txt
+for j in "${!POLICY_LABELS[@]}"; do
+    echo "  - ${POLICY_LABELS[$j]}" >> log/$DATE/summary.txt
+done
 echo "" >> log/$DATE/summary.txt
 
 echo "Check log/$DATE/summary.txt for detailed results." | tee -a log/$DATE/comparison.txt
