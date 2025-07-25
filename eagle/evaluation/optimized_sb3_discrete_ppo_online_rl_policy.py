@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import os
 import json
+import contextlib
 from collections import deque
 import random
 import gym
@@ -37,9 +38,10 @@ class OptimizedEagleParameterEnv(gym.Env):
     Optimizations:
     1. Uses EAGLE-3 layer features instead of SBERT text embeddings
     2. Supports action caching to reduce computation frequency
+    3. NEW: Context-only state representation (SBERT embeddings without projection)
     """
     
-    def __init__(self, hidden_size=4096):
+    def __init__(self, hidden_size=4096, use_context_only_state=False):
         super(OptimizedEagleParameterEnv, self).__init__()
         
         # Parameter bins (6×6×5 = 180 total combinations)
@@ -56,28 +58,41 @@ class OptimizedEagleParameterEnv(gym.Env):
         # Precompute valid actions to avoid constraint violations
         self.valid_actions = self._precompute_valid_actions()
         
-        # OPTIMIZATION 1: Use EAGLE-3 layer features instead of SBERT
-        # The hidden_size is k (model hidden size), and we expect 3k features from EAGLE-3
-        self.hidden_size = hidden_size
-        self.feature_dim = hidden_size  # After FC layer reduction: 3k -> k
+        # NEW: Context-only state representation option
+        self.use_context_only_state = use_context_only_state
+        
+        if use_context_only_state:
+            # Use SBERT embeddings directly (384 dimensions)
+            self.feature_dim = 384
+            self.hidden_size = 384  # Match SBERT output dimension
+            state_description = "SBERT context embeddings (384D)"
+        else:
+            # OPTIMIZATION 1: Use EAGLE-3 layer features instead of SBERT
+            # The hidden_size is k (model hidden size), and we expect 3k features from EAGLE-3
+            self.hidden_size = hidden_size
+            self.feature_dim = hidden_size  # After FC layer reduction: 3k -> k
+            state_description = "EAGLE-3 layer features"
         
         # Define action and observation space
         self.action_space = spaces.Discrete(len(self.valid_actions))  # Only valid actions
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, 
             shape=(self.feature_dim,), dtype=np.float32
-        )  # EAGLE-3 features
+        )
         
         # Environment state
         self.current_hidden_states = None
+        self.current_context = None
         self.step_count = 0
         
         print(f"OptimizedEagleParameterEnv initialized:")
         print(f"  - Total parameter combinations: {self.total_actions}")
         print(f"  - Valid parameter combinations: {len(self.valid_actions)}")
         print(f"  - Valid coverage: {len(self.valid_actions)/self.total_actions*100:.1f}%")
-        print(f"  - Feature dimension: {self.feature_dim} (EAGLE-3 layer features)")
+        print(f"  - State representation: {state_description}")
+        print(f"  - Feature dimension: {self.feature_dim}")
         print(f"  - Hidden size: {self.hidden_size}")
+        print(f"  - Use context-only state: {use_context_only_state}")
         print(f"  - Constraint: total_tokens ≤ top_k^(depth-1)")
     
     def _precompute_valid_actions(self):
@@ -158,9 +173,40 @@ class OptimizedEagleParameterEnv(gym.Env):
         
         return features.astype(np.float32)
     
+    def _encode_state_from_context(self, context):
+        """NEW: Encode state directly from context using SBERT embeddings (384D)
+        
+        Args:
+            context: Text context string
+        
+        Returns:
+            numpy array of shape (384,) - SBERT embeddings without projection
+        """
+        if not self.use_context_only_state:
+            raise ValueError("Context-only state encoding is not enabled. Set use_context_only_state=True")
+        
+        if context is None or context == "":
+            return np.zeros(self.feature_dim, dtype=np.float32)
+        
+        # Initialize SBERT model if needed
+        if not hasattr(self, '_sbert_model'):
+            try:
+                from sentence_transformers import SentenceTransformer
+                self._sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
+                print("🔧 Initialized SBERT model for context-only state representation")
+            except ImportError:
+                raise ImportError("sentence-transformers is required for context-only state. Install with: pip install sentence-transformers")
+        
+        # Encode context directly to 384D
+        with torch.no_grad() if hasattr(self, '_sbert_model') else contextlib.nullcontext():
+            sbert_embedding = self._sbert_model.encode(context)  # Shape: (384,)
+        
+        return sbert_embedding.astype(np.float32)
+    
     def reset(self):
         """Reset environment state"""
         self.current_hidden_states = None
+        self.current_context = None
         self.step_count = 0
         # Return zero state - will be set properly when predict_parameters is called
         return np.zeros(self.feature_dim, dtype=np.float32)
@@ -227,6 +273,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                  # OPTIMIZATION 1: EAGLE-3 feature parameters
                  hidden_size=4096,             # Model hidden size (k)
                  use_eagle3_features=True,     # Use EAGLE-3 features instead of SBERT
+                 # NEW: Context-only state representation option
+                 use_context_only_state=False, # Use SBERT context embeddings directly (384D)
                  use_wandb=True,
                  wandb_project="eagle-optimized-sb3-discrete-ppo",
                  wandb_run_name=None,
@@ -239,9 +287,17 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
+        # NEW: Context-only state representation configuration
+        self.use_context_only_state = use_context_only_state
+        
+        # Validate configuration
+        if use_context_only_state and use_eagle3_features:
+            print("⚠️  Warning: use_context_only_state=True overrides use_eagle3_features. Using context-only state.")
+            use_eagle3_features = False
+        
         # OPTIMIZATION 1: EAGLE-3 features configuration
         self.use_eagle3_features = use_eagle3_features
-        self.hidden_size = hidden_size
+        self.hidden_size = hidden_size if not use_context_only_state else 384
         
         # OPTIMIZATION 2: Action caching configuration
         self.action_cache_enabled = action_cache_enabled
@@ -281,13 +337,17 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 "action_cache_steps": action_cache_steps,
                 "action_cache_enabled": action_cache_enabled,
                 "use_eagle3_features": use_eagle3_features,
-                "hidden_size": hidden_size
+                "use_context_only_state": use_context_only_state,
+                "hidden_size": self.hidden_size
             })
         else:
             print("Warning: Wandb logging disabled")
         
         # Initialize environment with optimizations
-        self.env = OptimizedEagleParameterEnv(hidden_size=hidden_size)
+        self.env = OptimizedEagleParameterEnv(
+            hidden_size=self.hidden_size, 
+            use_context_only_state=use_context_only_state
+        )
         
         # Determine entropy coefficient based on mode
         actual_ent_coef = max_entropy_ent_coef if enable_max_entropy else ent_coef
@@ -347,111 +407,138 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         """OPTIMIZED: Predict parameters using EAGLE-3 features with action caching
         
         Args:
-            context: Text context (used for fallback if hidden_states not available)
-            hidden_states: EAGLE-3 layer features (preferred input)
+            context: Text context (used for context-only state or fallback)
+            hidden_states: EAGLE-3 layer features (used when use_context_only_state=False)
             training_mode: Whether in training mode
         
         Returns:
             tuple: (total_tokens, depth, top_k)
         """
-        if hidden_states is None:
-            # return default total_tokens, depth, top_k = (96, 8, 20)
-            return 96, 8, 20
-        # OPTIMIZATION 2: Action caching logic
-        if self.action_cache_enabled and not training_mode:
-            # Check if we can use cached action
-            if (self.cached_params is not None and 
-                self.cache_step_counter < self.action_cache_steps):
-                
-                self.cache_step_counter += 1
-                
-                # Log cache hit
-                if training_mode and self.use_wandb and self.cache_step_counter % 5 == 0:
-                    wandb.log({
-                        "cache_hit": 1,
-                        "cache_step": self.cache_step_counter,
-                        "cached_params": {
-                            "total_tokens": self.cached_params[0],
-                            "depth": self.cached_params[1], 
-                            "top_k": self.cached_params[2]
-                        }
-                    })
-                
-                return self.cached_params
-        
-        # OPTIMIZATION 1: Use EAGLE-3 features if available
-        if self.use_eagle3_features and hidden_states is not None:
-            # PRIMARY MODE: Use EAGLE-3 layer features (dense 4096-dim representation)
-            state = self.env._encode_state_from_hidden_states(hidden_states)
-            # Store hidden states for future reference
-            self.env.current_hidden_states = hidden_states
-            feature_source = "EAGLE3"
+        # NEW: Handle context-only state mode
+        if self.use_context_only_state:
+            if context is None:
+                return 96, 8, 20  # Default parameters
+            
+            # OPTIMIZATION 2: Action caching logic (works with context-only state too)
+            if self.action_cache_enabled and not training_mode:
+                if (self.cached_params is not None and 
+                    self.cache_step_counter < self.action_cache_steps):
+                    
+                    self.cache_step_counter += 1
+                    return self.cached_params
+            
+            # Use context directly for state representation (384D)
+            state = self.env._encode_state_from_context(context)
+            self.env.current_context = context
+            feature_source = "CONTEXT_SBERT"
             
             # Track usage statistics
             if training_mode and self.use_wandb:
                 wandb.log({
-                    "feature_source": "eagle3",
-                    "sbert_usage": 0,
-                    "eagle3_usage": 1
+                    "feature_source": "context_sbert",
+                    "context_length": len(context) if context else 0,
+                    "state_dimension": 384
                 })
+        
+        # Original EAGLE-3 features mode 
+        elif hidden_states is None:
+            return 96, 8, 20  # Default parameters
         else:
-            # FALLBACK MODE: Map SBERT features to same 4096-dim space with proper scaling
-            if context is not None:
-                from sentence_transformers import SentenceTransformer
-                if not hasattr(self, '_sbert_model'):
-                    self._sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
-                
-                sbert_embedding = self._sbert_model.encode(context)  # Shape: (384,)
-                
-                # SOLUTION: Intelligent feature mapping instead of zero-padding
-                # Use learned projection to maintain feature density
-                if not hasattr(self, '_feature_mapper'):
-                    # Create a learnable mapping from SBERT (384) to EAGLE-3 space (4096)
-                    self._feature_mapper = torch.nn.Sequential(
-                        torch.nn.Linear(384, self.feature_dim),
-                        torch.nn.LayerNorm(self.feature_dim),  # Normalize to match EAGLE-3 scale
-                        torch.nn.Tanh()  # Keep values in reasonable range
-                    ).to(self.device)
+            # OPTIMIZATION 2: Action caching logic
+            if self.action_cache_enabled and not training_mode:
+                # Check if we can use cached action
+                if (self.cached_params is not None and 
+                    self.cache_step_counter < self.action_cache_steps):
                     
-                    # Initialize with small weights to start conservative
-                    with torch.no_grad():
-                        for module in self._feature_mapper:
-                            if isinstance(module, torch.nn.Linear):
-                                torch.nn.init.xavier_uniform_(module.weight, gain=0.1)
-                                torch.nn.init.zeros_(module.bias)
-
-                    print(f"🔧 Created SBERT→EAGLE-3 feature mapper (384→{self.feature_dim})")
-                    print("   This avoids sparse padding and maintains feature density")
-                
-                # Map SBERT features to EAGLE-3 compatible space
-                with torch.no_grad():
-                    sbert_tensor = torch.FloatTensor(sbert_embedding).unsqueeze(0).to(self.device)
-                    mapped_features = self._feature_mapper(sbert_tensor).squeeze(0)
-                    state = mapped_features.cpu().numpy()
-                
-                feature_source = "SBERT_MAPPED"
-                
-                # Log the mapping for monitoring
-                if not hasattr(self, '_mapping_warned'):
-                    print(f"⚠️  Using SBERT fallback with learned mapping:")
-                    print(f"   Input: SBERT {sbert_embedding.shape} → Output: {state.shape}")
-                    print(f"   Feature density: 100% (no zero padding)")
-                    print(f"   Recommendation: Use EAGLE-3 features for best performance")
-                    self._mapping_warned = True
+                    self.cache_step_counter += 1
+                    
+                    # Log cache hit
+                    if training_mode and self.use_wandb and self.cache_step_counter % 5 == 0:
+                        wandb.log({
+                            "cache_hit": 1,
+                            "cache_step": self.cache_step_counter,
+                            "cached_params": {
+                                "total_tokens": self.cached_params[0],
+                                "depth": self.cached_params[1], 
+                                "top_k": self.cached_params[2]
+                            }
+                        })
+                    
+                    return self.cached_params
+            
+            # OPTIMIZATION 1: Use EAGLE-3 features if available
+            if self.use_eagle3_features and hidden_states is not None:
+                # PRIMARY MODE: Use EAGLE-3 layer features (dense 4096-dim representation)
+                state = self.env._encode_state_from_hidden_states(hidden_states)
+                # Store hidden states for future reference
+                self.env.current_hidden_states = hidden_states
+                feature_source = "EAGLE3"
                 
                 # Track usage statistics
                 if training_mode and self.use_wandb:
                     wandb.log({
-                        "feature_source": "sbert_mapped",
-                        "sbert_usage": 1,
-                        "eagle3_usage": 0
+                        "feature_source": "eagle3",
+                        "sbert_usage": 0,
+                        "eagle3_usage": 1
                     })
-                    
             else:
-                # No input available, use zero state (matching EAGLE-3 dimension)
-                state = np.zeros(self.env.feature_dim, dtype=np.float32)
-                feature_source = "ZERO"
-        
+                # FALLBACK MODE: Map SBERT features to same 4096-dim space with proper scaling
+                if context is not None:
+                    from sentence_transformers import SentenceTransformer
+                    if not hasattr(self, '_sbert_model'):
+                        self._sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
+                    
+                    sbert_embedding = self._sbert_model.encode(context)  # Shape: (384,)
+                    
+                    # SOLUTION: Intelligent feature mapping instead of zero-padding
+                    # Use learned projection to maintain feature density
+                    if not hasattr(self, '_feature_mapper'):
+                        # Create a learnable mapping from SBERT (384) to EAGLE-3 space (4096)
+                        self._feature_mapper = torch.nn.Sequential(
+                            torch.nn.Linear(384, self.env.feature_dim),
+                            torch.nn.LayerNorm(self.env.feature_dim),  # Normalize to match EAGLE-3 scale
+                            torch.nn.Tanh()  # Keep values in reasonable range
+                        ).to(self.device)
+                        
+                        # Initialize with small weights to start conservative
+                        with torch.no_grad():
+                            for module in self._feature_mapper:
+                                if isinstance(module, torch.nn.Linear):
+                                    torch.nn.init.xavier_uniform_(module.weight, gain=0.1)
+                                    torch.nn.init.zeros_(module.bias)
+
+                        print(f"🔧 Created SBERT→EAGLE-3 feature mapper (384→{self.env.feature_dim})")
+                        print("   This avoids sparse padding and maintains feature density")
+                    
+                    # Map SBERT features to EAGLE-3 compatible space
+                    with torch.no_grad():
+                        sbert_tensor = torch.FloatTensor(sbert_embedding).unsqueeze(0).to(self.device)
+                        mapped_features = self._feature_mapper(sbert_tensor).squeeze(0)
+                        state = mapped_features.cpu().numpy()
+                    
+                    feature_source = "SBERT_MAPPED"
+                    
+                    # Log the mapping for monitoring
+                    if not hasattr(self, '_mapping_warned'):
+                        print(f"⚠️  Using SBERT fallback with learned mapping:")
+                        print(f"   Input: SBERT {sbert_embedding.shape} → Output: {state.shape}")
+                        print(f"   Feature density: 100% (no zero padding)")
+                        print(f"   Recommendation: Use EAGLE-3 features for best performance")
+                        self._mapping_warned = True
+                    
+                    # Track usage statistics
+                    if training_mode and self.use_wandb:
+                        wandb.log({
+                            "feature_source": "sbert_mapped",
+                            "sbert_usage": 1,
+                            "eagle3_usage": 0
+                        })
+                        
+                else:
+                    # No input available, use zero state (matching EAGLE-3 dimension)
+                    state = np.zeros(self.env.feature_dim, dtype=np.float32)
+                    feature_source = "ZERO"
+                    return 96, 8, 20  # Default parameters if no context or hidden states
         self.env.current_context = context if context else ""
         
         # Choose prediction strategy based on mode and phase

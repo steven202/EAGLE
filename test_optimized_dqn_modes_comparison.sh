@@ -4,7 +4,8 @@
 # This script demonstrates the optimized DQN policy with:
 # 1. EAGLE-3 layer features instead of SBERT text embeddings
 # 2. Action caching to reduce computation frequency (every N steps)
-
+# 3. NEW: Context-only state representation option (SBERT embeddings directly)
+#  --use-context-only-state \
 DATE=$(date '+%Y%m%d_%H%M')
 DATE="${DATE}_optimized_dqn"
 DATE='20250724_2135_optimized_dqn'
@@ -23,6 +24,7 @@ echo "Base Model: $BASE_MODEL_PATH" | tee -a log/$DATE/comparison.txt
 echo "Training Dataset: eagle/data/rl_training/question.jsonl" | tee -a log/$DATE/comparison.txt
 echo "OPTIMIZATION 1: EAGLE-3 layer features instead of SBERT embeddings" | tee -a log/$DATE/comparison.txt
 echo "OPTIMIZATION 2: Action caching - generate action every 10 steps" | tee -a log/$DATE/comparison.txt
+# echo "OPTIMIZATION 3: Context-only state representation (SBERT 384D directly)" | tee -a log/$DATE/comparison.txt --use-context-only-state \
 echo "Expected speedup: ~50% reduction in RL policy computation" | tee -a log/$DATE/comparison.txt
 echo "Action Space: 6×6×5 = 180 total (170+ valid with constraints)" | tee -a log/$DATE/comparison.txt
 echo "Constraint: total_tokens ≤ top_k^(depth-1)" | tee -a log/$DATE/comparison.txt

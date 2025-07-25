@@ -209,6 +209,8 @@ def get_model_answers(
                 action_cache_enabled=getattr(args, 'action_cache_enabled', True),
                 hidden_size=hidden_size,
                 use_eagle3_features=getattr(args, 'use_eagle3_features', True),
+                # NEW: Context-only state representation
+                use_context_only_state=getattr(args, 'use_context_only_state', False),
                 use_wandb=(not args.online_inference_only and not args.no_wandb),
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
@@ -235,6 +237,8 @@ def get_model_answers(
                 action_cache_enabled=getattr(args, 'action_cache_enabled', True),
                 hidden_size=hidden_size,
                 use_eagle3_features=getattr(args, 'use_eagle3_features', True),
+                # NEW: Context-only state representation
+                use_context_only_state=getattr(args, 'use_context_only_state', False),
                 use_wandb=(not args.online_inference_only and not args.no_wandb),
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
@@ -1428,6 +1432,12 @@ if __name__ == "__main__":
         action="store_true",
         default=True,
         help="Use EAGLE-3 layer features instead of SBERT text embeddings (optimized policies only)"
+    )
+    parser.add_argument(
+        "--use-context-only-state",
+        action="store_true",
+        default=False,
+        help="NEW: Use SBERT context embeddings directly (384D) instead of EAGLE-3 features or projection. Overrides --use-eagle3-features when enabled."
     )
     parser.add_argument(
         "--hidden-size",
