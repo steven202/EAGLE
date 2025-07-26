@@ -108,7 +108,110 @@ fi
 echo "Expected speedup: ~50% reduction in RL policy computation" | tee -a log/$DATE/comparison.txt
 echo "" | tee -a log/$DATE/comparison.txt
 
-# PHASE 1: CONTEXT-ONLY TRAINING (if enabled)
+# PHASE 1: STANDARD TRAINING (if enabled)
+if [ "$RUN_STANDARD" = "true" ]; then
+    # Phase 2a: Max-Entropy DQN (Standard) - if enabled
+    if [ "$RUN_MAX_ENTROPY" = "true" ]; then
+        echo "" | tee -a log/$DATE/comparison.txt
+        echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY DQN (Standard) ===" | tee -a log/$DATE/comparison.txt
+        echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
+        echo "- Action caching every 10 steps" | tee -a log/$DATE/comparison.txt
+        echo "- High entropy and temperature-based sampling" | tee -a log/$DATE/comparison.txt
+        echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
+        echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
+        echo "- Enhanced exploration during training and inference" | tee -a log/$DATE/comparison.txt
+        echo "- DQN parameters: lr=0.01, ε=0.9→0.3, memory=100, batch=8" | tee -a log/$DATE/comparison.txt
+        echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
+        echo "" | tee -a log/$DATE/comparison.txt
+
+        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            --ea-model-path $MODEL_PATH \
+            --base-model-path $BASE_MODEL_PATH \
+            --model-id optimized_max_entropy_dqn_standard \
+            --question-file eagle/data/rl_training/question.jsonl \
+            --question-begin 0 \
+            --question-end $QUESTION_END \
+            --answer-file log/$DATE/optimized_max_entropy_dqn_standard/training_answers.jsonl \
+            --num-choices 1 \
+            --num-gpus-per-model 1 \
+            --num-gpus-total 1 \
+            --max-gpu-memory "80GiB" \
+            --dtype float16 \
+            --temperature 0.0 \
+            --use-online-rl \
+            --use-optimized-dqn \
+            --online-lr 0.01 \
+            --online-epsilon-start 0.9 \
+            --online-epsilon-end 0.3 \
+            --online-memory-size 100 \
+            --online-batch-size 8 \
+            --action-cache-steps 10 \
+            --action-cache-enabled \
+            --use-eagle3-features \
+            --hidden-size 4096 \
+            --checkpoint-dir log/$DATE/optimized_max_entropy_dqn_standard/checkpoints \
+            --online-policy-save-path log/$DATE/optimized_max_entropy_dqn_standard/optimized_max_entropy_dqn_policy.pth \
+            --checkpoint-freq 500 \
+            --wandb-project eagle-optimized-dqn \
+            --total-token 60 \
+            --depth 7 \
+            --top-k 10 \
+            --use-stepwise-rl \
+            --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_dqn_standard/training.log
+    fi
+
+    # Phase 2b: Standard DQN (Standard) - if enabled
+    if [ "$RUN_NO_MAX_ENTROPY" = "true" ]; then
+        echo "" | tee -a log/$DATE/comparison.txt
+        echo "=== Phase 2b: Training with OPTIMIZED STANDARD DQN (Standard) ===" | tee -a log/$DATE/comparison.txt
+        echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
+        echo "- Action caching every 10 steps" | tee -a log/$DATE/comparison.txt
+        echo "- Low temperature and deterministic inference" | tee -a log/$DATE/comparison.txt
+        echo "- Standard epsilon-greedy exploration" | tee -a log/$DATE/comparison.txt
+        echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
+        echo "- DQN parameters: lr=0.01, ε=0.9→0.3, memory=100, batch=8" | tee -a log/$DATE/comparison.txt
+        echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
+        echo "" | tee -a log/$DATE/comparison.txt
+
+        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            --ea-model-path $MODEL_PATH \
+            --base-model-path $BASE_MODEL_PATH \
+            --model-id optimized_standard_dqn_standard \
+            --question-file eagle/data/rl_training/question.jsonl \
+            --question-begin 0 \
+            --question-end $QUESTION_END \
+            --answer-file log/$DATE/optimized_standard_dqn_standard/training_answers.jsonl \
+            --num-choices 1 \
+            --num-gpus-per-model 1 \
+            --num-gpus-total 1 \
+            --max-gpu-memory "80GiB" \
+            --dtype float16 \
+            --temperature 0.0 \
+            --use-online-rl \
+            --use-optimized-dqn \
+            --online-lr 0.01 \
+            --online-epsilon-start 0.9 \
+            --online-epsilon-end 0.3 \
+            --online-memory-size 100 \
+            --online-batch-size 8 \
+            --disable-max-entropy \
+            --action-cache-steps 10 \
+            --action-cache-enabled \
+            --use-eagle3-features \
+            --hidden-size 4096 \
+            --checkpoint-dir log/$DATE/optimized_standard_dqn_standard/checkpoints \
+            --online-policy-save-path log/$DATE/optimized_standard_dqn_standard/optimized_standard_dqn_policy.pth \
+            --checkpoint-freq 500 \
+            --wandb-project eagle-optimized-dqn \
+            --total-token 60 \
+            --depth 7 \
+            --top-k 10 \
+            --use-stepwise-rl \
+            --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_dqn_standard/training.log
+    fi
+fi
+
+# PHASE 2: CONTEXT-ONLY TRAINING (if enabled)
 if [ "$RUN_CONTEXT_ONLY" = "true" ]; then
     # Phase 1a: Max-Entropy DQN (Context-Only) - if enabled
     if [ "$RUN_MAX_ENTROPY" = "true" ]; then
@@ -209,109 +312,6 @@ if [ "$RUN_CONTEXT_ONLY" = "true" ]; then
             --top-k 10 \
             --use-stepwise-rl \
             --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_dqn_context/training.log
-    fi
-fi
-
-# PHASE 2: STANDARD TRAINING (if enabled)
-if [ "$RUN_STANDARD" = "true" ]; then
-    # Phase 2a: Max-Entropy DQN (Standard) - if enabled
-    if [ "$RUN_MAX_ENTROPY" = "true" ]; then
-        echo "" | tee -a log/$DATE/comparison.txt
-        echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY DQN (Standard) ===" | tee -a log/$DATE/comparison.txt
-        echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-        echo "- Action caching every 10 steps" | tee -a log/$DATE/comparison.txt
-        echo "- High entropy and temperature-based sampling" | tee -a log/$DATE/comparison.txt
-        echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
-        echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-        echo "- Enhanced exploration during training and inference" | tee -a log/$DATE/comparison.txt
-        echo "- DQN parameters: lr=0.01, ε=0.9→0.3, memory=100, batch=8" | tee -a log/$DATE/comparison.txt
-        echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-        echo "" | tee -a log/$DATE/comparison.txt
-
-        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-            --ea-model-path $MODEL_PATH \
-            --base-model-path $BASE_MODEL_PATH \
-            --model-id optimized_max_entropy_dqn_standard \
-            --question-file eagle/data/rl_training/question.jsonl \
-            --question-begin 0 \
-            --question-end $QUESTION_END \
-            --answer-file log/$DATE/optimized_max_entropy_dqn_standard/training_answers.jsonl \
-            --num-choices 1 \
-            --num-gpus-per-model 1 \
-            --num-gpus-total 1 \
-            --max-gpu-memory "80GiB" \
-            --dtype float16 \
-            --temperature 0.0 \
-            --use-online-rl \
-            --use-optimized-dqn \
-            --online-lr 0.01 \
-            --online-epsilon-start 0.9 \
-            --online-epsilon-end 0.3 \
-            --online-memory-size 100 \
-            --online-batch-size 8 \
-            --action-cache-steps 10 \
-            --action-cache-enabled \
-            --use-eagle3-features \
-            --hidden-size 4096 \
-            --checkpoint-dir log/$DATE/optimized_max_entropy_dqn_standard/checkpoints \
-            --online-policy-save-path log/$DATE/optimized_max_entropy_dqn_standard/optimized_max_entropy_dqn_policy.pth \
-            --checkpoint-freq 500 \
-            --wandb-project eagle-optimized-dqn \
-            --total-token 60 \
-            --depth 7 \
-            --top-k 10 \
-            --use-stepwise-rl \
-            --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_dqn_standard/training.log
-    fi
-
-    # Phase 2b: Standard DQN (Standard) - if enabled
-    if [ "$RUN_NO_MAX_ENTROPY" = "true" ]; then
-        echo "" | tee -a log/$DATE/comparison.txt
-        echo "=== Phase 2b: Training with OPTIMIZED STANDARD DQN (Standard) ===" | tee -a log/$DATE/comparison.txt
-        echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-        echo "- Action caching every 10 steps" | tee -a log/$DATE/comparison.txt
-        echo "- Low temperature and deterministic inference" | tee -a log/$DATE/comparison.txt
-        echo "- Standard epsilon-greedy exploration" | tee -a log/$DATE/comparison.txt
-        echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-        echo "- DQN parameters: lr=0.01, ε=0.9→0.3, memory=100, batch=8" | tee -a log/$DATE/comparison.txt
-        echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-        echo "" | tee -a log/$DATE/comparison.txt
-
-        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-            --ea-model-path $MODEL_PATH \
-            --base-model-path $BASE_MODEL_PATH \
-            --model-id optimized_standard_dqn_standard \
-            --question-file eagle/data/rl_training/question.jsonl \
-            --question-begin 0 \
-            --question-end $QUESTION_END \
-            --answer-file log/$DATE/optimized_standard_dqn_standard/training_answers.jsonl \
-            --num-choices 1 \
-            --num-gpus-per-model 1 \
-            --num-gpus-total 1 \
-            --max-gpu-memory "80GiB" \
-            --dtype float16 \
-            --temperature 0.0 \
-            --use-online-rl \
-            --use-optimized-dqn \
-            --online-lr 0.01 \
-            --online-epsilon-start 0.9 \
-            --online-epsilon-end 0.3 \
-            --online-memory-size 100 \
-            --online-batch-size 8 \
-            --disable-max-entropy \
-            --action-cache-steps 10 \
-            --action-cache-enabled \
-            --use-eagle3-features \
-            --hidden-size 4096 \
-            --checkpoint-dir log/$DATE/optimized_standard_dqn_standard/checkpoints \
-            --online-policy-save-path log/$DATE/optimized_standard_dqn_standard/optimized_standard_dqn_policy.pth \
-            --checkpoint-freq 500 \
-            --wandb-project eagle-optimized-dqn \
-            --total-token 60 \
-            --depth 7 \
-            --top-k 10 \
-            --use-stepwise-rl \
-            --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_dqn_standard/training.log
     fi
 fi
 
