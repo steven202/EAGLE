@@ -995,7 +995,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     "mean_return": returns.mean().item()
                 })
                 
-            print(f"   PPO update completed - Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
+            print(f"   PPO update completed at step {self.step_count} - Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
             
         except Exception as e:
             raise e
