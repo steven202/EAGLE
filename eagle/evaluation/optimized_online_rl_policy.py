@@ -187,51 +187,83 @@ class OptimizedOnlineTreePolicy:
         print(f"  - Device: {self.device}")
         print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
     
-    def _build_network(self):
-        """Build simplified 4-layer Q-network with skip connections to prevent overfitting"""
-        class SkipConnectionNetwork(nn.Module):
-            def __init__(self, input_dim, output_dim):
-                super().__init__()
-                # Smaller hidden dimensions to reduce overfitting and inference time
-                self.fc1 = nn.Linear(input_dim, 256)
-                self.fc2 = nn.Linear(256, 256)
-                self.fc3 = nn.Linear(256, 256)
-                self.fc4 = nn.Linear(256, output_dim)
+    # def _build_network(self):
+    #     """Build simplified 4-layer Q-network with skip connections to prevent overfitting"""
+    #     class SkipConnectionNetwork(nn.Module):
+    #         def __init__(self, input_dim, output_dim):
+    #             super().__init__()
+    #             # Smaller hidden dimensions to reduce overfitting and inference time
+    #             self.fc1 = nn.Linear(input_dim, 256)
+    #             self.fc2 = nn.Linear(256, 256)
+    #             self.fc3 = nn.Linear(256, 256)
+    #             self.fc4 = nn.Linear(256, output_dim)
                 
-                # Skip connection projection layers
-                self.skip1 = nn.Linear(input_dim, 128)  # Skip from input to layer 2
-                self.skip2 = nn.Linear(256, 64)        # Skip from layer 1 to layer 3
+    #             # Skip connection projection layers
+    #             self.skip1 = nn.Linear(input_dim, 128)  # Skip from input to layer 2
+    #             self.skip2 = nn.Linear(256, 64)        # Skip from layer 1 to layer 3
 
-                # Layer normalization for better training stability
-                self.bn1 = nn.LayerNorm(256)
-                self.bn2 = nn.LayerNorm(128)
-                self.bn3 = nn.LayerNorm(64)
+    #             # Layer normalization for better training stability
+    #             self.bn1 = nn.LayerNorm(256)
+    #             self.bn2 = nn.LayerNorm(128)
+    #             self.bn3 = nn.LayerNorm(64)
                 
-                # Reduced dropout to prevent underfitting
-                self.dropout = nn.Dropout(0.1)
+    #             # Reduced dropout to prevent underfitting
+    #             self.dropout = nn.Dropout(0.1)
                 
-                self._init_weights()
+    #             self._init_weights()
             
-            def _init_weights(self):
-                """Initialize weights with smaller values to prevent overfitting"""
-                for module in self.modules():
-                    if isinstance(module, nn.Linear):
-                        # Smaller initialization to reduce initial bias
-                        nn.init.xavier_uniform_(module.weight, gain=0.5)
-                        nn.init.constant_(module.bias, 0.5)
+    #         def _init_weights(self):
+    #             """Initialize weights with smaller values to prevent overfitting"""
+    #             for module in self.modules():
+    #                 if isinstance(module, nn.Linear):
+    #                     # Smaller initialization to reduce initial bias
+    #                     nn.init.xavier_uniform_(module.weight, gain=0.5)
+    #                     nn.init.constant_(module.bias, 0.5)
             
-            def forward(self, x):
-                return self.fc4(self.dropout(torch.relu(self.bn1(self.fc1(x)))))
-        network = SkipConnectionNetwork(self.feature_dim, len(self.valid_actions))
-        # Initialize weights
-        # for layer in network.modules():
-        #     if isinstance(layer, nn.Linear):
-        #         nn.init.xavier_uniform_(layer.weight)
-        #         nn.init.constant_(layer.bias, 0.1)
+    #         def forward(self, x):
+    #             return self.fc4(self.dropout(torch.relu(self.bn1(self.fc1(x)))))
+    #     network = SkipConnectionNetwork(self.feature_dim, len(self.valid_actions))
+    #     # Initialize weights
+    #     # for layer in network.modules():
+    #     #     if isinstance(layer, nn.Linear):
+    #     #         nn.init.xavier_uniform_(layer.weight)
+    #     #         nn.init.constant_(layer.bias, 0.1)
+    #     network = nn.Sequential(
+    #         nn.Linear(self.feature_dim, len(self.valid_actions)),
+    #         # nn.LayerNorm(len(self.valid_actions)),
+    #     )
+    #     return network
+    # def _build_network(self):
+    #     """Build Q-network for EAGLE-3 features"""
+    #     network = nn.Sequential(
+    #         nn.Linear(self.feature_dim, 512),
+    #         nn.ReLU(),
+    #         nn.Dropout(0.2),
+    #         nn.Linear(512, 256),
+    #         nn.ReLU(),
+    #         nn.Dropout(0.2),
+    #         nn.Linear(256, 128),
+    #         nn.ReLU(),
+    #         nn.Linear(128, len(self.valid_actions))  # Output for valid actions only
+    #     )
+    def _build_network(self):
+        """Build Q-network for EAGLE-3 features"""
         network = nn.Sequential(
-            nn.Linear(self.feature_dim, len(self.valid_actions)),
-            # nn.LayerNorm(len(self.valid_actions)),
+            nn.Linear(self.feature_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, len(self.valid_actions))  # Output for valid actions only
         )
+        
+        # Initialize weights
+        for layer in network:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.constant_(layer.bias, 0.1)
+        
         return network
     
     def _encode_state_from_hidden_states(self, hidden_states):
