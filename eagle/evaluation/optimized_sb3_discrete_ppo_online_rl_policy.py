@@ -331,7 +331,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                  checkpoint_dir="optimized_sb3_discrete_ppo_checkpoints",
                  checkpoint_freq=100,
                  max_checkpoints=3):
-        
+
         if not SB3_AVAILABLE:
             raise ImportError("Stable Baselines 3 not available. Install with: pip install stable-baselines3")
         
@@ -409,7 +409,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         # Determine entropy coefficient based on mode
         actual_ent_coef = max_entropy_ent_coef if enable_max_entropy else ent_coef
-        
+
         # Initialize SB3 PPO model
         self.model = PPO(
             "MlpPolicy", #CustomPolicy,
@@ -428,6 +428,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             device=self.device,
             tensorboard_log=None
         )
+        # Initialize policy in evaluation mode by default (safer for inference)
+        self.model.policy.set_training_mode(False)
         
         # Initialize training tracking
         self.reward_history = deque(maxlen=1000)
@@ -478,6 +480,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         Returns:
             tuple: (total_tokens, depth, top_k)
         """
+        # Ensure policy is in correct mode
+        if training_mode:
+            self.model.policy.set_training_mode(True)
+        else:
+            self.model.policy.set_training_mode(False)
         # NEW: Handle context-only state mode
         if self.use_context_only_state:
             if context is None:
@@ -675,6 +682,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     
     def _sample_with_temperature(self, state, temperature):
         """Sample action using temperature-based softmax for max-entropy exploration"""
+        # Ensure policy is in evaluation mode for inference
+        self.model.policy.set_training_mode(False)
+        
         obs_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
@@ -708,6 +718,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     
     def _enhanced_stochastic_sampling(self, state):
         """Enhanced stochastic sampling as fallback"""
+        # Ensure policy is in evaluation mode for inference
+        self.model.policy.set_training_mode(False)
         action, _ = self.model.predict(state, deterministic=False)
         return action
     
@@ -944,6 +956,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     def _manual_ppo_update(self, observations, actions, rewards):
         """Manually perform a PPO update step"""
         try:
+            # Switch to train mode (this affects batch norm / dropout)
+            self.model.policy.set_training_mode(True)
             # Get policy and value function outputs
             with torch.no_grad():
                 values = self.model.policy.predict_values(observations)
@@ -983,7 +997,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.policy.parameters(), self.model.max_grad_norm)
                 self.model.policy.optimizer.step()
-            
+            # Set back to evaluation mode after training
+            self.model.policy.set_training_mode(False)
             # Log learning metrics
             if self.use_wandb:
                 wandb.log({
@@ -1119,7 +1134,12 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Reset environment state
         if hasattr(self, 'env'):
             self.env.reset()
-        
+        # Ensure policy is in correct mode after reset
+        if hasattr(self, 'model') and hasattr(self.model, 'policy'):
+            if training_mode:
+                self.model.policy.set_training_mode(True)
+            else:
+                self.model.policy.set_training_mode(False)
         # print(f"🔄 Reset SB3 PPO policy state - cache cleared, step counter reset to 0")
     
     def save_checkpoint(self, checkpoint_name=None):
@@ -1280,7 +1300,10 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     def set_training_seed(self, seed):
         """Set training seed for reproducible shuffling"""
         self.training_seed = seed
-    
+    def set_training_mode(self, training_mode):
+        """Explicitly set the policy training mode"""
+        if hasattr(self, 'model') and hasattr(self.model, 'policy'):
+            self.model.policy.set_training_mode(training_mode)
     def get_resume_info(self):
         """Get information for resuming training"""
         return {
