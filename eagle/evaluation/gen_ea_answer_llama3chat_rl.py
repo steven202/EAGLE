@@ -555,6 +555,7 @@ def get_model_answers(
                             tree_top_k=predicted_top_k,
                         )
             except RuntimeError as e:
+                raise e
                 if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                     print(f"   Falling back to ultra-conservative warmup parameters...")
@@ -840,6 +841,7 @@ def get_model_answers(
                         success = True
                         
                     except RuntimeError as e:
+                        raise e
                         if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
                             retry_count += 1
                             print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k} (attempt {retry_count}/{max_retries})")

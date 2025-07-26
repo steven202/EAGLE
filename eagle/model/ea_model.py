@@ -222,6 +222,10 @@ class EaModel(nn.Module):
         step_states = []
         use_stepwise_rl = rl_policy is not None
         
+        # Track unique actions and their first appearance step
+        unique_actions = {}  # action_tuple -> first_step_number
+        generation_speeds = []  # Store generation speed for each step
+        
         # Temporarily update parameters if provided (fallback values for non-RL mode)
         if total_tokens is not None:
             self.ea_layer.total_tokens = total_tokens - 1  # Adjust as in line 163
@@ -277,7 +281,7 @@ class EaModel(nn.Module):
                     # step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
                         # context=initial_state, hidden_states=None, training_mode=training_mode
                     # )
-                    step_total_tokens, step_depth, step_top_k = (96, 8, 20)
+                    step_total_tokens, step_depth, step_top_k = 96, 8, 20
                 else:
                     # Traditional policy interface
                     step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
@@ -292,9 +296,9 @@ class EaModel(nn.Module):
                     # For optimized policies, we don't have hidden states yet, so pass None initially
                     if is_optimized_policy:
                         # step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                        #     context=initial_state, hidden_states=None, training_mode=training_mode
+                            # context=initial_state, hidden_states=None, training_mode=training_mode
                         # )
-                        step_total_tokens, step_depth, step_top_k = (96, 8, 20)
+                        step_total_tokens, step_depth, step_top_k = 96, 8, 20
                     else:
                         # Traditional policy interface
                         step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
@@ -305,6 +309,11 @@ class EaModel(nn.Module):
             if training_mode:
                 step_states.append(initial_state)
                 step_actions.append((step_total_tokens, step_depth, step_top_k))
+                
+                # Track unique actions
+                action_tuple = (step_total_tokens, step_depth, step_top_k)
+                if action_tuple not in unique_actions:
+                    unique_actions[action_tuple] = 0  # Step 0 for initial action
             
             # print(f"Step 0 RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
         else:
@@ -348,8 +357,13 @@ class EaModel(nn.Module):
                     if training_mode:
                         step_states.append(current_state)
                         step_actions.append((step_total_tokens, step_depth, step_top_k))
-                    if len(step_rewards) % 30 == 0:
-                        print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                        
+                        # Track unique actions
+                        action_tuple = (step_total_tokens, step_depth, step_top_k)
+                        if action_tuple not in unique_actions:
+                            unique_actions[action_tuple] = idx
+                    # if len(step_rewards) % 30 == 0:
+                    #     print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
                 else:
                     with torch.no_grad():
                         # Get current context for RL policy
@@ -371,8 +385,13 @@ class EaModel(nn.Module):
                         if training_mode:
                             step_states.append(current_state)
                             step_actions.append((step_total_tokens, step_depth, step_top_k))
-                        if len(step_rewards) % 30 == 0:
-                            print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
+                            
+                            # Track unique actions
+                            action_tuple = (step_total_tokens, step_depth, step_top_k)
+                            if action_tuple not in unique_actions:
+                                unique_actions[action_tuple] = idx
+                        # if len(step_rewards) % 30 == 0:
+                        #     print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
                         # print(f"Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
                 
                 # Update model parameters for this step
@@ -414,13 +433,15 @@ class EaModel(nn.Module):
                 # Calculate reward: tokens per second for this step
                 step_reward = step_tokens_generated / step_time
                 step_rewards.append(step_reward)
+                generation_speeds.append(step_tokens_generated / step_time)
                 
                 # Update policy if in training mode
                 if training_mode and len(step_rewards) >= 1:
                     try:
-                        rl_policy.update_policy(step_reward)
-                        if len(step_rewards) % 30 == 0:  # Log every 30 steps
-                            print(f"  Step {idx} reward: {step_reward:.2f} tok/s (accepted: {step_tokens_generated})")
+                        # Pass generation_time and new_tokens for optimized policies
+                        rl_policy.update_policy(step_reward, step_time, step_tokens_generated, training_mode)
+                        # if len(step_rewards) % 30 == 0:  # Log every 30 steps
+                        #     print(f"  Step {idx} reward: {step_reward:.2f} tok/s (accepted: {step_tokens_generated})")
                     except Exception as e:
                         print(f"  Warning: RL policy update failed at step {idx}: {e}")
             
@@ -452,6 +473,32 @@ class EaModel(nn.Module):
                 break
             if input_ids.shape[1] > max_length:
                 break
+        
+        # Reset policy state after generation is complete
+        if use_stepwise_rl and rl_policy is not None:
+            if hasattr(rl_policy, 'reset'):
+                rl_policy.reset(training_mode)
+        
+        # Print summary statistics if using step-wise RL
+        if use_stepwise_rl: # and training_mode:
+            # print("\n=== Step-wise RL Summary ===")
+            
+            # Print unique actions and their first appearance
+            # print(f"Unique actions found: {len(unique_actions)}")
+            for action, first_step in sorted(unique_actions.items(), key=lambda x: x[1]):
+                tokens, depth, top_k = action
+                print(f"  Action (tokens={tokens}, depth={depth}, top_k={top_k}) first appeared at step {first_step}")
+            
+            # Calculate and print mean statistics
+            if step_rewards:
+                mean_reward = sum(step_rewards) / len(step_rewards)
+                print(f"Mean reward: {mean_reward:.2f} tok/s over {len(step_rewards)} steps")
+            
+            if generation_speeds:
+                mean_speed = sum(generation_speeds) / len(generation_speeds)
+                print(f"Mean generation speed: {mean_speed:.2f} tok/s over {len(generation_speeds)} steps")
+            
+            # print("=== End Summary ===\n")
         
         # Restore original parameters
         self.ea_layer.total_tokens = original_total_tokens
