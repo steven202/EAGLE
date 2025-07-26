@@ -31,7 +31,57 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: wandb not available. Install with: pip install wandb")
+from stable_baselines3.common.policies import ActorCriticPolicy
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
+class CustomPolicy(ActorCriticPolicy):
+    def __init__(self, observation_space, action_space, lr_schedule, net_arch=None, **kwargs):
+        super().__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch=[],
+            **kwargs
+        )
+
+        # You can build your custom feature extractor or policy network here
+        self.mlp_extractor = CustomMLP(self.features_dim, self.action_space.n)
+
+        # Re-register policy and value networks
+        self._build(lr_schedule)
+
+    def forward(self, obs, deterministic=False):
+        return super().forward(obs, deterministic)
+
+class CustomMLP(nn.Module):
+    def __init__(self, feature_dim, n_actions):
+        super().__init__()
+        self.policy_net = nn.Sequential(
+            nn.Linear(feature_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, n_actions)
+        )
+        self.value_net = nn.Sequential(
+            nn.Linear(feature_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
+        )
+
+    def forward(self, features):
+        return self.policy_net(features), self.value_net(features)
+    
 class OptimizedEagleParameterEnv(gym.Env):
     """Optimized Custom Gym environment for EAGLE parameter optimization
     
@@ -307,6 +357,12 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         self.cache_step_counter = 0
         self.cache_hidden_states = None
         
+        # NEW: Reward aggregation for cached actions
+        self.cached_rewards = []
+        self.cached_generation_times = []
+        self.cached_new_tokens = []
+        self.last_cache_update_step = 0
+        
         # Max-entropy RL configuration
         self.enable_max_entropy = enable_max_entropy
         self.max_entropy_ent_coef = max_entropy_ent_coef
@@ -319,6 +375,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         self.max_checkpoints = max_checkpoints
         self.questions_processed = 0
         self.training_seed = None
+        # NEW: Track last checkpoint step to prevent multiple saves
+        self.last_checkpoint_step = -1
         
         # Create checkpoint directory
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -354,7 +412,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         # Initialize SB3 PPO model
         self.model = PPO(
-            "MlpPolicy",
+            "MlpPolicy", #CustomPolicy,
             self.env,
             learning_rate=learning_rate,
             n_steps=n_steps,
@@ -377,6 +435,12 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         self.last_action = None
         self.last_params = None
         self.step_count = 0
+        
+        # PPO learning state
+        self.current_obs = self.env.reset()
+        self.episode_rewards = []
+        self.episode_length = 0
+        self.rollout_buffer = []
         
         print(f"OptimizedSB3DiscretePPOOnlineTreePolicy initialized:")
         print(f"  - Action space: {self.env.action_space.n} discrete actions")
@@ -420,11 +484,13 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 return 96, 8, 20  # Default parameters
             
             # OPTIMIZATION 2: Action caching logic (works with context-only state too)
-            if self.action_cache_enabled and not training_mode:
+            if self.action_cache_enabled:
                 if (self.cached_params is not None and 
                     self.cache_step_counter < self.action_cache_steps):
                     
                     self.cache_step_counter += 1
+                    # if self.cache_step_counter % 5 == 0:  # Log every 5th cache hit to avoid spam
+                    #     print(f"  Cache hit: Step {self.cache_step_counter}/{self.action_cache_steps} - Using cached params: {self.cached_params}")
                     return self.cached_params
             
             # Use context directly for state representation (384D)
@@ -445,7 +511,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             return 96, 8, 20  # Default parameters
         else:
             # OPTIMIZATION 2: Action caching logic
-            if self.action_cache_enabled and not training_mode:
+            if self.action_cache_enabled:
                 # Check if we can use cached action
                 if (self.cached_params is not None and 
                     self.cache_step_counter < self.action_cache_steps):
@@ -463,6 +529,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                                 "top_k": self.cached_params[2]
                             }
                         })
+                    
+                    # if self.cache_step_counter % 5 == 0:  # Log every 5th cache hit to avoid spam
+                    #     print(f"  Cache hit: Step {self.cache_step_counter}/{self.action_cache_steps} - Using cached params: {self.cached_params}")
                     
                     return self.cached_params
             
@@ -570,11 +639,13 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         total_tokens, depth, top_k = self.env._action_to_params(actual_action)
         
         # OPTIMIZATION 2: Update action cache
-        if self.action_cache_enabled and not training_mode:
+        if self.action_cache_enabled:
             self.cached_params = (total_tokens, depth, top_k)
             self.cached_action = action
             self.cache_step_counter = 1  # Reset counter
             self.cache_hidden_states = hidden_states
+            
+            # print(f"  New action predicted: {total_tokens}, {depth}, {top_k} - Cache reset to step 1")
             
             # Log cache update
             if training_mode and self.use_wandb:
@@ -587,8 +658,13 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     }
                 })
         
-        # Store for training
+        # Store for training - UPDATE THE ENVIRONMENT STATE
         if training_mode:
+            # Update environment observation for PPO learning
+            self.current_obs = state.copy()
+            self.env.current_hidden_states = hidden_states
+            self.env.current_context = context if context else ""
+            
             self.last_state = state
             self.last_action = action
             self.last_params = (total_tokens, depth, top_k)
@@ -635,46 +711,416 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         action, _ = self.model.predict(state, deterministic=False)
         return action
     
-    def update_policy(self, reward, generation_time=None, new_tokens=None):
-        """Update policy with received reward"""
-        if self.last_state is not None and self.last_action is not None:
-            # Convert reward to float to avoid tensor serialization issues
-            reward_value = reward.item() if hasattr(reward, 'item') else float(reward)
+    def update_policy(self, reward, generation_time=None, new_tokens=None, training_mode=True):
+        """Update policy with received reward using reward aggregation for cached actions"""
+        # Convert reward to float to avoid tensor serialization issues
+        reward_value = reward.item() if hasattr(reward, 'item') else float(reward)
+        
+        # Only do reward aggregation and policy updates in training mode
+        if not training_mode:
+            return
+        
+        # OPTIMIZATION: Reward aggregation for cached actions
+        if self.action_cache_enabled:
+            # Collect rewards during cache period
+            self.cached_rewards.append(reward_value)
+            if generation_time is not None:
+                self.cached_generation_times.append(generation_time)
+            if new_tokens is not None:
+                self.cached_new_tokens.append(new_tokens)
+            
+            # Check if we should aggregate and update policy
+            should_update = (
+                self.last_state is not None and 
+                self.last_action is not None and
+                (self.cache_step_counter >= self.action_cache_steps or 
+                 len(self.cached_rewards) >= self.action_cache_steps)
+            )
+            
+            if should_update:
+                # Aggregate rewards over the cache period
+                if len(self.cached_rewards) > 0:
+                    # Calculate aggregated metrics
+                    avg_reward = sum(self.cached_rewards) / len(self.cached_rewards)
+                    total_generation_time = sum(self.cached_generation_times) if self.cached_generation_times else 0
+                    total_new_tokens = sum(self.cached_new_tokens) if self.cached_new_tokens else 0
+                    
+                    # ADD PROPER PPO LEARNING: Step the environment with the reward
+                    if self.last_state is not None and self.last_action is not None:
+                        # Step the environment to provide the reward and get done signal
+                        next_obs, _, done, info = self.env.step(self.last_action)
+                        
+                        # Store the experience in rollout buffer for PPO learning
+                        experience = {
+                            'obs': self.current_obs,
+                            'action': self.last_action,
+                            'reward': avg_reward,
+                            'next_obs': next_obs,
+                            'done': done
+                        }
+                        self.rollout_buffer.append(experience)
+                        self.episode_rewards.append(avg_reward)
+                        self.episode_length += 1
+                        
+                        # Update current observation for next prediction
+                        self.current_obs = self.env.reset()  # Reset for next episode (episodic task)
+                        
+                        # Trigger PPO learning when we have enough data
+                        if len(self.rollout_buffer) >= self.model.n_steps:
+                            # Learn from collected experiences
+                            self._trigger_ppo_learning()
+                            # Clear the rollout buffer
+                            self.rollout_buffer = []
+                    
+                    # Add aggregated reward to history
+                    self.reward_history.append(avg_reward)
+                    
+                    # Log aggregated metrics to wandb
+                    if self.use_wandb:
+                        log_data = {
+                            "aggregated_reward": avg_reward,
+                            "cache_period_steps": len(self.cached_rewards),
+                            "step": self.step_count,
+                            "avg_reward_100": sum(list(self.reward_history)[-100:]) / min(len(self.reward_history), 100),
+                            "reward_std_in_cache": np.std(self.cached_rewards) if len(self.cached_rewards) > 1 else 0.0,
+                            "episode_length": self.episode_length,
+                            "rollout_buffer_size": len(self.rollout_buffer)
+                        }
+                        
+                        if total_generation_time > 0:
+                            log_data["total_generation_time"] = total_generation_time
+                            log_data["avg_generation_time"] = total_generation_time / len(self.cached_generation_times)
+                        if total_new_tokens > 0:
+                            log_data["total_new_tokens"] = total_new_tokens
+                            log_data["avg_new_tokens"] = total_new_tokens / len(self.cached_new_tokens)
+                            if total_generation_time > 0:
+                                log_data["avg_tokens_per_second"] = total_new_tokens / total_generation_time
+                        
+                        # Add parameter info
+                        if self.last_params:
+                            log_data.update({
+                                "total_tokens": self.last_params[0],
+                                "depth": self.last_params[1],
+                                "top_k": self.last_params[2]
+                            })
+                        
+                        wandb.log(log_data)
+                    
+                    # Store cache period length before clearing
+                    cache_period_length = len(self.cached_rewards)
+                    
+                    # Clear cache for next period
+                    self.cached_rewards = []
+                    self.cached_generation_times = []
+                    self.cached_new_tokens = []
+                    self.last_cache_update_step = self.step_count
+                    
+                    # Reset episode tracking
+                    self.episode_rewards = []
+                    self.episode_length = 0
+                    
+                    # print(f"🔄 Aggregated {cache_period_length} rewards: avg={avg_reward:.2f}, "
+                        #   f"total_time={total_generation_time:.2f}s, total_tokens={total_new_tokens}")
+        else:
+            # Original behavior for non-cached mode - ALSO ADD PPO LEARNING
+            if self.last_state is not None and self.last_action is not None:
+                # Step the environment to provide the reward
+                next_obs, _, done, info = self.env.step(self.last_action)
+                
+                # Store the experience in rollout buffer for PPO learning
+                experience = {
+                    'obs': self.current_obs,
+                    'action': self.last_action,
+                    'reward': reward_value,
+                    'next_obs': next_obs,
+                    'done': done
+                }
+                self.rollout_buffer.append(experience)
+                self.episode_rewards.append(reward_value)
+                self.episode_length += 1
+                
+                # Update current observation for next prediction
+                self.current_obs = self.env.reset()  # Reset for next episode (episodic task)
+                
+                # Trigger PPO learning when we have enough data
+                if len(self.rollout_buffer) >= self.model.n_steps:
+                    # Learn from collected experiences
+                    self._trigger_ppo_learning()
+                    # Clear the rollout buffer
+                    self.rollout_buffer = []
+                
+                # Add to reward history
+                self.reward_history.append(reward_value)
+                
+                # Log to wandb
+                if self.use_wandb:
+                    log_data = {
+                        "reward": reward_value,
+                        "step": self.step_count,
+                        "avg_reward_100": sum(list(self.reward_history)[-100:]) / min(len(self.reward_history), 100),
+                        "episode_length": self.episode_length,
+                        "rollout_buffer_size": len(self.rollout_buffer)
+                    }
+                    
+                    if generation_time is not None:
+                        log_data["generation_time"] = generation_time
+                    if new_tokens is not None:
+                        log_data["new_tokens"] = new_tokens
+                        if generation_time is not None and generation_time > 0:
+                            log_data["tokens_per_second"] = new_tokens / generation_time
+                    
+                    # Add parameter info
+                    if self.last_params:
+                        log_data.update({
+                            "total_tokens": self.last_params[0],
+                            "depth": self.last_params[1],
+                            "top_k": self.last_params[2]
+                        })
+                    
+                    wandb.log(log_data)
+                
+                # Reset episode tracking
+                self.episode_rewards = []
+                self.episode_length = 0
+        
+        # Save checkpoint periodically
+        if self.should_save_checkpoint():
+            self.save_checkpoint()
+            # Update last checkpoint step to prevent duplicate saves in the same step
+            self.last_checkpoint_step = self.step_count
+    
+    def _trigger_ppo_learning(self):
+        """Trigger PPO learning from collected rollout experiences"""
+        if len(self.rollout_buffer) == 0:
+            return
+        
+        try:
+            # Convert rollout buffer to format suitable for SB3 learning
+            # Since SB3 handles its own rollout collection, we need to manually trigger learning
+            # by feeding our collected experiences
+            
+            # Create temporary vectorized environment for learning
+            from stable_baselines3.common.vec_env import DummyVecEnv
+            
+            # The key insight: we need to manually call the model's learning methods
+            # with our collected experiences, but SB3 expects a specific format
+            
+            print(f"🎯 Triggering PPO learning with {len(self.rollout_buffer)} experiences")
+            
+            # Extract observations, actions, and rewards from rollout buffer
+            observations = np.array([exp['obs'] for exp in self.rollout_buffer])
+            actions = np.array([exp['action'] for exp in self.rollout_buffer])
+            rewards = np.array([exp['reward'] for exp in self.rollout_buffer])
+            
+            # Create a temporary environment with the collected data
+            # and trigger one learning step
+            if hasattr(self.model, 'learn'):
+                # We can't directly call learn() with our data, so we'll use a workaround:
+                # Set the model's rollout buffer manually and trigger learning
+                
+                # Manual learning step using collected experiences
+                obs_tensor = torch.FloatTensor(observations).to(self.device)
+                actions_tensor = torch.LongTensor(actions).to(self.device)
+                rewards_tensor = torch.FloatTensor(rewards).to(self.device)
+                
+                # Perform one gradient step
+                self._manual_ppo_update(obs_tensor, actions_tensor, rewards_tensor)
+            
+            if self.use_wandb:
+                wandb.log({
+                    "ppo_learning_triggered": 1,
+                    "rollout_size": len(self.rollout_buffer),
+                    "avg_rollout_reward": np.mean(rewards),
+                    "learning_step": self.step_count
+                })
+                
+        except Exception as e:
+            raise e
+            print(f"Warning: PPO learning failed: {e}")
+            # Continue without learning rather than crashing
+            if self.use_wandb:
+                wandb.log({"ppo_learning_error": 1})
+    
+    def _manual_ppo_update(self, observations, actions, rewards):
+        """Manually perform a PPO update step"""
+        try:
+            # Get policy and value function outputs
+            with torch.no_grad():
+                values = self.model.policy.predict_values(observations)
+                log_probs = self.model.policy.get_distribution(observations).log_prob(actions)
+                old_log_probs = log_probs.detach()
+            
+            # Calculate advantages (simplified - normally would use GAE)
+            advantages = rewards.unsqueeze(1) - values
+            returns = rewards.unsqueeze(1)
+            
+            # Normalize advantages
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            
+            # PPO update for several epochs
+            for epoch in range(self.model.n_epochs):
+                # Get current policy outputs
+                distribution = self.model.policy.get_distribution(observations)
+                new_log_probs = distribution.log_prob(actions)
+                entropy = distribution.entropy().mean()
+                
+                # Policy loss (PPO clipped objective)
+                ratio = torch.exp(new_log_probs - old_log_probs)
+                # Get current clip range value (handle both callable and scalar)
+                current_clip_range = self.model.clip_range(self.model.num_timesteps) if callable(self.model.clip_range) else self.model.clip_range
+                clipped_ratio = torch.clamp(ratio, 1 - current_clip_range, 1 + current_clip_range)
+                policy_loss = -torch.min(ratio * advantages.squeeze(), clipped_ratio * advantages.squeeze()).mean()
+                
+                # Value loss
+                current_values = self.model.policy.predict_values(observations)
+                value_loss = nn.MSELoss()(current_values, returns)
+                
+                # Total loss
+                loss = policy_loss + self.model.vf_coef * value_loss - self.model.ent_coef * entropy
+                
+                # Gradient step
+                self.model.policy.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.policy.parameters(), self.model.max_grad_norm)
+                self.model.policy.optimizer.step()
+            
+            # Log learning metrics
+            if self.use_wandb:
+                wandb.log({
+                    "policy_loss": policy_loss.item(),
+                    "value_loss": value_loss.item(),
+                    "entropy": entropy.item(),
+                    "total_loss": loss.item(),
+                    "mean_advantage": advantages.mean().item(),
+                    "mean_return": returns.mean().item()
+                })
+                
+            print(f"   PPO update completed - Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
+            
+        except Exception as e:
+            raise e
+            print(f"   PPO manual update failed: {e}")
+            raise
+    
+    def _clear_reward_cache(self, training_mode=True):
+        """Clear reward cache with optional aggregation"""
+        if not self.action_cache_enabled or len(self.cached_rewards) == 0:
+            return None
+        
+        cache_period_length = len(self.cached_rewards)
+        
+        # Only aggregate if in training mode
+        if training_mode:
+            # Aggregate current cache
+            avg_reward = sum(self.cached_rewards) / len(self.cached_rewards)
+            total_generation_time = sum(self.cached_generation_times) if self.cached_generation_times else 0
+            total_new_tokens = sum(self.cached_new_tokens) if self.cached_new_tokens else 0
+            
+            # ADD PROPER PPO LEARNING: Step the environment with the reward
+            if self.last_state is not None and self.last_action is not None:
+                # Step the environment to provide the reward and get done signal
+                next_obs, _, done, info = self.env.step(self.last_action)
+                
+                # Store the experience in rollout buffer for PPO learning
+                experience = {
+                    'obs': self.current_obs,
+                    'action': self.last_action,
+                    'reward': avg_reward,
+                    'next_obs': next_obs,
+                    'done': done
+                }
+                self.rollout_buffer.append(experience)
+                
+                # Update current observation for next prediction
+                self.current_obs = self.env.reset()  # Reset for next episode (episodic task)
+                
+                # Trigger PPO learning when we have enough data
+                if len(self.rollout_buffer) >= self.model.n_steps:
+                    # Learn from collected experiences
+                    self._trigger_ppo_learning()
+                    # Clear the rollout buffer
+                    self.rollout_buffer = []
             
             # Add to reward history
-            self.reward_history.append(reward_value)
+            self.reward_history.append(avg_reward)
             
-            # Store experience for SB3 learning
-            # Note: SB3 handles the experience collection automatically during training
-            
-            # Log to wandb
+            # Log if wandb is enabled
             if self.use_wandb:
                 log_data = {
-                    "reward": reward_value,
+                    "forced_aggregated_reward": avg_reward,
+                    "cache_period_steps": cache_period_length,
                     "step": self.step_count,
-                    "avg_reward_100": sum(list(self.reward_history)[-100:]) / min(len(self.reward_history), 100),
+                    "reward_std_in_cache": np.std(self.cached_rewards) if len(self.cached_rewards) > 1 else 0.0,
                 }
                 
-                if generation_time is not None:
-                    log_data["generation_time"] = generation_time
-                if new_tokens is not None:
-                    log_data["new_tokens"] = new_tokens
-                    if generation_time is not None and generation_time > 0:
-                        log_data["tokens_per_second"] = new_tokens / generation_time
-                
-                # Add parameter info
-                if self.last_params:
-                    log_data.update({
-                        "total_tokens": self.last_params[0],
-                        "depth": self.last_params[1],
-                        "top_k": self.last_params[2]
-                    })
+                if total_generation_time > 0:
+                    log_data["total_generation_time"] = total_generation_time
+                if total_new_tokens > 0:
+                    log_data["total_new_tokens"] = total_new_tokens
+                    if total_generation_time > 0:
+                        log_data["avg_tokens_per_second"] = total_new_tokens / total_generation_time
                 
                 wandb.log(log_data)
             
-            # Save checkpoint periodically
-            if self.should_save_checkpoint():
-                self.save_checkpoint()
+            # print(f"🔄 Aggregated {cache_period_length} rewards: avg={avg_reward:.2f}")
+            
+            result = {
+                "avg_reward": avg_reward,
+                "total_generation_time": total_generation_time,
+                "total_new_tokens": total_new_tokens,
+                "cache_period_length": cache_period_length
+            }
+        else:
+            # print(f"🔄 Cleared {cache_period_length} cached rewards (inference mode)")
+            result = None
+        
+        # Clear cache
+        self._clear_cache_arrays()
+        
+        return result
+    
+    def _clear_cache_arrays(self):
+        """Clear all cache arrays"""
+        self.cached_rewards = []
+        self.cached_generation_times = []
+        self.cached_new_tokens = []
+        self.last_cache_update_step = self.step_count
+    
+    def force_reward_aggregation(self, training_mode=True):
+        """Force aggregation of currently cached rewards (useful for evaluation)"""
+        return self._clear_reward_cache(training_mode)
+    
+    def reset(self, training_mode=True):
+        """Reset policy state between different text generations"""
+        # Clear any remaining cached rewards
+        if self.action_cache_enabled and len(self.cached_rewards) > 0:
+            self._clear_reward_cache(training_mode)
+        else:
+            # If no cached rewards, just clear cache arrays
+            self._clear_cache_arrays()
+        
+        # Reset cache state
+        self.cached_action = None
+        self.cached_params = None
+        self.cache_step_counter = 0
+        self.cache_hidden_states = None
+        
+        # Reset training state
+        self.last_state = None
+        self.last_action = None
+        self.last_params = None
+        
+        # Reset PPO learning state
+        self.current_obs = self.env.reset() if hasattr(self, 'env') else None
+        self.episode_rewards = []
+        self.episode_length = 0
+        # Don't clear rollout_buffer here - let it accumulate across episodes
+        
+        # Reset environment state
+        if hasattr(self, 'env'):
+            self.env.reset()
+        
+        # print(f"🔄 Reset SB3 PPO policy state - cache cleared, step counter reset to 0")
     
     def save_checkpoint(self, checkpoint_name=None):
         """Save model checkpoint"""
@@ -697,6 +1143,14 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             else:
                 reward_history_serializable.append(float(reward))
         
+        # Convert cached_new_tokens tensors to Python numbers
+        cached_new_tokens_serializable = []
+        for tokens in self.cached_new_tokens:
+            if hasattr(tokens, 'item'):  # PyTorch tensor
+                cached_new_tokens_serializable.append(tokens.item())
+            else:
+                cached_new_tokens_serializable.append(int(tokens))
+        
         state = {
             "questions_processed": self.questions_processed,
             "training_seed": self.training_seed,
@@ -707,7 +1161,17 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             "enable_max_entropy": self.enable_max_entropy,
             "action_cache_enabled": self.action_cache_enabled,
             "action_cache_steps": self.action_cache_steps,
-            "use_eagle3_features": self.use_eagle3_features
+            "use_eagle3_features": self.use_eagle3_features,
+            # NEW: Reward aggregation state
+            "cached_rewards": self.cached_rewards,
+            "cached_generation_times": self.cached_generation_times,
+            "cached_new_tokens": cached_new_tokens_serializable,
+            "last_cache_update_step": self.last_cache_update_step,
+            # PPO learning state
+            "episode_length": self.episode_length,
+            "rollout_buffer_size": len(self.rollout_buffer),
+            # NEW: Checkpoint tracking
+            "last_checkpoint_step": self.last_checkpoint_step
         }
         
         with open(state_path, 'w') as f:
@@ -741,6 +1205,21 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 self.reward_history = deque(state.get("reward_history", []), maxlen=1000)
                 self.cache_step_counter = state.get("cache_step_counter", 0)
                 self.cached_params = tuple(state["cached_params"]) if state.get("cached_params") else None
+                # NEW: Restore reward aggregation state
+                self.cached_rewards = state.get("cached_rewards", [])
+                self.cached_generation_times = state.get("cached_generation_times", [])
+                # Restore cached_new_tokens (already deserialized as Python numbers)
+                self.cached_new_tokens = state.get("cached_new_tokens", [])
+                self.last_cache_update_step = state.get("last_cache_update_step", 0)
+                
+                # Restore PPO learning state
+                self.episode_length = state.get("episode_length", 0)
+                # Don't restore rollout buffer - start fresh
+                self.rollout_buffer = []
+                self.episode_rewards = []
+                self.current_obs = self.env.reset()
+                # NEW: Restore checkpoint tracking
+                self.last_checkpoint_step = state.get("last_checkpoint_step", -1)
             
             print(f"✅ Loaded checkpoint: {checkpoint_path}")
             print(f"   Questions processed: {self.questions_processed}")
@@ -790,7 +1269,10 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     
     def should_save_checkpoint(self):
         """Check if we should save a checkpoint"""
-        return self.step_count % self.checkpoint_freq == 0
+        # Only save if we haven't already saved for this step
+        should_save = (self.step_count % self.checkpoint_freq == 0 and 
+                      self.step_count != self.last_checkpoint_step)
+        return should_save
     
     def set_training_seed(self, seed):
         """Set training seed for reproducible shuffling"""
@@ -818,13 +1300,35 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         variance = sum((r - avg_reward) ** 2 for r in rewards) / len(rewards)
         reward_std = variance ** 0.5
         
-        return {
+        stats = {
             "avg_reward": avg_reward,
             "reward_std": reward_std,
             "total_steps": self.step_count,
             "total_questions": self.questions_processed,
             "cache_hit_rate": (self.cache_step_counter / max(self.step_count, 1)) if self.action_cache_enabled else 0.0
         }
+        
+        # Add cache-specific statistics if action caching is enabled
+        if self.action_cache_enabled:
+            stats.update({
+                "action_cache_enabled": True,
+                "action_cache_steps": self.action_cache_steps,
+                "current_cache_step": self.cache_step_counter,
+                "pending_rewards": len(self.cached_rewards),
+                "last_cache_update": self.last_cache_update_step
+            })
+            
+            # Calculate cache efficiency metrics
+            if self.step_count > 0:
+                cache_efficiency = (self.step_count - len(self.reward_history)) / self.step_count
+                stats["cache_efficiency"] = cache_efficiency
+                
+                # Estimate computational savings
+                policy_calls_saved = self.step_count - len(self.reward_history)
+                stats["policy_calls_saved"] = policy_calls_saved
+                stats["computational_savings_pct"] = (policy_calls_saved / self.step_count) * 100
+        
+        return stats
     
     def save(self, path):
         """Save the entire policy"""
@@ -839,7 +1343,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             "action_cache_enabled": self.action_cache_enabled,
             "action_cache_steps": self.action_cache_steps,
             "use_eagle3_features": self.use_eagle3_features,
-            "hidden_size": self.hidden_size
+            "hidden_size": self.hidden_size,
+            "last_checkpoint_step": self.last_checkpoint_step
         }
         
         with open(metadata_path, 'w') as f:
@@ -860,6 +1365,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 
                 self.questions_processed = metadata.get("questions_processed", 0)
                 self.step_count = metadata.get("step_count", 0)
+                self.last_checkpoint_step = metadata.get("last_checkpoint_step", -1)
             
             print(f"📂 Loaded optimized policy from: {path}")
             return True

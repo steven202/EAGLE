@@ -60,6 +60,15 @@ class KVCache:
         Returns:
             torch.Tensor: The data tensor after concatenation up to the current length.
         """
+        # Safety check: ensure we don't exceed the buffer size
+        if self.current_length + tensor.shape[dim] > self.data.shape[dim]:
+            raise RuntimeError(
+                f"KV cache buffer overflow: trying to add {tensor.shape[dim]} tokens "
+                f"to current length {self.current_length}, but buffer only has "
+                f"capacity for {self.data.shape[dim]} tokens. "
+                f"Consider increasing max_length or reducing total_tokens parameter."
+            )
+        
         dst = self.data.narrow(dim, self.current_length, tensor.shape[dim])
         dst.copy_(tensor)
         self.current_length.add_(tensor.shape[dim])

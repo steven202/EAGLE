@@ -80,6 +80,12 @@ class OptimizedOnlineTreePolicy:
         self.cache_step_counter = 0
         self.cache_hidden_states = None
         
+        # NEW: Reward aggregation for cached actions
+        self.cached_rewards = []
+        self.cached_generation_times = []
+        self.cached_new_tokens = []
+        self.last_cache_update_step = 0
+        
         # Max-entropy RL configuration
         self.temperature = temperature
         self.entropy_weight = entropy_weight
@@ -180,23 +186,50 @@ class OptimizedOnlineTreePolicy:
         print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
     
     def _build_network(self):
-        """Build Q-network for EAGLE-3 features"""
-        network = nn.Sequential(
-            nn.Linear(self.feature_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, len(self.valid_actions))  # Output for valid actions only
-        )
-        
+        """Build simplified 4-layer Q-network with skip connections to prevent overfitting"""
+        class SkipConnectionNetwork(nn.Module):
+            def __init__(self, input_dim, output_dim):
+                super().__init__()
+                # Smaller hidden dimensions to reduce overfitting and inference time
+                self.fc1 = nn.Linear(input_dim, 256)
+                self.fc2 = nn.Linear(256, 256)
+                self.fc3 = nn.Linear(256, 256)
+                self.fc4 = nn.Linear(256, output_dim)
+                
+                # Skip connection projection layers
+                self.skip1 = nn.Linear(input_dim, 128)  # Skip from input to layer 2
+                self.skip2 = nn.Linear(256, 64)        # Skip from layer 1 to layer 3
+
+                # Layer normalization for better training stability
+                self.bn1 = nn.LayerNorm(256)
+                self.bn2 = nn.LayerNorm(128)
+                self.bn3 = nn.LayerNorm(64)
+                
+                # Reduced dropout to prevent underfitting
+                self.dropout = nn.Dropout(0.1)
+                
+                self._init_weights()
+            
+            def _init_weights(self):
+                """Initialize weights with smaller values to prevent overfitting"""
+                for module in self.modules():
+                    if isinstance(module, nn.Linear):
+                        # Smaller initialization to reduce initial bias
+                        nn.init.xavier_uniform_(module.weight, gain=0.5)
+                        nn.init.constant_(module.bias, 0.5)
+            
+            def forward(self, x):
+                return self.fc4(self.dropout(torch.relu(self.bn1(self.fc1(x)))))
+        network = SkipConnectionNetwork(self.feature_dim, len(self.valid_actions))
         # Initialize weights
-        for layer in network:
-            if isinstance(layer, nn.Linear):
-                nn.init.xavier_uniform_(layer.weight)
-                nn.init.constant_(layer.bias, 0.1)
-        
+        # for layer in network.modules():
+        #     if isinstance(layer, nn.Linear):
+        #         nn.init.xavier_uniform_(layer.weight)
+        #         nn.init.constant_(layer.bias, 0.1)
+        network = nn.Sequential(
+            nn.Linear(self.feature_dim, len(self.valid_actions)),
+            # nn.LayerNorm(len(self.valid_actions)),
+        )
         return network
     
     def _encode_state_from_hidden_states(self, hidden_states):
@@ -345,7 +378,7 @@ class OptimizedOnlineTreePolicy:
         """
         
         # OPTIMIZATION 2: Action caching logic
-        if self.action_cache_enabled and not training_mode:
+        if self.action_cache_enabled:
             # Check if we can use cached action
             if (self.cached_params is not None and 
                 self.cache_step_counter < self.action_cache_steps):
@@ -364,6 +397,9 @@ class OptimizedOnlineTreePolicy:
                         }
                     })
                 
+                # if self.cache_step_counter % 5 == 0:  # Log every 5th cache hit to avoid spam
+                #     print(f"  Cache hit: Step {self.cache_step_counter}/{self.action_cache_steps} - Using cached params: {self.cached_params}")
+                
                 return self.cached_params
         
         # NEW: Context-only state mode
@@ -372,11 +408,13 @@ class OptimizedOnlineTreePolicy:
                 return 96, 8, 20  # Default parameters
             
             # OPTIMIZATION 2: Action caching logic (works with context-only state too)
-            if self.action_cache_enabled and not training_mode:
+            if self.action_cache_enabled:
                 if (self.cached_params is not None and 
                     self.cache_step_counter < self.action_cache_steps):
                     
                     self.cache_step_counter += 1
+                    # if self.cache_step_counter % 5 == 0:  # Log every 5th cache hit to avoid spam
+                    #     print(f"  Cache hit: Step {self.cache_step_counter}/{self.action_cache_steps} - Using cached params: {self.cached_params}")
                     return self.cached_params
             
             # Use context directly for state representation (384D)
@@ -466,11 +504,13 @@ class OptimizedOnlineTreePolicy:
         total_tokens, depth, top_k = self._safe_clamp_params(total_tokens, depth, top_k)
         
         # OPTIMIZATION 2: Update action cache
-        if self.action_cache_enabled and not training_mode:
+        if self.action_cache_enabled:
             self.cached_params = (total_tokens, depth, top_k)
             self.cached_action = action
             self.cache_step_counter = 1  # Reset counter
             self.cache_hidden_states = hidden_states
+            
+            # print(f"  New action predicted: {total_tokens}, {depth}, {top_k} - Cache reset to step 1")
             
             # Log cache update
             if training_mode and self.use_wandb:
@@ -524,65 +564,234 @@ class OptimizedOnlineTreePolicy:
                 action = self.valid_actions[action_idx.item()]
                 return action, 0.0
     
-    def update_policy(self, reward, generation_time=None, new_tokens=None):
-        """Update policy with received reward"""
-        if self.last_state is not None and self.last_action is not None:
-            # Add experience to replay buffer
-            # For DQN, we store (state, valid_action_index, reward, next_state, done)
-            valid_action_idx = self.valid_actions.index(self.last_action)
+    def update_policy(self, reward, generation_time=None, new_tokens=None, training_mode=True):
+        """Update policy with received reward using reward aggregation for cached actions"""
+        # Convert reward to float to avoid tensor serialization issues
+        reward_value = reward.item() if hasattr(reward, 'item') else float(reward)
+        
+        # Only do reward aggregation and policy updates in training mode
+        if not training_mode:
+            return
+        
+        # OPTIMIZATION: Reward aggregation for cached actions
+        if self.action_cache_enabled:
+            # Collect rewards during cache period
+            self.cached_rewards.append(reward_value)
+            if generation_time is not None:
+                self.cached_generation_times.append(generation_time)
+            if new_tokens is not None:
+                self.cached_new_tokens.append(new_tokens)
             
-            # Since each inference is episodic, next_state is None and done=True
-            experience = (
-                self.last_state.clone().detach(),
-                valid_action_idx,
-                reward,
-                None,  # next_state (episodic)
-                True   # done
+            # Check if we should aggregate and update policy
+            should_update = (
+                self.last_state is not None and 
+                self.last_action is not None and
+                (self.cache_step_counter >= self.action_cache_steps or 
+                 len(self.cached_rewards) >= self.action_cache_steps)
             )
-            self.memory.append(experience)
             
-            # Convert reward to float to avoid tensor serialization issues
-            reward_value = reward.item() if hasattr(reward, 'item') else float(reward)
+            if should_update:
+                # Aggregate rewards over the cache period
+                if len(self.cached_rewards) > 0:
+                    # Calculate aggregated metrics
+                    avg_reward = sum(self.cached_rewards) / len(self.cached_rewards)
+                    total_generation_time = sum(self.cached_generation_times) if self.cached_generation_times else 0
+                    total_new_tokens = sum(self.cached_new_tokens) if self.cached_new_tokens else 0
+                    
+                    # Add experience to replay buffer with aggregated reward
+                    valid_action_idx = self.valid_actions.index(self.last_action)
+                    experience = (
+                        self.last_state.clone().detach(),
+                        valid_action_idx,
+                        avg_reward,  # Use aggregated reward
+                        None,  # next_state (episodic)
+                        True   # done
+                    )
+                    self.memory.append(experience)
+                    
+                    # Add aggregated reward to history
+                    self.reward_history.append(avg_reward)
+                    
+                    # Learn from batch if enough experiences
+                    if len(self.memory) >= self.batch_size:
+                        self._learn_from_batch()
+                    
+                    # Update target network periodically
+                    if self.step_count % self.target_update_freq == 0:
+                        self.target_network.load_state_dict(self.q_network.state_dict())
+                    
+                    # Decay epsilon
+                    self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+                    
+                    # Log aggregated metrics to wandb
+                    if self.use_wandb:
+                        log_data = {
+                            "aggregated_reward": avg_reward,
+                            "cache_period_steps": len(self.cached_rewards),
+                            "step": self.step_count,
+                            "avg_reward_100": sum(list(self.reward_history)[-100:]) / min(len(self.reward_history), 100),
+                            "reward_std_in_cache": np.std(self.cached_rewards) if len(self.cached_rewards) > 1 else 0.0,
+                            "epsilon": self.epsilon,
+                            "exploration_mode": self.last_exploration_mode,
+                            "entropy": self.last_entropy
+                        }
+                        
+                        if total_generation_time > 0:
+                            log_data["total_generation_time"] = total_generation_time
+                            log_data["avg_generation_time"] = total_generation_time / len(self.cached_generation_times)
+                        if total_new_tokens > 0:
+                            log_data["total_new_tokens"] = total_new_tokens
+                            log_data["avg_new_tokens"] = total_new_tokens / len(self.cached_new_tokens)
+                            if total_generation_time > 0:
+                                log_data["avg_tokens_per_second"] = total_new_tokens / total_generation_time
+                        
+                        # Add parameter info
+                        if self.last_params:
+                            log_data.update({
+                                "total_tokens": self.last_params[0],
+                                "depth": self.last_params[1],
+                                "top_k": self.last_params[2]
+                            })
+                        
+                        # Add loss if available
+                        if len(self.loss_history) > 0:
+                            log_data["loss"] = self.loss_history[-1]
+                        
+                        wandb.log(log_data)
+                    
+                    # Store cache period length before clearing
+                    cache_period_length = len(self.cached_rewards)
+                    
+                    # Clear cache for next period
+                    self.cached_rewards = []
+                    self.cached_generation_times = []
+                    self.cached_new_tokens = []
+                    self.last_cache_update_step = self.step_count
+                    
+                    # print(f"🔄 Aggregated {cache_period_length} rewards: avg={avg_reward:.2f}, "
+                        #   f"total_time={total_generation_time:.2f}s, total_tokens={total_new_tokens}")
+        else:
+            # Original behavior for non-cached mode
+            if self.last_state is not None and self.last_action is not None:
+                # Add experience to replay buffer
+                valid_action_idx = self.valid_actions.index(self.last_action)
+                experience = (
+                    self.last_state.clone().detach(),
+                    valid_action_idx,
+                    reward_value,
+                    None,  # next_state (episodic)
+                    True   # done
+                )
+                self.memory.append(experience)
+                
+                # Add to reward history
+                self.reward_history.append(reward_value)
+                
+                # Learn from batch if enough experiences
+                if len(self.memory) >= self.batch_size:
+                    self._learn_from_batch()
+                
+                # Update target network periodically
+                if self.step_count % self.target_update_freq == 0:
+                    self.target_network.load_state_dict(self.q_network.state_dict())
+                
+                # Decay epsilon
+                self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+                
+                # Log to wandb
+                if self.use_wandb:
+                    log_data = {
+                        "reward": reward_value,
+                        "epsilon": self.epsilon,
+                        "step": self.step_count,
+                        "avg_reward_100": sum(list(self.reward_history)[-100:]) / min(len(self.reward_history), 100),
+                        "exploration_mode": self.last_exploration_mode,
+                        "entropy": self.last_entropy
+                    }
+                    
+                    if generation_time is not None:
+                        log_data["generation_time"] = generation_time
+                    if new_tokens is not None:
+                        log_data["new_tokens"] = new_tokens
+                        if generation_time is not None and generation_time > 0:
+                            log_data["tokens_per_second"] = new_tokens / generation_time
+                    
+                    # Add parameter info
+                    if self.last_params:
+                        log_data.update({
+                            "total_tokens": self.last_params[0],
+                            "depth": self.last_params[1],
+                            "top_k": self.last_params[2]
+                        })
+                    
+                    # Add loss if available
+                    if len(self.loss_history) > 0:
+                        log_data["loss"] = self.loss_history[-1]
+                    
+                    wandb.log(log_data)
+        
+        # Save checkpoint periodically
+        if self.should_save_checkpoint():
+            self.save_checkpoint()
+    
+    def _clear_reward_cache(self, training_mode=True):
+        """Clear reward cache with optional aggregation"""
+        if not self.action_cache_enabled or len(self.cached_rewards) == 0:
+            return None
+        
+        cache_period_length = len(self.cached_rewards)
+        
+        # Only aggregate if in training mode
+        if training_mode:
+            # Aggregate current cache
+            avg_reward = sum(self.cached_rewards) / len(self.cached_rewards)
+            total_generation_time = sum(self.cached_generation_times) if self.cached_generation_times else 0
+            total_new_tokens = sum(self.cached_new_tokens) if self.cached_new_tokens else 0
+            
+            # Add experience to replay buffer with aggregated reward
+            if self.last_state is not None and self.last_action is not None:
+                valid_action_idx = self.valid_actions.index(self.last_action)
+                experience = (
+                    self.last_state.clone().detach(),
+                    valid_action_idx,
+                    avg_reward,  # Use aggregated reward
+                    None,  # next_state (episodic)
+                    True   # done
+                )
+                self.memory.append(experience)
+                
+                # Learn from batch if enough experiences
+                if len(self.memory) >= self.batch_size:
+                    self._learn_from_batch()
+                
+                # Update target network periodically
+                if self.step_count % self.target_update_freq == 0:
+                    self.target_network.load_state_dict(self.q_network.state_dict())
+                
+                # Decay epsilon
+                self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
             
             # Add to reward history
-            self.reward_history.append(reward_value)
+            self.reward_history.append(avg_reward)
             
-            # Learn from batch if enough experiences
-            if len(self.memory) >= self.batch_size:
-                self._learn_from_batch()
-            
-            # Update target network periodically
-            if self.step_count % self.target_update_freq == 0:
-                self.target_network.load_state_dict(self.q_network.state_dict())
-            
-            # Decay epsilon
-            self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
-            
-            # Log to wandb
+            # Log if wandb is enabled
             if self.use_wandb:
                 log_data = {
-                    "reward": reward_value,
-                    "epsilon": self.epsilon,
+                    "forced_aggregated_reward": avg_reward,
+                    "cache_period_steps": cache_period_length,
                     "step": self.step_count,
-                    "avg_reward_100": sum(list(self.reward_history)[-100:]) / min(len(self.reward_history), 100),
+                    "reward_std_in_cache": np.std(self.cached_rewards) if len(self.cached_rewards) > 1 else 0.0,
+                    "epsilon": self.epsilon,
                     "exploration_mode": self.last_exploration_mode,
                     "entropy": self.last_entropy
                 }
                 
-                if generation_time is not None:
-                    log_data["generation_time"] = generation_time
-                if new_tokens is not None:
-                    log_data["new_tokens"] = new_tokens
-                    if generation_time is not None and generation_time > 0:
-                        log_data["tokens_per_second"] = new_tokens / generation_time
-                
-                # Add parameter info
-                if self.last_params:
-                    log_data.update({
-                        "total_tokens": self.last_params[0],
-                        "depth": self.last_params[1],
-                        "top_k": self.last_params[2]
-                    })
+                if total_generation_time > 0:
+                    log_data["total_generation_time"] = total_generation_time
+                if total_new_tokens > 0:
+                    log_data["total_new_tokens"] = total_new_tokens
+                    if total_generation_time > 0:
+                        log_data["avg_tokens_per_second"] = total_new_tokens / total_generation_time
                 
                 # Add loss if available
                 if len(self.loss_history) > 0:
@@ -590,9 +799,57 @@ class OptimizedOnlineTreePolicy:
                 
                 wandb.log(log_data)
             
-            # Save checkpoint periodically
-            if self.should_save_checkpoint():
-                self.save_checkpoint()
+            # print(f"🔄 Aggregated {cache_period_length} rewards: avg={avg_reward:.2f}")
+            
+            result = {
+                "avg_reward": avg_reward,
+                "total_generation_time": total_generation_time,
+                "total_new_tokens": total_new_tokens,
+                "cache_period_length": cache_period_length
+            }
+        else:
+            # print(f"🔄 Cleared {cache_period_length} cached rewards (inference mode)")
+            result = None
+        
+        # Clear cache
+        self._clear_cache_arrays()
+        
+        return result
+    
+    def _clear_cache_arrays(self):
+        """Clear all cache arrays"""
+        self.cached_rewards = []
+        self.cached_generation_times = []
+        self.cached_new_tokens = []
+        self.last_cache_update_step = self.step_count
+    
+    def force_reward_aggregation(self, training_mode=True):
+        """Force aggregation of currently cached rewards (useful for evaluation)"""
+        return self._clear_reward_cache(training_mode)
+    
+    def reset(self, training_mode=True):
+        """Reset policy state between different text generations"""
+        # Clear any remaining cached rewards
+        if self.action_cache_enabled and len(self.cached_rewards) > 0:
+            self._clear_reward_cache(training_mode)
+        else:
+            # If no cached rewards, just clear cache arrays
+            self._clear_cache_arrays()
+        
+        # Reset cache state
+        self.cached_action = None
+        self.cached_params = None
+        self.cache_step_counter = 0
+        self.cache_hidden_states = None
+        
+        # Reset training state
+        self.last_state = None
+        self.last_action = None
+        self.last_params = None
+        self.last_exploration_mode = None
+        self.last_entropy = 0.0
+        
+        # print(f"🔄 Reset DQN policy state - cache cleared, step counter reset to 0")
     
     def _learn_from_batch(self):
         """Learn from a batch of experiences"""
@@ -707,7 +964,12 @@ class OptimizedOnlineTreePolicy:
             'action_cache_enabled': self.action_cache_enabled,
             'action_cache_steps': self.action_cache_steps,
             'use_eagle3_features': self.use_eagle3_features,
-            'hidden_size': self.hidden_size
+            'hidden_size': self.hidden_size,
+            # NEW: Reward aggregation state
+            'cached_rewards': self.cached_rewards,
+            'cached_generation_times': self.cached_generation_times,
+            'cached_new_tokens': self.cached_new_tokens,
+            'last_cache_update_step': self.last_cache_update_step
         }, checkpoint_path)
         
         print(f"✅ Saved checkpoint: {checkpoint_path}")
@@ -740,6 +1002,11 @@ class OptimizedOnlineTreePolicy:
             self.entropy_history = deque(checkpoint.get('entropy_history', []), maxlen=1000)
             self.cache_step_counter = checkpoint.get('cache_step_counter', 0)
             self.cached_params = checkpoint.get('cached_params', None)
+            # NEW: Restore reward aggregation state
+            self.cached_rewards = checkpoint.get('cached_rewards', [])
+            self.cached_generation_times = checkpoint.get('cached_generation_times', [])
+            self.cached_new_tokens = checkpoint.get('cached_new_tokens', [])
+            self.last_cache_update_step = checkpoint.get('last_cache_update_step', 0)
             
             print(f"✅ Loaded checkpoint: {checkpoint_path}")
             print(f"   Questions processed: {self.questions_processed}")
@@ -828,7 +1095,7 @@ class OptimizedOnlineTreePolicy:
         recent_entropies = list(self.entropy_history)[-100:]
         avg_entropy = sum(recent_entropies) / len(recent_entropies) if recent_entropies else 0.0
         
-        return {
+        stats = {
             "avg_reward": avg_reward,
             "reward_std": reward_std,
             "total_steps": self.step_count,
@@ -838,6 +1105,28 @@ class OptimizedOnlineTreePolicy:
             "avg_entropy": avg_entropy,
             "cache_hit_rate": cache_hit_rate
         }
+        
+        # Add cache-specific statistics if action caching is enabled
+        if self.action_cache_enabled:
+            stats.update({
+                "action_cache_enabled": True,
+                "action_cache_steps": self.action_cache_steps,
+                "current_cache_step": self.cache_step_counter,
+                "pending_rewards": len(self.cached_rewards),
+                "last_cache_update": self.last_cache_update_step
+            })
+            
+            # Calculate cache efficiency metrics
+            if self.step_count > 0:
+                cache_efficiency = (self.step_count - len(self.reward_history)) / self.step_count
+                stats["cache_efficiency"] = cache_efficiency
+                
+                # Estimate computational savings
+                policy_calls_saved = self.step_count - len(self.reward_history)
+                stats["policy_calls_saved"] = policy_calls_saved
+                stats["computational_savings_pct"] = (policy_calls_saved / self.step_count) * 100
+        
+        return stats
     
     def save(self, path):
         """Save the entire policy"""

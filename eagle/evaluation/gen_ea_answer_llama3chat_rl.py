@@ -555,6 +555,7 @@ def get_model_answers(
                             tree_top_k=predicted_top_k,
                         )
             except RuntimeError as e:
+                raise e
                 if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                     print(f"   Falling back to ultra-conservative warmup parameters...")
@@ -840,7 +841,8 @@ def get_model_answers(
                         success = True
                         
                     except RuntimeError as e:
-                        if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
+                        # raise e
+                        if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e) or "KV cache buffer overflow" in str(e):
                             retry_count += 1
                             print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k} (attempt {retry_count}/{max_retries})")
                             print(f"   Error: {e}")
@@ -848,16 +850,28 @@ def get_model_answers(
                             if retry_count < max_retries:
                                 print(f"   Trying more conservative parameters...")
                                 # Make parameters increasingly conservative with each retry
-                                if retry_count == 1:
-                                    # First retry: moderate reduction
-                                    predicted_total_tokens = min(32, predicted_total_tokens // 2)
-                                    predicted_depth = max(3, min(predicted_depth, 4))  
-                                    predicted_top_k = max(4, min(predicted_top_k, 8))
-                                elif retry_count == 2:
-                                    # Second retry: very conservative
-                                    predicted_total_tokens = 16
-                                    predicted_depth = 3
-                                    predicted_top_k = 4
+                                if "KV cache buffer overflow" in str(e):
+                                    # For buffer overflow, be very aggressive with reduction
+                                    if retry_count == 1:
+                                        predicted_total_tokens = min(16, predicted_total_tokens // 4)
+                                        predicted_depth = max(2, predicted_depth // 2)
+                                        predicted_top_k = max(2, predicted_top_k // 2)
+                                    elif retry_count == 2:
+                                        predicted_total_tokens = 8
+                                        predicted_depth = 2
+                                        predicted_top_k = 2
+                                else:
+                                    # For other errors, use moderate reduction
+                                    if retry_count == 1:
+                                        # First retry: moderate reduction
+                                        predicted_total_tokens = min(32, predicted_total_tokens // 2)
+                                        predicted_depth = max(3, min(predicted_depth, 4))  
+                                        predicted_top_k = max(4, min(predicted_top_k, 8))
+                                    elif retry_count == 2:
+                                        # Second retry: very conservative
+                                        predicted_total_tokens = 16
+                                        predicted_depth = 3
+                                        predicted_top_k = 4
                                 
                                 print(f"   Using safer params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                             else:
