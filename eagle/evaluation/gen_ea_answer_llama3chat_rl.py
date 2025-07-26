@@ -921,7 +921,8 @@ def get_model_answers(
                 output = output.strip()
 
                 # Online RL: Update policy with reward from this generation (if training enabled)
-                if online_policy is not None and not args.online_inference_only:
+                # DISABLED: Using step-wise RL only - question-level updates are handled in ea_model.py
+                if not args.use_stepwise_rl and online_policy is not None and not args.online_inference_only:
                     # Convert tensor values to Python scalars
                     new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
                     
@@ -931,11 +932,11 @@ def get_model_answers(
                         predicted_depth, predicted_top_k
                     )
                     
-                    # Update policy with this experience (including timing info for wandb)
+                    # DISABLED: This would duplicate step-wise RL updates from ea_model.py
                     online_policy.update_policy(online_reward, total_time, new_token_scalar)
-                    
+                    # DISABLED: Progress logging - step-wise RL handles its own logging
                     # Print learning progress periodically
-                    if not args.online_inference_only and online_policy.step_count % 20 == 0:
+                    if not args.use_stepwise_rl and not args.online_inference_only and online_policy.step_count % 20 == 0:
                         stats = online_policy.get_performance_stats()
                         print(f"Online RL Update: Reward={online_reward:.3f}, "
                               f"Avg Recent Reward={stats.get('avg_reward_recent', 0):.3f}, "
