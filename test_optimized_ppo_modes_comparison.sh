@@ -108,7 +108,109 @@ fi
 echo "Expected speedup: ~50% reduction in RL policy computation" | tee -a log/$DATE/comparison.txt
 echo "" | tee -a log/$DATE/comparison.txt
 
-# PHASE 1: CONTEXT-ONLY TRAINING (if enabled)
+# PHASE 1: STANDARD TRAINING (if enabled)
+if [ "$RUN_STANDARD" = "true" ]; then
+    # Phase 2a: Max-Entropy PPO (Standard) - if enabled
+    if [ "$RUN_MAX_ENTROPY" = "true" ]; then
+        echo "" | tee -a log/$DATE/comparison.txt
+        echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY PPO (Standard) ===" | tee -a log/$DATE/comparison.txt
+        echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
+        echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
+        echo "- High entropy coefficient 0.1 for exploration" | tee -a log/$DATE/comparison.txt
+        echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
+        echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
+        echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
+        echo "" | tee -a log/$DATE/comparison.txt
+
+        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            --ea-model-path $MODEL_PATH \
+            --base-model-path $BASE_MODEL_PATH \
+            --model-id optimized_max_entropy_ppo_standard \
+            --question-file eagle/data/rl_training/question.jsonl \
+            --question-begin 0 \
+            --question-end $QUESTION_END \
+            --answer-file log/$DATE/optimized_max_entropy_ppo_standard/training_answers.jsonl \
+            --num-choices 1 \
+            --num-gpus-per-model 1 \
+            --num-gpus-total 1 \
+            --max-gpu-memory "80GiB" \
+            --dtype float16 \
+            --temperature 0.0 \
+            --use-online-rl \
+            --use-optimized-sb3-discrete-ppo \
+            --online-lr 3e-4 \
+            --ppo-n-steps 64 \
+            --ppo-batch-size 32 \
+            --ppo-epochs 4 \
+            --enable-max-entropy \
+            --max-entropy-ent-coef 0.1 \
+            --inference-temperature 1.5 \
+            --max-entropy-inference \
+            --action-cache-steps 10 \
+            --action-cache-enabled \
+            --use-eagle3-features \
+            --hidden-size 4096 \
+            --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_standard/checkpoints \
+            --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.zip \
+            --checkpoint-freq 500 \
+            --wandb-project eagle-optimized-sb3-ppo \
+            --total-token 60 \
+            --depth 7 \
+            --top-k 10 \
+            --use-stepwise-rl \
+            --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_ppo_standard/training.log
+    fi
+
+    # Phase 2b: Standard PPO (Standard) - if enabled
+    if [ "$RUN_NO_MAX_ENTROPY" = "true" ]; then
+        echo "" | tee -a log/$DATE/comparison.txt
+        echo "=== Phase 2b: Training with OPTIMIZED STANDARD PPO (Standard) ===" | tee -a log/$DATE/comparison.txt
+        echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
+        echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
+        echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
+        echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
+        echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
+        echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
+        echo "" | tee -a log/$DATE/comparison.txt
+
+        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            --ea-model-path $MODEL_PATH \
+            --base-model-path $BASE_MODEL_PATH \
+            --model-id optimized_standard_ppo_standard \
+            --question-file eagle/data/rl_training/question.jsonl \
+            --question-begin 0 \
+            --question-end $QUESTION_END \
+            --answer-file log/$DATE/optimized_standard_ppo_standard/training_answers.jsonl \
+            --num-choices 1 \
+            --num-gpus-per-model 1 \
+            --num-gpus-total 1 \
+            --max-gpu-memory "80GiB" \
+            --dtype float16 \
+            --temperature 0.0 \
+            --use-online-rl \
+            --use-optimized-sb3-discrete-ppo \
+            --online-lr 3e-4 \
+            --ppo-n-steps 64 \
+            --ppo-batch-size 32 \
+            --ppo-epochs 4 \
+            --disable-max-entropy \
+            --action-cache-steps 10 \
+            --action-cache-enabled \
+            --use-eagle3-features \
+            --hidden-size 4096 \
+            --checkpoint-dir log/$DATE/optimized_standard_ppo_standard/checkpoints \
+            --online-policy-save-path log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.zip \
+            --checkpoint-freq 500 \
+            --wandb-project eagle-optimized-sb3-ppo \
+            --total-token 60 \
+            --depth 7 \
+            --top-k 10 \
+            --use-stepwise-rl \
+            --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_ppo_standard/training.log
+    fi
+fi
+
+# PHASE 2: CONTEXT-ONLY TRAINING (if enabled)
 if [ "$RUN_CONTEXT_ONLY" = "true" ]; then
     # Phase 1a: Max-Entropy PPO (Context-Only) - if enabled
     if [ "$RUN_MAX_ENTROPY" = "true" ]; then
@@ -208,108 +310,6 @@ if [ "$RUN_CONTEXT_ONLY" = "true" ]; then
             --top-k 10 \
             --use-stepwise-rl \
             --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_ppo_context/training.log
-    fi
-fi
-
-# PHASE 2: STANDARD TRAINING (if enabled)
-if [ "$RUN_STANDARD" = "true" ]; then
-    # Phase 2a: Max-Entropy PPO (Standard) - if enabled
-    if [ "$RUN_MAX_ENTROPY" = "true" ]; then
-        echo "" | tee -a log/$DATE/comparison.txt
-        echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY PPO (Standard) ===" | tee -a log/$DATE/comparison.txt
-        echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-        echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-        echo "- High entropy coefficient 0.1 for exploration" | tee -a log/$DATE/comparison.txt
-        echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
-        echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-        echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-        echo "" | tee -a log/$DATE/comparison.txt
-
-        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-            --ea-model-path $MODEL_PATH \
-            --base-model-path $BASE_MODEL_PATH \
-            --model-id optimized_max_entropy_ppo_standard \
-            --question-file eagle/data/rl_training/question.jsonl \
-            --question-begin 0 \
-            --question-end $QUESTION_END \
-            --answer-file log/$DATE/optimized_max_entropy_ppo_standard/training_answers.jsonl \
-            --num-choices 1 \
-            --num-gpus-per-model 1 \
-            --num-gpus-total 1 \
-            --max-gpu-memory "80GiB" \
-            --dtype float16 \
-            --temperature 0.0 \
-            --use-online-rl \
-            --use-optimized-sb3-discrete-ppo \
-            --online-lr 3e-4 \
-            --ppo-n-steps 64 \
-            --ppo-batch-size 32 \
-            --ppo-epochs 4 \
-            --enable-max-entropy \
-            --max-entropy-ent-coef 0.1 \
-            --inference-temperature 1.5 \
-            --max-entropy-inference \
-            --action-cache-steps 10 \
-            --action-cache-enabled \
-            --use-eagle3-features \
-            --hidden-size 4096 \
-            --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_standard/checkpoints \
-            --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.zip \
-            --checkpoint-freq 500 \
-            --wandb-project eagle-optimized-sb3-ppo \
-            --total-token 60 \
-            --depth 7 \
-            --top-k 10 \
-            --use-stepwise-rl \
-            --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_ppo_standard/training.log
-    fi
-
-    # Phase 2b: Standard PPO (Standard) - if enabled
-    if [ "$RUN_NO_MAX_ENTROPY" = "true" ]; then
-        echo "" | tee -a log/$DATE/comparison.txt
-        echo "=== Phase 2b: Training with OPTIMIZED STANDARD PPO (Standard) ===" | tee -a log/$DATE/comparison.txt
-        echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-        echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-        echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
-        echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
-        echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-        echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-        echo "" | tee -a log/$DATE/comparison.txt
-
-        PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
-            --ea-model-path $MODEL_PATH \
-            --base-model-path $BASE_MODEL_PATH \
-            --model-id optimized_standard_ppo_standard \
-            --question-file eagle/data/rl_training/question.jsonl \
-            --question-begin 0 \
-            --question-end $QUESTION_END \
-            --answer-file log/$DATE/optimized_standard_ppo_standard/training_answers.jsonl \
-            --num-choices 1 \
-            --num-gpus-per-model 1 \
-            --num-gpus-total 1 \
-            --max-gpu-memory "80GiB" \
-            --dtype float16 \
-            --temperature 0.0 \
-            --use-online-rl \
-            --use-optimized-sb3-discrete-ppo \
-            --online-lr 3e-4 \
-            --ppo-n-steps 64 \
-            --ppo-batch-size 32 \
-            --ppo-epochs 4 \
-            --disable-max-entropy \
-            --action-cache-steps 10 \
-            --action-cache-enabled \
-            --use-eagle3-features \
-            --hidden-size 4096 \
-            --checkpoint-dir log/$DATE/optimized_standard_ppo_standard/checkpoints \
-            --online-policy-save-path log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.zip \
-            --checkpoint-freq 500 \
-            --wandb-project eagle-optimized-sb3-ppo \
-            --total-token 60 \
-            --depth 7 \
-            --top-k 10 \
-            --use-stepwise-rl \
-            --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_ppo_standard/training.log
     fi
 fi
 
