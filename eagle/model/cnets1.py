@@ -758,8 +758,13 @@ class Model(nn.Module):
         # Safety check: ensure total_tokens doesn't exceed available candidates
         available_candidates = scores_list.size(0)
         safe_total_tokens = min(total_tokens, available_candidates)
-        # if safe_total_tokens < total_tokens:
-        #     print(f"WARNING: Requested total_tokens={total_tokens} exceeds available candidates={available_candidates}. Using {safe_total_tokens} instead.")
+        if safe_total_tokens < total_tokens:
+            print(f"Warning: RL predicted total_tokens ({total_tokens}) too large, clamping to {safe_total_tokens}")
+        
+        # Additional safety check: ensure safe_total_tokens is at least 1
+        if safe_total_tokens < 1:
+            safe_total_tokens = 1
+            print(f"Warning: No candidates available, using minimum safe_total_tokens=1")
         
         top_scores = torch.topk(scores_list, safe_total_tokens, dim=-1)
         top_scores_index = top_scores.indices
@@ -787,6 +792,12 @@ class Model(nn.Module):
         draft_tokens = draft_tokens[None]
 
         del parents_list, scores_list, ss_token, ss_token_list, draft_parents
+        
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # with Timer("retrieve"):
 
