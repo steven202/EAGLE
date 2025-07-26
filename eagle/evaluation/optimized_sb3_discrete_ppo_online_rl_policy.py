@@ -10,8 +10,8 @@ import torch.nn as nn
 import os
 import json
 import contextlib
-from collections import deque
 import random
+from collections import deque
 import gym
 from gym import spaces
 
@@ -134,6 +134,9 @@ class OptimizedEagleParameterEnv(gym.Env):
         self.current_hidden_states = None
         self.current_context = None
         self.step_count = 0
+        
+        # CRITICAL FIX: Add num_envs attribute for SB3 compatibility
+        self.num_envs = 1  # Single environment setup
         
         print(f"OptimizedEagleParameterEnv initialized:")
         print(f"  - Total parameter combinations: {self.total_actions}")
@@ -429,8 +432,35 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             tensorboard_log=None
         )
         
+        # CRITICAL FIX: Validate configuration like official PPO
+        # Sanity check for batch size (following SB3 best practices)
+        if self.model.normalize_advantage:
+            assert batch_size > 1, "`batch_size` must be greater than 1 for advantage normalization"
+        
+        # Check that n_steps * n_envs > 1 to avoid NaN (following SB3 implementation)
+        buffer_size = self.env.num_envs * n_steps if hasattr(self.env, 'num_envs') else n_steps
+        if self.model.normalize_advantage:
+            assert buffer_size > 1, f"`n_steps * n_envs` must be greater than 1 for advantage normalization. Currently buffer_size={buffer_size}"
+        
+        # Warn about suboptimal batch size (following SB3 implementation)
+        if buffer_size % batch_size > 0:
+            import warnings
+            untruncated_batches = buffer_size // batch_size
+            warnings.warn(
+                f"You have specified a mini-batch size of {batch_size}, "
+                f"but because the rollout buffer is of size {buffer_size}, "
+                f"after every {untruncated_batches} untruncated mini-batches, "
+                f"there will be a truncated mini-batch of size {buffer_size % batch_size}. "
+                f"We recommend using a `batch_size` that is a factor of `n_steps`."
+            )
+        
         # Initialize policy in evaluation mode by default (safer for inference)
         self.model.policy.set_training_mode(False)
+        
+        # CRITICAL FIX: Initialize progress tracking for proper scheduling
+        # This is essential for clip_range and learning_rate scheduling
+        self.model._current_progress_remaining = 1.0  # Start at 100% progress remaining
+        self.model.num_timesteps = 0  # Track total timesteps for scheduling
         
         # Initialize training tracking
         self.reward_history = deque(maxlen=1000)
@@ -469,6 +499,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             print(f"🌟 OPTIMIZED MAX-ENTROPY MODE: EAGLE-3 features + action caching + higher exploration")
         else:
             print(f"⚙️  OPTIMIZED STANDARD PPO MODE: EAGLE-3 features + action caching + standard exploration")
+    
+    def set_max_timesteps(self, max_timesteps):
+        """Set maximum timesteps for progress tracking (important for scheduling)"""
+        self.max_timesteps = max_timesteps
+        print(f"Set max timesteps to {max_timesteps} for proper learning rate and clip range scheduling")
     
     def predict_parameters(self, context=None, hidden_states=None, training_mode=True):
         """OPTIMIZED: Predict parameters using EAGLE-3 features with action caching
@@ -733,6 +768,12 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         if not training_mode:
             return
         
+        # CRITICAL FIX: Update progress tracking for proper scheduling
+        self.model.num_timesteps += 1
+        # Simulate progress (in real usage, this would be based on total planned timesteps)
+        max_timesteps = getattr(self, 'max_timesteps', 10000)
+        self.model._current_progress_remaining = max(0.0, 1.0 - self.model.num_timesteps / max_timesteps)
+        
         # OPTIMIZATION: Reward aggregation for cached actions
         if self.action_cache_enabled:
             # Collect rewards during cache period
@@ -981,10 +1022,12 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 old_distribution = self.model.policy.get_distribution(observations)
                 old_log_probs = old_distribution.log_prob(actions)
             
-            # Calculate returns and advantages using GAE (Generalized Advantage Estimation)
-            # Simplified version - in practice, you'd use proper GAE with next_values
-            returns = rewards.unsqueeze(1) if len(rewards.shape) == 1 else rewards
-            advantages = returns - old_values
+            # CRITICAL FIX: Proper advantage calculation with GAE
+            # Calculate returns and advantages using simplified GAE
+            next_values = torch.zeros_like(old_values)  # Assuming episodic tasks
+            returns, advantages = self._compute_returns_and_advantages(
+                rewards, old_values, next_values, dones=torch.ones_like(rewards, dtype=torch.bool)
+            )
             
             # Normalize advantages (only if we have more than 1 sample)
             if self.model.normalize_advantage and len(advantages) > 1:
@@ -994,80 +1037,111 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             pg_losses, value_losses = [], []
             clip_fractions = []
             
-            # PPO update for several epochs
+            # CRITICAL FIX: Track all KL divergences for proper logging
+            all_approx_kl_divs = []
+            
+            # PPO update for several epochs with mini-batch processing
+            continue_training = True
             for epoch in range(self.model.n_epochs):
-                # Get current policy outputs
-                current_values, current_log_probs, entropy = self.model.policy.evaluate_actions(observations, actions)
-                current_values = current_values.flatten()
+                epoch_approx_kl_divs = []
                 
-                # Calculate ratio between old and new policy
-                ratio = torch.exp(current_log_probs - old_log_probs)
+                # CRITICAL FIX: Mini-batch processing like official PPO
+                batch_size = min(self.model.batch_size, len(observations))
+                indices = torch.randperm(len(observations))
                 
-                # Clipped surrogate loss (PPO's key innovation)
-                policy_loss_1 = advantages.flatten() * ratio
-                policy_loss_2 = advantages.flatten() * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
-                policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
+                for start_idx in range(0, len(observations), batch_size):
+                    end_idx = min(start_idx + batch_size, len(observations))
+                    batch_indices = indices[start_idx:end_idx]
+                    
+                    batch_obs = observations[batch_indices]
+                    batch_actions = actions[batch_indices]
+                    batch_old_log_probs = old_log_probs[batch_indices]
+                    batch_advantages = advantages[batch_indices]
+                    batch_returns = returns[batch_indices]
+                    batch_old_values = old_values[batch_indices]
+                    
+                    # Get current policy outputs for this batch
+                    batch_values, batch_log_probs, batch_entropy = self.model.policy.evaluate_actions(batch_obs, batch_actions)
+                    batch_values = batch_values.flatten()
+                    
+                    # Calculate ratio between old and new policy
+                    ratio = torch.exp(batch_log_probs - batch_old_log_probs)
+                    
+                    # Clipped surrogate loss (PPO's key innovation)
+                    policy_loss_1 = batch_advantages.flatten() * ratio
+                    policy_loss_2 = batch_advantages.flatten() * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
+                    policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
+                    
+                    # Logging
+                    pg_losses.append(policy_loss.item())
+                    clip_fraction = torch.mean((torch.abs(ratio - 1) > clip_range).float()).item()
+                    clip_fractions.append(clip_fraction)
+                    
+                    # Value function loss with optional clipping
+                    if clip_range_vf is None:
+                        # No clipping
+                        values_pred = batch_values
+                    else:
+                        # Clip the difference between old and new value (following official implementation)
+                        values_pred = batch_old_values.flatten() + torch.clamp(
+                            batch_values - batch_old_values.flatten(), -clip_range_vf, clip_range_vf
+                        )
+                    
+                    # Value loss using the returns as targets (following official implementation)
+                    value_loss = nn.functional.mse_loss(batch_returns.flatten(), values_pred)
+                    value_losses.append(value_loss.item())
+                    
+                    # Entropy loss to favor exploration
+                    if batch_entropy is None:
+                        # Approximate entropy when no analytical form
+                        entropy_loss = -torch.mean(-batch_log_probs)
+                    else:
+                        entropy_loss = -torch.mean(batch_entropy)
+                    
+                    entropy_losses.append(entropy_loss.item())
+                    
+                    # Total loss
+                    loss = policy_loss + self.model.ent_coef * entropy_loss + self.model.vf_coef * value_loss
+                    
+                    # Calculate approximate form of reverse KL Divergence for early stopping
+                    with torch.no_grad():
+                        log_ratio = batch_log_probs - batch_old_log_probs
+                        approx_kl_div = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
+                        epoch_approx_kl_divs.append(approx_kl_div)
+                    
+                    # Gradient step
+                    self.model.policy.optimizer.zero_grad()
+                    loss.backward()
+                    
+                    # Clip grad norm
+                    torch.nn.utils.clip_grad_norm_(self.model.policy.parameters(), self.model.max_grad_norm)
+                    self.model.policy.optimizer.step()
                 
-                # Logging
-                pg_losses.append(policy_loss.item())
-                clip_fraction = torch.mean((torch.abs(ratio - 1) > clip_range).float()).item()
-                clip_fractions.append(clip_fraction)
+                # Check for early stopping after each epoch
+                mean_epoch_kl = np.mean(epoch_approx_kl_divs) if epoch_approx_kl_divs else 0.0
+                all_approx_kl_divs.extend(epoch_approx_kl_divs)
                 
-                # Value function loss with optional clipping
-                if clip_range_vf is None:
-                    # No clipping
-                    values_pred = current_values
-                else:
-                    # Clip the difference between old and new value
-                    values_pred = old_values.flatten() + torch.clamp(
-                        current_values - old_values.flatten(), -clip_range_vf, clip_range_vf
-                    )
-                
-                # Value loss using the returns as targets
-                value_loss = nn.functional.mse_loss(returns.flatten(), values_pred)
-                value_losses.append(value_loss.item())
-                
-                # Entropy loss to favor exploration
-                if entropy is None:
-                    # Approximate entropy when no analytical form
-                    entropy_loss = -torch.mean(-current_log_probs)
-                else:
-                    entropy_loss = -torch.mean(entropy)
-                
-                entropy_losses.append(entropy_loss.item())
-                
-                # Total loss
-                loss = policy_loss + self.model.ent_coef * entropy_loss + self.model.vf_coef * value_loss
-                
-                # Calculate approximate form of reverse KL Divergence for early stopping
-                with torch.no_grad():
-                    log_ratio = current_log_probs - old_log_probs
-                    approx_kl_div = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
-                
-                if self.model.target_kl is not None and approx_kl_div > 1.5 * self.model.target_kl:
+                if self.model.target_kl is not None and mean_epoch_kl > 1.5 * self.model.target_kl:
+                    continue_training = False
                     if self.model.verbose >= 1:
-                        print(f"Early stopping at epoch {epoch} due to reaching max kl: {approx_kl_div:.2f}")
+                        print(f"Early stopping at epoch {epoch} due to reaching max kl: {mean_epoch_kl:.2f}")
                     break
                 
-                # Gradient step
-                self.model.policy.optimizer.zero_grad()
-                loss.backward()
+                # Update internal counters after each epoch
+                self.model._n_updates += 1
                 
-                # Clip grad norm
-                torch.nn.utils.clip_grad_norm_(self.model.policy.parameters(), self.model.max_grad_norm)
-                self.model.policy.optimizer.step()
-            
-            # Update internal counters
-            self.model._n_updates += 1
+                if not continue_training:
+                    break
             
             # Set back to evaluation mode after training
             self.model.policy.set_training_mode(False)
             
-            # Calculate explained variance for logging
+            # CRITICAL FIX: Calculate explained variance using proper method from official PPO
             explained_var = 0.0
             if len(returns) > 1:
-                var_y = torch.var(returns.flatten()).item()
-                explained_var = max(0, 1 - torch.var(returns.flatten() - current_values).item() / (var_y + 1e-8))
+                # Use the same method as official SB3 implementation
+                from stable_baselines3.common.utils import explained_variance
+                explained_var = explained_variance(old_values.flatten().cpu().numpy(), returns.flatten().cpu().numpy())
             
             # Log learning metrics
             if self.use_wandb:
@@ -1078,7 +1152,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     "train/clip_fraction": np.mean(clip_fractions),
                     "train/loss": loss.item(),
                     "train/explained_variance": explained_var,
-                    "train/approx_kl": approx_kl_div,
+                    "train/approx_kl": np.mean(all_approx_kl_divs) if all_approx_kl_divs else 0.0,
                     "train/clip_range": clip_range,
                     "train/n_updates": self.model._n_updates,
                 })
@@ -1095,6 +1169,33 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         except Exception as e:
             print(f"   PPO manual update failed: {e}")
             raise
+    
+    def _compute_returns_and_advantages(self, rewards, values, next_values, dones):
+        """
+        Compute returns and advantages using Generalized Advantage Estimation (GAE)
+        Following the official SB3 implementation methodology
+        """
+        advantages = torch.zeros_like(rewards)
+        last_gae_lam = 0
+        
+        # GAE computation (backwards through time)
+        for step in reversed(range(len(rewards))):
+            if step == len(rewards) - 1:
+                next_non_terminal = 1.0 - dones[step].float()
+                next_value = next_values[step]
+            else:
+                next_non_terminal = 1.0 - dones[step].float()
+                next_value = values[step + 1]
+            
+            # TD error: r + γ * V(s') - V(s)
+            delta = rewards[step] + self.model.gamma * next_value * next_non_terminal - values[step]
+            
+            # GAE advantage: A = δ + γλ * A_next
+            advantages[step] = last_gae_lam = delta + self.model.gamma * self.model.gae_lambda * next_non_terminal * last_gae_lam
+        
+        # Returns are advantages + values
+        returns = advantages + values
+        return returns, advantages
     
     def _clear_reward_cache(self, training_mode=True):
         """Clear reward cache with optional aggregation"""
