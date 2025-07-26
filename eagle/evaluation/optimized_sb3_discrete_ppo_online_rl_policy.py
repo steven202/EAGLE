@@ -20,6 +20,8 @@ try:
     from stable_baselines3.common.env_util import make_vec_env
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.vec_env import DummyVecEnv
+    from stable_baselines3.common.policies import ActorCriticPolicy
+    from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
     SB3_AVAILABLE = True
 except ImportError:
     SB3_AVAILABLE = False
@@ -31,8 +33,6 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: wandb not available. Install with: pip install wandb")
-from stable_baselines3.common.policies import ActorCriticPolicy
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 class CustomPolicy(ActorCriticPolicy):
     def __init__(self, observation_space, action_space, lr_schedule, net_arch=None, **kwargs):
@@ -429,6 +429,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             tensorboard_log=None
         )
         
+        # Initialize policy in evaluation mode by default (safer for inference)
+        self.model.policy.set_training_mode(False)
+        
         # Initialize training tracking
         self.reward_history = deque(maxlen=1000)
         self.last_state = None
@@ -478,6 +481,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         Returns:
             tuple: (total_tokens, depth, top_k)
         """
+        # Ensure policy is in correct mode
+        if training_mode:
+            self.model.policy.set_training_mode(True)
+        else:
+            self.model.policy.set_training_mode(False)
         # NEW: Handle context-only state mode
         if self.use_context_only_state:
             if context is None:
@@ -675,6 +683,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     
     def _sample_with_temperature(self, state, temperature):
         """Sample action using temperature-based softmax for max-entropy exploration"""
+        # Ensure policy is in evaluation mode for inference
+        self.model.policy.set_training_mode(False)
+        
         obs_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
@@ -708,6 +719,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     
     def _enhanced_stochastic_sampling(self, state):
         """Enhanced stochastic sampling as fallback"""
+        # Ensure policy is in evaluation mode for inference
+        self.model.policy.set_training_mode(False)
         action, _ = self.model.predict(state, deterministic=False)
         return action
     
@@ -942,63 +955,144 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 wandb.log({"ppo_learning_error": 1})
     
     def _manual_ppo_update(self, observations, actions, rewards):
-        """Manually perform a PPO update step"""
+        """Manually perform a PPO update step following official SB3 PPO implementation"""
         try:
-            # Get policy and value function outputs
+            # Switch to train mode (this affects batch norm / dropout)
+            self.model.policy.set_training_mode(True)
+            
+            # Update optimizer learning rate
+            self.model._update_learning_rate(self.model.policy.optimizer)
+            
+            # Compute current clip range
+            clip_range = self.model.clip_range(self.model._current_progress_remaining) if callable(self.model.clip_range) else self.model.clip_range
+            
+            # Optional: clip range for the value function
+            clip_range_vf = None
+            if self.model.clip_range_vf is not None:
+                clip_range_vf = self.model.clip_range_vf(self.model._current_progress_remaining) if callable(self.model.clip_range_vf) else self.model.clip_range_vf
+            
+            # Ensure correct action format for discrete actions
+            if isinstance(self.env.action_space, spaces.Discrete):
+                actions = actions.long().flatten()
+            
+            # Get OLD policy and value function outputs (with no_grad for stability)
             with torch.no_grad():
-                values = self.model.policy.predict_values(observations)
-                log_probs = self.model.policy.get_distribution(observations).log_prob(actions)
-                old_log_probs = log_probs.detach()
+                old_values = self.model.policy.predict_values(observations)
+                old_distribution = self.model.policy.get_distribution(observations)
+                old_log_probs = old_distribution.log_prob(actions)
             
-            # Calculate advantages (simplified - normally would use GAE)
-            advantages = rewards.unsqueeze(1) - values
-            returns = rewards.unsqueeze(1)
+            # Calculate returns and advantages using GAE (Generalized Advantage Estimation)
+            # Simplified version - in practice, you'd use proper GAE with next_values
+            returns = rewards.unsqueeze(1) if len(rewards.shape) == 1 else rewards
+            advantages = returns - old_values
             
-            # Normalize advantages
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            # Normalize advantages (only if we have more than 1 sample)
+            if self.model.normalize_advantage and len(advantages) > 1:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            
+            entropy_losses = []
+            pg_losses, value_losses = [], []
+            clip_fractions = []
             
             # PPO update for several epochs
             for epoch in range(self.model.n_epochs):
                 # Get current policy outputs
-                distribution = self.model.policy.get_distribution(observations)
-                new_log_probs = distribution.log_prob(actions)
-                entropy = distribution.entropy().mean()
+                current_values, current_log_probs, entropy = self.model.policy.evaluate_actions(observations, actions)
+                current_values = current_values.flatten()
                 
-                # Policy loss (PPO clipped objective)
-                ratio = torch.exp(new_log_probs - old_log_probs)
-                # Get current clip range value (handle both callable and scalar)
-                current_clip_range = self.model.clip_range(self.model.num_timesteps) if callable(self.model.clip_range) else self.model.clip_range
-                clipped_ratio = torch.clamp(ratio, 1 - current_clip_range, 1 + current_clip_range)
-                policy_loss = -torch.min(ratio * advantages.squeeze(), clipped_ratio * advantages.squeeze()).mean()
+                # Calculate ratio between old and new policy
+                ratio = torch.exp(current_log_probs - old_log_probs)
                 
-                # Value loss
-                current_values = self.model.policy.predict_values(observations)
-                value_loss = nn.MSELoss()(current_values, returns)
+                # Clipped surrogate loss (PPO's key innovation)
+                policy_loss_1 = advantages.flatten() * ratio
+                policy_loss_2 = advantages.flatten() * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
+                policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
+                
+                # Logging
+                pg_losses.append(policy_loss.item())
+                clip_fraction = torch.mean((torch.abs(ratio - 1) > clip_range).float()).item()
+                clip_fractions.append(clip_fraction)
+                
+                # Value function loss with optional clipping
+                if clip_range_vf is None:
+                    # No clipping
+                    values_pred = current_values
+                else:
+                    # Clip the difference between old and new value
+                    values_pred = old_values.flatten() + torch.clamp(
+                        current_values - old_values.flatten(), -clip_range_vf, clip_range_vf
+                    )
+                
+                # Value loss using the returns as targets
+                value_loss = nn.functional.mse_loss(returns.flatten(), values_pred)
+                value_losses.append(value_loss.item())
+                
+                # Entropy loss to favor exploration
+                if entropy is None:
+                    # Approximate entropy when no analytical form
+                    entropy_loss = -torch.mean(-current_log_probs)
+                else:
+                    entropy_loss = -torch.mean(entropy)
+                
+                entropy_losses.append(entropy_loss.item())
                 
                 # Total loss
-                loss = policy_loss + self.model.vf_coef * value_loss - self.model.ent_coef * entropy
+                loss = policy_loss + self.model.ent_coef * entropy_loss + self.model.vf_coef * value_loss
+                
+                # Calculate approximate form of reverse KL Divergence for early stopping
+                with torch.no_grad():
+                    log_ratio = current_log_probs - old_log_probs
+                    approx_kl_div = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
+                
+                if self.model.target_kl is not None and approx_kl_div > 1.5 * self.model.target_kl:
+                    if self.model.verbose >= 1:
+                        print(f"Early stopping at epoch {epoch} due to reaching max kl: {approx_kl_div:.2f}")
+                    break
                 
                 # Gradient step
                 self.model.policy.optimizer.zero_grad()
                 loss.backward()
+                
+                # Clip grad norm
                 torch.nn.utils.clip_grad_norm_(self.model.policy.parameters(), self.model.max_grad_norm)
                 self.model.policy.optimizer.step()
+            
+            # Update internal counters
+            self.model._n_updates += 1
+            
+            # Set back to evaluation mode after training
+            self.model.policy.set_training_mode(False)
+            
+            # Calculate explained variance for logging
+            explained_var = 0.0
+            if len(returns) > 1:
+                var_y = torch.var(returns.flatten()).item()
+                explained_var = max(0, 1 - torch.var(returns.flatten() - current_values).item() / (var_y + 1e-8))
             
             # Log learning metrics
             if self.use_wandb:
                 wandb.log({
-                    "policy_loss": policy_loss.item(),
-                    "value_loss": value_loss.item(),
-                    "entropy": entropy.item(),
-                    "total_loss": loss.item(),
-                    "mean_advantage": advantages.mean().item(),
-                    "mean_return": returns.mean().item()
+                    "train/policy_gradient_loss": np.mean(pg_losses),
+                    "train/value_loss": np.mean(value_losses),
+                    "train/entropy_loss": np.mean(entropy_losses),
+                    "train/clip_fraction": np.mean(clip_fractions),
+                    "train/loss": loss.item(),
+                    "train/explained_variance": explained_var,
+                    "train/approx_kl": approx_kl_div,
+                    "train/clip_range": clip_range,
+                    "train/n_updates": self.model._n_updates,
                 })
                 
-            print(f"   PPO update completed at step {self.step_count} - Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
+                if clip_range_vf is not None:
+                    wandb.log({"train/clip_range_vf": clip_range_vf})
+                    
+                # Log policy std if available
+                if hasattr(self.model.policy, "log_std"):
+                    wandb.log({"train/std": torch.exp(self.model.policy.log_std).mean().item()})
+                
+            print(f"   PPO update completed at step {self.step_count} - Policy Loss: {np.mean(pg_losses):.4f}, Value Loss: {np.mean(value_losses):.4f}, Entropy: {np.mean(entropy_losses):.4f}")
             
         except Exception as e:
-            raise e
             print(f"   PPO manual update failed: {e}")
             raise
     
@@ -1119,6 +1213,13 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Reset environment state
         if hasattr(self, 'env'):
             self.env.reset()
+        
+        # Ensure policy is in correct mode after reset
+        if hasattr(self, 'model') and hasattr(self.model, 'policy'):
+            if training_mode:
+                self.model.policy.set_training_mode(True)
+            else:
+                self.model.policy.set_training_mode(False)
         
         # print(f"🔄 Reset SB3 PPO policy state - cache cleared, step counter reset to 0")
     
@@ -1280,6 +1381,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     def set_training_seed(self, seed):
         """Set training seed for reproducible shuffling"""
         self.training_seed = seed
+    
+    def set_training_mode(self, training_mode):
+        """Explicitly set the policy training mode"""
+        if hasattr(self, 'model') and hasattr(self.model, 'policy'):
+            self.model.policy.set_training_mode(training_mode)
     
     def get_resume_info(self):
         """Get information for resuming training"""
