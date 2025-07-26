@@ -282,7 +282,7 @@ class OptimizedEagleParameterEnv(gym.Env):
             'valid_action': actual_action
         }
         
-        self.step_count += 1
+        # Don't increment step_count here - it's handled by the policy
         
         # Return next observation (will be updated externally)
         next_obs = np.zeros(self.feature_dim, dtype=np.float32)
@@ -1131,6 +1131,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         # Save SB3 model
         self.model.save(checkpoint_path)
+        
+        # Update last checkpoint step to prevent duplicate saves
+        self.last_checkpoint_step = self.step_count
         
         # Save additional state
         state_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}_state.json")
