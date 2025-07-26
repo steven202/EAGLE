@@ -11,6 +11,7 @@ import os
 import json
 import contextlib
 import random
+import warnings
 from collections import deque
 import gym
 from gym import spaces
@@ -444,7 +445,6 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         # Warn about suboptimal batch size (following SB3 implementation)
         if buffer_size % batch_size > 0:
-            import warnings
             untruncated_batches = buffer_size // batch_size
             warnings.warn(
                 f"You have specified a mini-batch size of {batch_size}, "
@@ -1001,8 +1001,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             # Switch to train mode (this affects batch norm / dropout)
             self.model.policy.set_training_mode(True)
             
-            # Update optimizer learning rate
-            self.model._update_learning_rate(self.model.policy.optimizer)
+            # CRITICAL FIX: Update optimizer learning rate manually (avoiding logger dependency)
+            self._update_learning_rate_manual()
             
             # Compute current clip range
             clip_range = self.model.clip_range(self.model._current_progress_remaining) if callable(self.model.clip_range) else self.model.clip_range
@@ -1018,7 +1018,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             
             # Get OLD policy and value function outputs (with no_grad for stability)
             with torch.no_grad():
-                old_values = self.model.policy.predict_values(observations)
+                old_values = self.model.policy.predict_values(observations).flatten()
                 old_distribution = self.model.policy.get_distribution(observations)
                 old_log_probs = old_distribution.log_prob(actions)
             
@@ -1088,7 +1088,21 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                         )
                     
                     # Value loss using the returns as targets (following official implementation)
-                    value_loss = nn.functional.mse_loss(batch_returns.flatten(), values_pred)
+                    # CRITICAL FIX: Ensure consistent tensor dimensions - both should be same size
+                    # Debug tensor shapes
+                    if values_pred.shape != batch_returns.flatten().shape:
+                        print(f"⚠️  Tensor shape mismatch detected:")
+                        print(f"   values_pred.shape: {values_pred.shape}")
+                        print(f"   batch_returns.flatten().shape: {batch_returns.flatten().shape}")
+                        print(f"   batch_size: {len(batch_indices)}")
+                        print(f"   batch_indices: {batch_indices}")
+                        print(f"   returns.shape: {returns.shape}")
+                        print(f"   batch_returns.shape: {batch_returns.shape}")
+                        # Try to fix dimension mismatch by ensuring proper slicing
+                        batch_returns_fixed = batch_returns.flatten()[:len(values_pred)]
+                        value_loss = nn.functional.mse_loss(values_pred, batch_returns_fixed)
+                    else:
+                        value_loss = nn.functional.mse_loss(values_pred, batch_returns.flatten())
                     value_losses.append(value_loss.item())
                     
                     # Entropy loss to favor exploration
@@ -1196,6 +1210,22 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Returns are advantages + values
         returns = advantages + values
         return returns, advantages
+    
+    def _update_learning_rate_manual(self):
+        """
+        Update the optimizer learning rate following SB3 methodology
+        This avoids the logger dependency issue in _update_learning_rate
+        """
+        # Get current learning rate from schedule
+        current_lr = self.model.lr_schedule(self.model._current_progress_remaining)
+        
+        # Update optimizer learning rate for policy
+        for param_group in self.model.policy.optimizer.param_groups:
+            param_group['lr'] = current_lr
+        
+        # Log to wandb if available (replaces SB3's logger.record)
+        if self.use_wandb:
+            wandb.log({"train/learning_rate": current_lr})
     
     def _clear_reward_cache(self, training_mode=True):
         """Clear reward cache with optional aggregation"""
