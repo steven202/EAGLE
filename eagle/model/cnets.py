@@ -825,7 +825,12 @@ class Model(nn.Module):
                 depth = position_ids_list[i]
                 for j in reversed(range(depth + 1)):
                     retrieve_indices[rid][j] = cid
-                    cid = mask_index_list[cid - 1]
+                    # Add bounds checking to prevent index out of range
+                    if cid > 0 and cid - 1 < len(mask_index_list):
+                        cid = mask_index_list[cid - 1]
+                    else:
+                        # If bounds are exceeded, break to prevent further errors
+                        break
                 rid += 1
 
         if logits_processor is not None:
