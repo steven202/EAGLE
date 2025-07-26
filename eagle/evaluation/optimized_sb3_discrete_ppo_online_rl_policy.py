@@ -375,6 +375,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         self.max_checkpoints = max_checkpoints
         self.questions_processed = 0
         self.training_seed = None
+        # NEW: Track last checkpoint step to prevent multiple saves
+        self.last_checkpoint_step = -1
         
         # Create checkpoint directory
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -884,6 +886,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Save checkpoint periodically
         if self.should_save_checkpoint():
             self.save_checkpoint()
+            # Update last checkpoint step to prevent duplicate saves in the same step
+            self.last_checkpoint_step = self.step_count
     
     def _trigger_ppo_learning(self):
         """Trigger PPO learning from collected rollout experiences"""
@@ -931,6 +935,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 })
                 
         except Exception as e:
+            raise e
             print(f"Warning: PPO learning failed: {e}")
             # Continue without learning rather than crashing
             if self.use_wandb:
@@ -961,7 +966,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 
                 # Policy loss (PPO clipped objective)
                 ratio = torch.exp(new_log_probs - old_log_probs)
-                clipped_ratio = torch.clamp(ratio, 1 - self.model.clip_range, 1 + self.model.clip_range)
+                # Get current clip range value (handle both callable and scalar)
+                current_clip_range = self.model.clip_range(self.model.num_timesteps) if callable(self.model.clip_range) else self.model.clip_range
+                clipped_ratio = torch.clamp(ratio, 1 - current_clip_range, 1 + current_clip_range)
                 policy_loss = -torch.min(ratio * advantages.squeeze(), clipped_ratio * advantages.squeeze()).mean()
                 
                 # Value loss
@@ -991,6 +998,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             print(f"   PPO update completed - Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
             
         except Exception as e:
+            raise e
             print(f"   PPO manual update failed: {e}")
             raise
     
@@ -1135,6 +1143,14 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             else:
                 reward_history_serializable.append(float(reward))
         
+        # Convert cached_new_tokens tensors to Python numbers
+        cached_new_tokens_serializable = []
+        for tokens in self.cached_new_tokens:
+            if hasattr(tokens, 'item'):  # PyTorch tensor
+                cached_new_tokens_serializable.append(tokens.item())
+            else:
+                cached_new_tokens_serializable.append(int(tokens))
+        
         state = {
             "questions_processed": self.questions_processed,
             "training_seed": self.training_seed,
@@ -1149,11 +1165,13 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             # NEW: Reward aggregation state
             "cached_rewards": self.cached_rewards,
             "cached_generation_times": self.cached_generation_times,
-            "cached_new_tokens": self.cached_new_tokens,
+            "cached_new_tokens": cached_new_tokens_serializable,
             "last_cache_update_step": self.last_cache_update_step,
             # PPO learning state
             "episode_length": self.episode_length,
-            "rollout_buffer_size": len(self.rollout_buffer)
+            "rollout_buffer_size": len(self.rollout_buffer),
+            # NEW: Checkpoint tracking
+            "last_checkpoint_step": self.last_checkpoint_step
         }
         
         with open(state_path, 'w') as f:
@@ -1190,6 +1208,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 # NEW: Restore reward aggregation state
                 self.cached_rewards = state.get("cached_rewards", [])
                 self.cached_generation_times = state.get("cached_generation_times", [])
+                # Restore cached_new_tokens (already deserialized as Python numbers)
                 self.cached_new_tokens = state.get("cached_new_tokens", [])
                 self.last_cache_update_step = state.get("last_cache_update_step", 0)
                 
@@ -1199,6 +1218,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 self.rollout_buffer = []
                 self.episode_rewards = []
                 self.current_obs = self.env.reset()
+                # NEW: Restore checkpoint tracking
+                self.last_checkpoint_step = state.get("last_checkpoint_step", -1)
             
             print(f"✅ Loaded checkpoint: {checkpoint_path}")
             print(f"   Questions processed: {self.questions_processed}")
@@ -1248,7 +1269,10 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     
     def should_save_checkpoint(self):
         """Check if we should save a checkpoint"""
-        return self.step_count % self.checkpoint_freq == 0
+        # Only save if we haven't already saved for this step
+        should_save = (self.step_count % self.checkpoint_freq == 0 and 
+                      self.step_count != self.last_checkpoint_step)
+        return should_save
     
     def set_training_seed(self, seed):
         """Set training seed for reproducible shuffling"""
@@ -1319,7 +1343,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             "action_cache_enabled": self.action_cache_enabled,
             "action_cache_steps": self.action_cache_steps,
             "use_eagle3_features": self.use_eagle3_features,
-            "hidden_size": self.hidden_size
+            "hidden_size": self.hidden_size,
+            "last_checkpoint_step": self.last_checkpoint_step
         }
         
         with open(metadata_path, 'w') as f:
@@ -1340,6 +1365,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 
                 self.questions_processed = metadata.get("questions_processed", 0)
                 self.step_count = metadata.get("step_count", 0)
+                self.last_checkpoint_step = metadata.get("last_checkpoint_step", -1)
             
             print(f"📂 Loaded optimized policy from: {path}")
             return True

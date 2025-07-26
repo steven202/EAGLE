@@ -197,7 +197,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=2048,
+            max_length=4096,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
             total_tokens=None,
@@ -305,6 +305,12 @@ class EaModel(nn.Module):
                             initial_state, training_mode=training_mode
                         )
             
+            # Apply bounds checking for initial parameters
+            if step_total_tokens:
+                # Ensure total_tokens doesn't exceed available buffer space
+                max_available_tokens = max_length - input_ids.shape[1] - 10  # Leave some buffer
+                step_total_tokens = min(step_total_tokens, max_available_tokens)
+            
             # Store step info for training
             if training_mode:
                 step_states.append(initial_state)
@@ -324,6 +330,11 @@ class EaModel(nn.Module):
         
         # prefill - model inference, disable gradients for efficiency
         with torch.no_grad():
+            # Final safety check before calling initialize_tree
+            if step_total_tokens and step_total_tokens > max_length - input_ids.shape[1] - 10:
+                print(f"Warning: RL predicted total_tokens ({step_total_tokens}) too large, clamping to {max_length - input_ids.shape[1] - 10}")
+                step_total_tokens = max_length - input_ids.shape[1] - 10
+            
             draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
                 input_ids, self, past_key_values, logits_processor, step_total_tokens, step_depth, step_top_k
             )
@@ -394,10 +405,18 @@ class EaModel(nn.Module):
                         #     print(f"  Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
                         # print(f"Step {idx} RL params: tt={step_total_tokens}, d={step_depth}, k={step_top_k}")
                 
-                # Update model parameters for this step
-                self.ea_layer.total_tokens = step_total_tokens - 1 if step_total_tokens else self.ea_layer.total_tokens
-                self.ea_layer.depth = step_depth if step_depth else self.ea_layer.depth  
-                self.ea_layer.top_k = step_top_k if step_top_k else self.ea_layer.top_k
+                # Update model parameters for this step with bounds checking
+                if step_total_tokens:
+                    # Ensure total_tokens doesn't exceed available buffer space
+                    max_available_tokens = max_length - input_ids.shape[1] - 10  # Leave some buffer
+                    if step_total_tokens > max_available_tokens:
+                        print(f"Warning: Step {idx} RL predicted total_tokens ({step_total_tokens}) too large, clamping to {max_available_tokens}")
+                    step_total_tokens = min(step_total_tokens, max_available_tokens)
+                    self.ea_layer.total_tokens = step_total_tokens - 1
+                if step_depth:
+                    self.ea_layer.depth = step_depth
+                if step_top_k:
+                    self.ea_layer.top_k = step_top_k
             
             # with Timer("all"):
             self.base_model.model.tree_mask = tree_mask
@@ -443,6 +462,8 @@ class EaModel(nn.Module):
                         # if len(step_rewards) % 30 == 0:  # Log every 30 steps
                         #     print(f"  Step {idx} reward: {step_reward:.2f} tok/s (accepted: {step_tokens_generated})")
                     except Exception as e:
+                        
+                        raise e
                         print(f"  Warning: RL policy update failed at step {idx}: {e}")
             
             # Adjusting the input sequence, draft model forward
@@ -533,7 +554,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=2048,
+            max_length=4096,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
@@ -610,7 +631,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=2048,
+            max_length=4096,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
@@ -713,7 +734,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=2048,
+            max_length=4096,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
