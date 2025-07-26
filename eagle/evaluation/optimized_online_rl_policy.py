@@ -98,6 +98,8 @@ class OptimizedOnlineTreePolicy:
         self.max_checkpoints = max_checkpoints
         self.questions_processed = 0
         self.training_seed = None
+        # NEW: Track last checkpoint step to prevent multiple saves
+        self.last_checkpoint_step = -1
         
         # Create checkpoint directory
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -733,6 +735,8 @@ class OptimizedOnlineTreePolicy:
         # Save checkpoint periodically
         if self.should_save_checkpoint():
             self.save_checkpoint()
+            # Update last checkpoint step to prevent duplicate saves in the same step
+            self.last_checkpoint_step = self.step_count
     
     def _clear_reward_cache(self, training_mode=True):
         """Clear reward cache with optional aggregation"""
@@ -925,6 +929,9 @@ class OptimizedOnlineTreePolicy:
         
         checkpoint_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}.pth")
         
+        # Update last checkpoint step to prevent duplicate saves
+        self.last_checkpoint_step = self.step_count
+        
         # Convert tensors to Python numbers for JSON/pickle serialization
         reward_history_serializable = []
         for reward in self.reward_history:
@@ -969,7 +976,9 @@ class OptimizedOnlineTreePolicy:
             'cached_rewards': self.cached_rewards,
             'cached_generation_times': self.cached_generation_times,
             'cached_new_tokens': self.cached_new_tokens,
-            'last_cache_update_step': self.last_cache_update_step
+            'last_cache_update_step': self.last_cache_update_step,
+            # NEW: Checkpoint tracking
+            'last_checkpoint_step': self.last_checkpoint_step
         }, checkpoint_path)
         
         print(f"✅ Saved checkpoint: {checkpoint_path}")
@@ -1007,6 +1016,8 @@ class OptimizedOnlineTreePolicy:
             self.cached_generation_times = checkpoint.get('cached_generation_times', [])
             self.cached_new_tokens = checkpoint.get('cached_new_tokens', [])
             self.last_cache_update_step = checkpoint.get('last_cache_update_step', 0)
+            # NEW: Restore checkpoint tracking
+            self.last_checkpoint_step = checkpoint.get('last_checkpoint_step', -1)
             
             print(f"✅ Loaded checkpoint: {checkpoint_path}")
             print(f"   Questions processed: {self.questions_processed}")
@@ -1053,7 +1064,12 @@ class OptimizedOnlineTreePolicy:
     
     def should_save_checkpoint(self):
         """Check if we should save a checkpoint"""
-        return self.step_count % self.checkpoint_freq == 0
+        # Only save if we haven't already saved for this step
+        should_save = (self.step_count % self.checkpoint_freq == 0 and 
+                      self.step_count != self.last_checkpoint_step)
+        # if should_save:
+        #     print(f"📄 Checkpoint save triggered: step={self.step_count}, last_saved={self.last_checkpoint_step}")
+        return should_save
     
     def set_training_seed(self, seed):
         """Set training seed for reproducible shuffling"""
