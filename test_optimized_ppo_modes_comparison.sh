@@ -145,7 +145,7 @@ if [ "$RUN_CONTEXT_ONLY" = "true" ]; then
             --max-entropy-ent-coef 0.1 \
             --inference-temperature 1.5 \
             --max-entropy-inference \
-            --action-cache-steps 30 \
+            --action-cache-steps 10 \
             --action-cache-enabled \
             --use-eagle3-features \
             --hidden-size 4096 \
@@ -194,7 +194,7 @@ if [ "$RUN_CONTEXT_ONLY" = "true" ]; then
             --ppo-batch-size 32 \
             --ppo-epochs 4 \
             --disable-max-entropy \
-            --action-cache-steps 30 \
+            --action-cache-steps 10 \
             --action-cache-enabled \
             --use-eagle3-features \
             --hidden-size 4096 \
@@ -249,7 +249,7 @@ if [ "$RUN_STANDARD" = "true" ]; then
             --max-entropy-ent-coef 0.1 \
             --inference-temperature 1.5 \
             --max-entropy-inference \
-            --action-cache-steps 30 \
+            --action-cache-steps 10 \
             --action-cache-enabled \
             --use-eagle3-features \
             --hidden-size 4096 \
@@ -297,7 +297,7 @@ if [ "$RUN_STANDARD" = "true" ]; then
             --ppo-batch-size 32 \
             --ppo-epochs 4 \
             --disable-max-entropy \
-            --action-cache-steps 30 \
+            --action-cache-steps 10 \
             --action-cache-enabled \
             --use-eagle3-features \
             --hidden-size 4096 \

@@ -435,7 +435,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --online-policy-path log/$DATE/$policy_dir/optimized_*_dqn_policy.pth \
                 $CONTEXT_ARGS \
                 $ENTROPY_ARGS \
-                --action-cache-steps 10 \
+                --action-cache-steps 30 \
                 --action-cache-enabled \
                 --use-eagle3-features \
                 --hidden-size 4096 \
