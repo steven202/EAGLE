@@ -173,7 +173,7 @@ for i in "${!COMBINATIONS[@]}"; do
     combo=${COMBINATIONS[$i]}
     gpu_id=$((i % NUM_GPUS))
     desc=$(get_combination_desc $combo)
-    script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}.sh"
+    script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}_${combo}.sh"
     
     echo "Generating script $((i+1))/${#COMBINATIONS[@]}: $script_name (GPU $gpu_id, $desc)"
     
