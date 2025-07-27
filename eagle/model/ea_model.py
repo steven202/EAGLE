@@ -339,7 +339,7 @@ class EaModel(nn.Module):
             step_top_k = tree_top_k
         
         # prefill - model inference, disable gradients for efficiency
-        # with torch.no_grad():
+        with torch.no_grad():
         #     # Final safety check before calling initialize_tree
         #     if step_total_tokens:
         #         max_available_tokens = max_length - input_ids.shape[1] - 10  # Leave some buffer
