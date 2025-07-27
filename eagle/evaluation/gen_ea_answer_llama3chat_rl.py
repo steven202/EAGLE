@@ -1017,6 +1017,7 @@ def get_model_answers(
             # Training mode: save updated policy with enhanced statistics
             save_path = args.online_policy_save_path or "online_tree_policy_trained.pth"
             online_policy.save(save_path)
+            online_policy.save_checkpoint()
             
             # Print comprehensive training statistics
             final_stats = online_policy.get_performance_stats()
