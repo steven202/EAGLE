@@ -453,7 +453,7 @@ class EaModel(nn.Module):
                 #     if step_total_tokens < 1:
                 #         print(f"Warning: Step {idx} clamped total_tokens ({step_total_tokens}) too small, setting to minimum value 1")
                 #         step_total_tokens = 1
-                    
+                if step_total_tokens:
                     self.ea_layer.total_tokens = step_total_tokens - 1
                 if step_depth:
                     self.ea_layer.depth = step_depth
