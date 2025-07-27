@@ -443,7 +443,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --action-cache-steps 10 \
                 --action-cache-enabled \
                 --use-eagle3-features \
-                --hidden-size 4096 \
+                --hidden-size 384 \
                 --use-context-only-state \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_context/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_context/optimized_max_entropy_ppo_policy_sb3.pt \
@@ -500,7 +500,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --action-cache-steps 10 \
                 --action-cache-enabled \
                 --use-eagle3-features \
-                --hidden-size 4096 \
+                --hidden-size 384 \
                 --use-context-only-state \
                 --checkpoint-dir log/$DATE/optimized_standard_ppo_context/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.pt \
@@ -562,7 +562,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --action-cache-steps 10 \
                 --action-cache-enabled \
                 --use-eagle3-features \
-                --hidden-size 4096 \
+                --hidden-size 384 \
                 --use-context-only-state \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_context_ofl/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_context_ofl/optimized_max_entropy_ppo_policy_sb3.zip \
@@ -619,7 +619,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --action-cache-steps 10 \
                 --action-cache-enabled \
                 --use-eagle3-features \
-                --hidden-size 4096 \
+                --hidden-size 384 \
                 --use-context-only-state \
                 --checkpoint-dir log/$DATE/optimized_standard_ppo_context_ofl/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_standard_ppo_context_ofl/optimized_standard_ppo_policy_sb3.zip \
