@@ -38,7 +38,7 @@ class CustomPolicy(ActorCriticPolicy):
     
     def __init__(self, observation_space, action_space, net_arch=None, **kwargs):
         if net_arch is None:
-            net_arch = [512, 256, 128]  # Enhanced architecture for better performance
+            net_arch = [64, 64]  # Enhanced architecture for better performance
         
         super().__init__(observation_space, action_space, net_arch=net_arch, **kwargs)
         
