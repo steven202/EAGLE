@@ -792,14 +792,6 @@ class Model(nn.Module):
         draft_tokens = draft_tokens[None]
 
         del parents_list, scores_list, ss_token, ss_token_list, draft_parents
-        
-        # Force garbage collection to free memory
-        import gc
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        # with Timer("retrieve"):
 
         max_depth = torch.max(tree_position_ids) + 1
         noleaf_index = torch.unique(mask_index).tolist()
