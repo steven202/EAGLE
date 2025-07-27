@@ -2,6 +2,7 @@
 # pip install "torch==2.0.1" "transformers==4.46.2" "accelerate==0.21.0"
 # huggingface-cli logout
 # huggingface-cli login
+pip install huggingface_hub
 
 # Create models directory
 mkdir -p eagle_models

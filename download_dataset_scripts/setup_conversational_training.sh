@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-BASE_DIR="/home/guo/EAGLE_RL"
+BASE_DIR="."
 DATA_DIR="$BASE_DIR/training_data"
 SCRIPTS_DIR="$BASE_DIR/download_dataset_scripts"
 MODEL_PATH="$BASE_DIR/eagle_models/yuhuili_EAGLE3-LLaMA3.1-Instruct-8B"
@@ -25,8 +25,12 @@ echo "=== Step 1: Download Datasets ==="
 echo "Download ShareGPT dataset..."
 echo "  huggingface-cli download --repo-type dataset anon8231489123/ShareGPT_Vicuna_unfiltered --local-dir $DATA_DIR/raw/sharegpt"
 
+huggingface-cli download --repo-type dataset anon8231489123/ShareGPT_Vicuna_unfiltered --local-dir $DATA_DIR/raw/sharegpt
+
 echo "Download UltraChat-200K dataset..."  
 echo "  huggingface-cli download --repo-type dataset HuggingFaceH4/ultrachat_200k --local-dir $DATA_DIR/raw/ultrachat"
+
+huggingface-cli download --repo-type dataset HuggingFaceH4/ultrachat_200k --local-dir $DATA_DIR/raw/ultrachat
 
 echo ""
 echo "=== Step 2: Convert to EAGLE Format ==="
