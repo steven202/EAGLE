@@ -93,22 +93,44 @@ echo "Selected combinations: ${COMBINATIONS[*]}"
 echo "Number of scripts to generate: ${#COMBINATIONS[@]}"
 echo "Available GPUs: $NUM_GPUS"
 
-# Create output directory (based on input file name)
-OUTPUT_DIR="${BASE_SCRIPT}_multi_gpu_$(date +%Y%m%d_%H%M%S)"
+# Ask about output directory
+echo ""
+read -p "Use today's date for generated folder? (y/n, default: y): " USE_TODAY_DATE
+if [[ "$USE_TODAY_DATE" =~ ^[Nn]$ ]]; then
+    OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu"
+    echo "Using simple folder name: $OUTPUT_DIR"
+else
+    OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_$(date +%H%M%S)"
+    echo "Using dated folder name: $OUTPUT_DIR"
+fi
 
 # Check if any existing generated scripts exist in current directory
 EXISTING_SCRIPTS=$(ls ${FILE_PREFIX}__gpu*_*.sh 2>/dev/null | wc -l)
 if [ $EXISTING_SCRIPTS -gt 0 ]; then
     echo "Found $EXISTING_SCRIPTS existing generated scripts in current directory."
-    read -p "Do you want to delete existing scripts and regenerate? (y/n): " DELETE_EXISTING
+    read -p "Do you want to delete existing scripts and regenerate? (y/n, default: n): " DELETE_EXISTING
     if [[ "$DELETE_EXISTING" =~ ^[Yy]$ ]]; then
         echo "Deleting existing generated scripts..."
         rm -f ${FILE_PREFIX}__gpu*_*.sh
         rm -f run_all_scripts.sh launch.sh script_summary.txt
         echo "Existing scripts deleted."
     else
-        echo "Exiting to avoid overwriting existing files."
-        exit 1
+        echo "Keeping existing scripts. New scripts will be generated alongside them."
+    fi
+fi
+
+# Check if output directory already exists (shouldn't happen with HMS suffix, but just in case)
+if [ -d "$OUTPUT_DIR" ]; then
+    echo "Output directory $OUTPUT_DIR already exists."
+    read -p "Do you want to delete it and regenerate? (y/n, default: n): " DELETE_DIR
+    if [[ "$DELETE_DIR" =~ ^[Yy]$ ]]; then
+        echo "Deleting existing directory: $OUTPUT_DIR"
+        rm -rf "$OUTPUT_DIR"
+    else
+        echo "Keeping existing directory. Will create a new one with different timestamp."
+        # Generate a new timestamp to avoid conflict
+        OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_$(date +%H%M%S)"
+        echo "Using new directory name: $OUTPUT_DIR"
     fi
 fi
 
@@ -172,6 +194,11 @@ for i in "${!COMBINATIONS[@]}"; do
     
     # Replace all "python -m" with "CUDA_VISIBLE_DEVICES=X python -m"
     sed -i "s/python -m/CUDA_VISIBLE_DEVICES=$gpu_id python -m/g" "$OUTPUT_DIR/$script_name"
+    
+    # Update DATE variable to today's date and time
+    TODAY_DATE=$(date '+%Y%m%d_%H%M%S')
+    # Replace the DATE line more carefully to avoid multiple replacements
+    sed -i "/^DATE=.*_optimized_ppo/c\DATE=\"${TODAY_DATE}_optimized_ppo\"" "$OUTPUT_DIR/$script_name"
     
     # Add header comment to identify the script
     sed -i "1i# Generated script for GPU $gpu_id, Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
