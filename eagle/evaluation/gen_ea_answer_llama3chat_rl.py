@@ -555,7 +555,6 @@ def get_model_answers(
                             tree_top_k=predicted_top_k,
                         )
             except RuntimeError as e:
-                raise e
                 if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                     print(f"   Falling back to ultra-conservative warmup parameters...")
@@ -842,16 +841,21 @@ def get_model_answers(
                         
                     except RuntimeError as e:
                         # raise e
-                        if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e) or "KV cache buffer overflow" in str(e):
+                        if ("selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or 
+                            "start" in str(e) or "KV cache buffer overflow" in str(e) or 
+                            "CUDA out of memory" in str(e) or "out of memory" in str(e)):
                             retry_count += 1
                             print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k} (attempt {retry_count}/{max_retries})")
                             print(f"   Error: {e}")
                             
                             if retry_count < max_retries:
                                 print(f"   Trying more conservative parameters...")
+                                # Clear GPU memory before retry
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
                                 # Make parameters increasingly conservative with each retry
-                                if "KV cache buffer overflow" in str(e):
-                                    # For buffer overflow, be very aggressive with reduction
+                                if "KV cache buffer overflow" in str(e) or "CUDA out of memory" in str(e) or "out of memory" in str(e):
+                                    # For memory-related errors, be very aggressive with reduction
                                     if retry_count == 1:
                                         predicted_total_tokens = min(16, predicted_total_tokens // 4)
                                         predicted_depth = max(2, predicted_depth // 2)
@@ -1017,6 +1021,7 @@ def get_model_answers(
             # Training mode: save updated policy with enhanced statistics
             save_path = args.online_policy_save_path or "online_tree_policy_trained.pth"
             online_policy.save(save_path)
+            online_policy.save_checkpoint()
             
             # Print comprehensive training statistics
             final_stats = online_policy.get_performance_stats()
