@@ -396,7 +396,12 @@ execute_training_task() {
     cmd_args="$cmd_args --action-cache-steps 10 --action-cache-enabled"
     cmd_args="$cmd_args --use-eagle3-features --hidden-size 4096"
     cmd_args="$cmd_args --checkpoint-dir $output_dir/checkpoints"
-    cmd_args="$cmd_args --online-policy-save-path $output_dir/optimized_*_ppo_policy_sb3.zip"
+    # Use .zip for OFL version, .pt for standard version
+    if [ "$policy_version" = "ofl" ]; then
+        cmd_args="$cmd_args --online-policy-save-path $output_dir/optimized_*_ppo_policy_sb3.zip"
+    else
+        cmd_args="$cmd_args --online-policy-save-path $output_dir/optimized_*_ppo_policy_sb3.pt"
+    fi
     cmd_args="$cmd_args --checkpoint-freq 500 --wandb-project eagle-optimized-sb3-ppo"
     cmd_args="$cmd_args --total-token 60 --depth 7 --top-k 10 --use-stepwise-rl --use-eagle3"
     
@@ -458,7 +463,12 @@ execute_evaluation_task() {
     cmd_args="$cmd_args --max-gpu-memory \"80GiB\" --dtype float16 --temperature 0.0"
     cmd_args="$cmd_args --use-online-rl --use-optimized-sb3-discrete-ppo"
     cmd_args="$cmd_args --optimized-policy-version $policy_version --online-inference-only"
-    cmd_args="$cmd_args $context_args --online-policy-path log/$DATE/$policy_dir/optimized_*_ppo_policy_sb3.zip"
+    # Use .zip for OFL version, .pt for standard version
+    if [[ "$policy_dir" == *"_ofl" ]]; then
+        cmd_args="$cmd_args $context_args --online-policy-path log/$DATE/$policy_dir/optimized_*_ppo_policy_sb3.zip"
+    else
+        cmd_args="$cmd_args $context_args --online-policy-path log/$DATE/$policy_dir/optimized_*_ppo_policy_sb3.pt"
+    fi
     cmd_args="$cmd_args $entropy_args --action-cache-steps 30 --action-cache-enabled"
     cmd_args="$cmd_args --use-eagle3-features --hidden-size 4096"
     cmd_args="$cmd_args --total-token 60 --depth 7 --top-k 10 --use-stepwise-rl --use-eagle3"
@@ -619,14 +629,14 @@ POLICY_LABELS=()
 # Standard Version Policies
 if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
     if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
-        if [ "$RUN_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_max_entropy_ppo_context/optimized_max_entropy_ppo_policy_sb3.zip" ]; then
+        if [ "$RUN_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_max_entropy_ppo_context/optimized_max_entropy_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_max_entropy_ppo_context")
             POLICY_LABELS+=("Max-Entropy PPO (Context-Only) - Standard")
         elif [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
             echo "❌ Context-only max-entropy policy (Standard) not found!" | tee -a log/$DATE/comparison.txt
         fi
         
-        if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.zip" ]; then
+        if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_standard_ppo_context")
             POLICY_LABELS+=("Standard PPO (Context-Only) - Standard")
         elif [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
@@ -635,14 +645,14 @@ if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
     fi
 
     if [ "$RUN_STANDARD" -eq 1 ]; then
-        if [ "$RUN_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.zip" ]; then
+        if [ "$RUN_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_max_entropy_ppo_standard")
             POLICY_LABELS+=("Max-Entropy PPO (Standard) - Standard")
         elif [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
             echo "❌ Standard max-entropy policy (Standard) not found!" | tee -a log/$DATE/comparison.txt
         fi
         
-        if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.zip" ]; then
+        if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_standard_ppo_standard")
             POLICY_LABELS+=("Standard PPO (Standard) - Standard")
         elif [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then

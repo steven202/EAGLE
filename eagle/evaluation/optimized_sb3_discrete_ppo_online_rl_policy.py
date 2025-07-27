@@ -1108,6 +1108,7 @@ class CustomPPOOnlineTreePolicy:
         if checkpoint_name is None:
             checkpoint_name = f"checkpoint_step_{self.questions_processed}"
         
+        # Use .pt extension for custom PPO (non-OFL version)
         checkpoint_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}.pt")
         
         # Save custom PPO model
@@ -1178,7 +1179,7 @@ class CustomPPOOnlineTreePolicy:
             self.model.load(checkpoint_path)
             
             # Load additional state
-            state_path = checkpoint_path.replace('.zip', '_state.json')
+            state_path = checkpoint_path.replace('.pt', '_state.json')
             if os.path.exists(state_path):
                 with open(state_path, 'r') as f:
                     state = json.load(f)
@@ -1318,7 +1319,7 @@ class CustomPPOOnlineTreePolicy:
         """Save the entire policy"""
         self.model.save(path)
         
-        # Save additional metadata
+        # Save additional metadata (use .pt extension for custom PPO)
         metadata_path = path.replace('.pt', '_metadata.json')
         metadata = {
             "questions_processed": self.questions_processed,

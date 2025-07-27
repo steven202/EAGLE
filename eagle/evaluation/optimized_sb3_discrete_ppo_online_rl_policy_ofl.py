@@ -1359,6 +1359,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         if checkpoint_name is None:
             checkpoint_name = f"checkpoint_step_{self.questions_processed}"
         
+        # Use .zip extension for SB3 PPO (OFL version)
         checkpoint_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}.zip")
         
         # Save SB3 model
@@ -1574,7 +1575,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         """Save the entire policy"""
         self.model.save(path)
         
-        # Save additional metadata
+        # Save additional metadata (use .zip extension for SB3 PPO)
         metadata_path = path.replace('.zip', '_metadata.json')
         metadata = {
             "questions_processed": self.questions_processed,

@@ -199,7 +199,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --use-eagle3-features \
                 --hidden-size 4096 \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_standard/checkpoints \
-                --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.zip \
+                --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
                 --wandb-project eagle-optimized-sb3-ppo \
                 --total-token 60 \
@@ -255,7 +255,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --use-eagle3-features \
                 --hidden-size 4096 \
                 --checkpoint-dir log/$DATE/optimized_standard_ppo_standard/checkpoints \
-                --online-policy-save-path log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.zip \
+                --online-policy-save-path log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
                 --wandb-project eagle-optimized-sb3-ppo \
                 --total-token 60 \
@@ -438,7 +438,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --hidden-size 4096 \
                 --use-context-only-state \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_context/checkpoints \
-                --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_context/optimized_max_entropy_ppo_policy_sb3.zip \
+                --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_context/optimized_max_entropy_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
                 --wandb-project eagle-optimized-sb3-ppo \
                 --total-token 60 \
@@ -495,7 +495,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --hidden-size 4096 \
                 --use-context-only-state \
                 --checkpoint-dir log/$DATE/optimized_standard_ppo_context/checkpoints \
-                --online-policy-save-path log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.zip \
+                --online-policy-save-path log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
                 --wandb-project eagle-optimized-sb3-ppo \
                 --total-token 60 \
@@ -663,14 +663,14 @@ POLICY_LABELS=()
 # Standard Version Policies
 if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
     if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
-        if [ "$RUN_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_max_entropy_ppo_context/optimized_max_entropy_ppo_policy_sb3.zip" ]; then
+        if [ "$RUN_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_max_entropy_ppo_context/optimized_max_entropy_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_max_entropy_ppo_context")
             POLICY_LABELS+=("Max-Entropy PPO (Context-Only) - Standard")
         elif [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
             echo "❌ Context-only max-entropy policy (Standard) not found!" | tee -a log/$DATE/comparison.txt
         fi
         
-        if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.zip" ]; then
+        if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_standard_ppo_context")
             POLICY_LABELS+=("Standard PPO (Context-Only) - Standard")
         elif [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
@@ -679,14 +679,14 @@ if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
     fi
 
     if [ "$RUN_STANDARD" -eq 1 ]; then
-        if [ "$RUN_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.zip" ]; then
+        if [ "$RUN_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_max_entropy_ppo_standard")
             POLICY_LABELS+=("Max-Entropy PPO (Standard) - Standard")
         elif [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
             echo "❌ Standard max-entropy policy (Standard) not found!" | tee -a log/$DATE/comparison.txt
         fi
         
-        if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.zip" ]; then
+        if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_standard_ppo_standard")
             POLICY_LABELS+=("Standard PPO (Standard) - Standard")
         elif [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
@@ -789,7 +789,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --optimized-policy-version $POLICY_VERSION_ARG \
                 --online-inference-only \
                 $CONTEXT_ARGS \
-                --online-policy-path log/$DATE/$policy_dir/optimized_*_ppo_policy_sb3.zip \
+                --online-policy-path log/$DATE/$policy_dir/optimized_*_ppo_policy_sb3.* \
                 $ENTROPY_ARGS \
                 --action-cache-steps 30 \
                 --action-cache-enabled \
