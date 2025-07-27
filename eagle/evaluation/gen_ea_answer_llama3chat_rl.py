@@ -43,7 +43,7 @@ try:
     from .discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
     from .sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
     # OPTIMIZED POLICIES
-    from .optimized_sb3_discrete_ppo_online_rl_policy import OptimizedSB3DiscretePPOOnlineTreePolicy, calculate_optimized_sb3_discrete_ppo_reward
+    from .optimized_sb3_discrete_ppo_online_rl_policy import CustomPPOOnlineTreePolicy, calculate_custom_ppo_reward
     from .optimized_sb3_discrete_ppo_online_rl_policy_ofl import OptimizedSB3DiscretePPOOnlineTreePolicy as OptimizedSB3DiscretePPOOnlineTreePolicyOFL
     from .optimized_online_rl_policy import OptimizedOnlineTreePolicy, calculate_optimized_online_reward
 except:
@@ -57,7 +57,7 @@ except:
     from eagle.evaluation.discrete_ppo_online_rl_policy import DiscretePPOOnlineTreePolicy, calculate_discrete_ppo_reward
     from eagle.evaluation.sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
     # OPTIMIZED POLICIES
-    from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy import OptimizedSB3DiscretePPOOnlineTreePolicy, calculate_optimized_sb3_discrete_ppo_reward
+    from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy import CustomPPOOnlineTreePolicy, calculate_custom_ppo_reward
     from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy_ofl import OptimizedSB3DiscretePPOOnlineTreePolicy as OptimizedSB3DiscretePPOOnlineTreePolicyOFL
     from eagle.evaluation.optimized_online_rl_policy import OptimizedOnlineTreePolicy, calculate_optimized_online_reward
 
@@ -167,6 +167,9 @@ def get_model_answers(
 
     tokenizer = model.get_tokenizer()
 
+    # Set max_length parameter once to avoid repeated computation
+    max_length_param = 2100 if args.bench_name == "sum" and args.online_inference_only else 2048
+
     # Initialize RL policy if requested
     rl_policy = None
     online_policy = None
@@ -207,7 +210,7 @@ def get_model_answers(
             hidden_size = getattr(args, 'hidden_size', 4096)
             policy_version = getattr(args, 'optimized_policy_version', 'standard')
             
-            mode_description = "OPTIMIZED SB3 Max-Entropy Discrete PPO" if enable_max_entropy else "OPTIMIZED SB3 Standard Discrete PPO"
+            mode_description = "CUSTOM Max-Entropy Discrete PPO" if enable_max_entropy else "CUSTOM Standard Discrete PPO"
             version_description = f" ({policy_version.upper()} version)" if policy_version != "standard" else ""
             print(f"🚀⚡ Using {mode_description}{version_description} with EAGLE-3 features + action caching (every {action_cache_steps} steps)")
             
@@ -216,8 +219,8 @@ def get_model_answers(
                 PolicyClass = OptimizedSB3DiscretePPOOnlineTreePolicyOFL
                 print(f"📋 Using OFL version with enhanced features (set_max_timesteps, set_training_mode, enhanced PPO updates)")
             else:
-                PolicyClass = OptimizedSB3DiscretePPOOnlineTreePolicy
-                print(f"📋 Using standard version")
+                PolicyClass = CustomPPOOnlineTreePolicy
+                print(f"📋 Using custom PPO implementation (no SB3 dependency)")
             
             online_policy = PolicyClass(
                 learning_rate=args.online_lr,
@@ -227,7 +230,9 @@ def get_model_answers(
                 gamma=getattr(args, 'ppo_gamma', 0.95),
                 gae_lambda=getattr(args, 'ppo_gae_lambda', 0.9),
                 clip_range=getattr(args, 'ppo_clip_range', 0.2),
+                vf_coef=getattr(args, 'ppo_vf_coef', 0.5),
                 ent_coef=0.01,  # Standard entropy coefficient (will be overridden if max-entropy enabled)
+                max_grad_norm=getattr(args, 'max_grad_norm', 0.5),
                 # Max-entropy specific parameters
                 enable_max_entropy=enable_max_entropy,
                 max_entropy_ent_coef=getattr(args, 'max_entropy_ent_coef', 0.1),
@@ -247,7 +252,7 @@ def get_model_answers(
                 checkpoint_freq=getattr(args, 'checkpoint_freq', 100),
                 max_checkpoints=getattr(args, 'max_checkpoints', 3)
             )
-            reward_function = calculate_optimized_sb3_discrete_ppo_reward
+            reward_function = calculate_custom_ppo_reward
         elif getattr(args, 'use_optimized_dqn', False):
             # OPTIMIZED VERSION: EAGLE-3 features + action caching + DQN
             action_cache_steps = getattr(args, 'action_cache_steps', 10)
@@ -292,7 +297,9 @@ def get_model_answers(
                 gamma=getattr(args, 'ppo_gamma', 0.95),
                 gae_lambda=getattr(args, 'ppo_gae_lambda', 0.9),
                 clip_range=getattr(args, 'ppo_clip_range', 0.2),
+                vf_coef=getattr(args, 'ppo_vf_coef', 0.5),
                 ent_coef=0.01,  # Standard entropy coefficient (will be overridden if max-entropy enabled)
+                max_grad_norm=getattr(args, 'max_grad_norm', 0.5),
                 # Max-entropy specific parameters
                 enable_max_entropy=enable_max_entropy,
                 max_entropy_ent_coef=getattr(args, 'max_entropy_ent_coef', 0.1),
@@ -315,6 +322,8 @@ def get_model_answers(
                 clip_range=getattr(args, 'ppo_clip_range', 0.2),
                 gamma=getattr(args, 'ppo_gamma', 0.99),
                 gae_lambda=getattr(args, 'ppo_gae_lambda', 0.95),
+                vf_coef=getattr(args, 'ppo_vf_coef', 0.5),
+                max_grad_norm=getattr(args, 'max_grad_norm', 0.5),
                 use_wandb=(not args.online_inference_only and not args.no_wandb),
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
@@ -333,6 +342,8 @@ def get_model_answers(
                 gamma=getattr(args, 'ppo_gamma', 0.99),
                 gae_lambda=getattr(args, 'ppo_gae_lambda', 0.95),
                 clip_range=getattr(args, 'ppo_clip_range', 0.2),
+                vf_coef=getattr(args, 'ppo_vf_coef', 0.5),
+                max_grad_norm=getattr(args, 'max_grad_norm', 0.5),
                 use_wandb=(not args.online_inference_only and not args.no_wandb),
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
@@ -549,6 +560,7 @@ def get_model_answers(
                             tree_top_k=predicted_top_k,
                             rl_policy=online_policy,
                             training_mode=False,  # No training during warmup
+                            max_length=max_length_param,
                         )
                         # Handle variable return values from step-wise RL
                         if len(result) == 5:  # Step-wise RL with log=True
@@ -567,6 +579,7 @@ def get_model_answers(
                             total_tokens=predicted_total_tokens,
                             depth=predicted_depth,
                             tree_top_k=predicted_top_k,
+                            max_length=max_length_param,
                         )
             except RuntimeError as e:
                 if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
@@ -592,6 +605,7 @@ def get_model_answers(
                                     tree_top_k=safe_top_k,
                                     rl_policy=online_policy,
                                     training_mode=False,  # No training during fallback
+                                    max_length=max_length_param,
                                 )
                                 # Handle variable return values from step-wise RL
                                 if len(result) == 5:  # Step-wise RL with log=True
@@ -609,6 +623,7 @@ def get_model_answers(
                                     total_tokens=safe_total_tokens,
                                     depth=safe_depth,
                                     tree_top_k=safe_top_k,
+                                    max_length=max_length_param,
                                 )
                     except RuntimeError as e2:
                         print(f"❌ Even ultra-conservative warmup failed: {e2}")
@@ -796,6 +811,7 @@ def get_model_answers(
                                     tree_top_k=predicted_top_k,
                                     rl_policy=online_policy,
                                     training_mode=training_mode,
+                                    max_length=max_length_param,
                                 )
                                 # Handle variable return values from step-wise RL
                                 if len(result) == 5:  # Step-wise RL with log=True
@@ -818,6 +834,7 @@ def get_model_answers(
                                     total_tokens=predicted_total_tokens,
                                     depth=predicted_depth,
                                     tree_top_k=predicted_top_k,
+                                    max_length=max_length_param,
                                 )
                         else:
                             # Inference mode: use torch.no_grad() for memory efficiency
@@ -834,6 +851,7 @@ def get_model_answers(
                                         tree_top_k=predicted_top_k,
                                         rl_policy=online_policy,
                                         training_mode=False,  # Inference only
+                                        max_length=max_length_param,
                                     )
                                     # Handle variable return values from step-wise RL
                                     if len(result) == 5:  # Step-wise RL with log=True
@@ -853,6 +871,7 @@ def get_model_answers(
                                         total_tokens=predicted_total_tokens,
                                         depth=predicted_depth,
                                         tree_top_k=predicted_top_k,
+                                        max_length=max_length_param,
                                     )
                         success = True
                         
@@ -1400,6 +1419,12 @@ if __name__ == "__main__":
         type=float,
         default=0.5,
         help="Value function coefficient for the loss calculation (SB3 PPO only)"
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=0.5,
+        help="The maximum value for the gradient clipping (PPO only)"
     )
     
     # Max-entropy RL arguments

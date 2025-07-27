@@ -1,7 +1,8 @@
 """
-Optimized RL Policy implementations with:
+Custom PPO Policy Implementation - No Stable Baselines 3 Dependency
 1. Layer Feature Concatenation (EAGLE-3 features instead of SBERT)
 2. Action Generation Frequency optimization (caching actions for N steps)
+3. Custom PPO implementation following SB3 practices
 """
 
 import numpy as np
@@ -14,16 +15,7 @@ from collections import deque
 import random
 import gym
 from gym import spaces
-
-try:
-    from stable_baselines3 import PPO
-    from stable_baselines3.common.env_util import make_vec_env
-    from stable_baselines3.common.callbacks import BaseCallback
-    from stable_baselines3.common.vec_env import DummyVecEnv
-    SB3_AVAILABLE = True
-except ImportError:
-    SB3_AVAILABLE = False
-    print("Error: Stable Baselines 3 not available. Install with: pip install stable-baselines3")
+from typing import Tuple
 
 try:
     import wandb
@@ -31,56 +23,69 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: wandb not available. Install with: pip install wandb")
-from stable_baselines3.common.policies import ActorCriticPolicy
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+
+# Import our custom PPO components
+from eagle.evaluation.custom_ppo_components import (
+    ActorCriticPolicy, 
+    CustomPPO, 
+    BaseCallback, 
+    CheckpointCallback,
+    RolloutBuffer
+)
 
 class CustomPolicy(ActorCriticPolicy):
-    def __init__(self, observation_space, action_space, lr_schedule, net_arch=None, **kwargs):
-        super().__init__(
-            observation_space,
-            action_space,
-            lr_schedule,
-            net_arch=[],
-            **kwargs
+    """Custom Policy Network with enhanced architecture for EAGLE parameter optimization"""
+    
+    def __init__(self, observation_space, action_space, net_arch=None, **kwargs):
+        if net_arch is None:
+            net_arch = [512, 256, 128]  # Enhanced architecture for better performance
+        
+        super().__init__(observation_space, action_space, net_arch=net_arch, **kwargs)
+        
+        # Add additional layers for better feature extraction
+        self.feature_enhancer = nn.Sequential(
+            nn.Linear(self.features_dim, self.features_dim),
+            nn.LayerNorm(self.features_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1)
         )
-
-        # You can build your custom feature extractor or policy network here
-        self.mlp_extractor = CustomMLP(self.features_dim, self.action_space.n)
-
-        # Re-register policy and value networks
-        self._build(lr_schedule)
-
-    def forward(self, obs, deterministic=False):
-        return super().forward(obs, deterministic)
-
-class CustomMLP(nn.Module):
-    def __init__(self, feature_dim, n_actions):
-        super().__init__()
+        
+        # Override the shared network with enhanced version
+        enhanced_layers = []
+        prev_dim = self.features_dim
+        for layer_size in net_arch:
+            enhanced_layers.extend([
+                nn.Linear(prev_dim, layer_size),
+                nn.LayerNorm(layer_size),
+                nn.ReLU(),
+                nn.Dropout(0.2)
+            ])
+            prev_dim = layer_size
+        
+        self.shared_net = nn.Sequential(*enhanced_layers)
+        
+        # Enhanced policy and value heads
         self.policy_net = nn.Sequential(
-            nn.Linear(feature_dim, 512),
+            nn.Linear(prev_dim, 128),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, n_actions)
+            nn.Linear(128, self.action_dim)
         )
+        
         self.value_net = nn.Sequential(
-            nn.Linear(feature_dim, 512),
+            nn.Linear(prev_dim, 128),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.ReLU(),
             nn.Linear(128, 1)
         )
-
-    def forward(self, features):
-        return self.policy_net(features), self.value_net(features)
+    
+    def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Enhanced forward pass with feature enhancement"""
+        enhanced_features = self.feature_enhancer(obs)
+        features = self.shared_net(enhanced_features)
+        policy_logits = self.policy_net(features)
+        value = self.value_net(features)
+        return policy_logits, value
     
 class OptimizedEagleParameterEnv(gym.Env):
     """Optimized Custom Gym environment for EAGLE parameter optimization
@@ -289,12 +294,13 @@ class OptimizedEagleParameterEnv(gym.Env):
         
         return next_obs, reward, done, info
 
-class OptimizedSB3DiscretePPOOnlineTreePolicy:
-    """Optimized Stable Baselines 3 PPO-based Online RL Policy
+class CustomPPOOnlineTreePolicy:
+    """Custom PPO-based Online RL Policy - No Stable Baselines 3 Dependency
     
     Optimizations:
     1. Uses EAGLE-3 layer features instead of SBERT text embeddings
     2. Action caching to reduce computation frequency (generate action every N steps)
+    3. Custom PPO implementation following SB3 practices
     
     Supports both standard PPO and max-entropy PPO modes:
     - Standard PPO: Low entropy coefficient, deterministic inference
@@ -326,14 +332,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                  # NEW: Context-only state representation option
                  use_context_only_state=False, # Use SBERT context embeddings directly (384D)
                  use_wandb=True,
-                 wandb_project="eagle-optimized-sb3-discrete-ppo",
+                 wandb_project="eagle-custom-ppo",
                  wandb_run_name=None,
-                 checkpoint_dir="optimized_sb3_discrete_ppo_checkpoints",
+                 checkpoint_dir="custom_ppo_checkpoints",
                  checkpoint_freq=100,
                  max_checkpoints=3):
-        
-        if not SB3_AVAILABLE:
-            raise ImportError("Stable Baselines 3 not available. Install with: pip install stable-baselines3")
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
@@ -410,10 +413,16 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Determine entropy coefficient based on mode
         actual_ent_coef = max_entropy_ent_coef if enable_max_entropy else ent_coef
         
-        # Initialize SB3 PPO model
-        self.model = PPO(
-            "MlpPolicy", #CustomPolicy,
-            self.env,
+        # Initialize custom policy
+        self.policy = CustomPolicy(
+            observation_space=self.env.observation_space,
+            action_space=self.env.action_space
+        )
+        
+        # Initialize custom PPO model
+        self.model = CustomPPO(
+            policy=self.policy,
+            env=self.env,
             learning_rate=learning_rate,
             n_steps=n_steps,
             batch_size=batch_size,
@@ -421,12 +430,13 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             gamma=gamma,
             gae_lambda=gae_lambda,
             clip_range=clip_range,
+            clip_range_vf=None,
+            normalize_advantage=True,
             ent_coef=actual_ent_coef,
             vf_coef=vf_coef,
             max_grad_norm=max_grad_norm,
-            verbose=0,
-            device=self.device,
-            tensorboard_log=None
+            target_kl=None,
+            device=self.device
         )
         
         # Initialize training tracking
@@ -442,13 +452,13 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         self.episode_length = 0
         self.rollout_buffer = []
         
-        print(f"OptimizedSB3DiscretePPOOnlineTreePolicy initialized:")
+        print(f"CustomPPOOnlineTreePolicy initialized:")
         print(f"  - Action space: {self.env.action_space.n} discrete actions")
         print(f"  - Observation space: {self.env.observation_space.shape}")
         print(f"  - Learning rate: {learning_rate}")
-        print(f"  - PPO n_steps: {n_steps}")
-        print(f"  - PPO batch_size: {batch_size}")
-        print(f"  - PPO n_epochs: {n_epochs}")
+        print(f"  - Custom PPO n_steps: {n_steps}")
+        print(f"  - Custom PPO batch_size: {batch_size}")
+        print(f"  - Custom PPO n_epochs: {n_epochs}")
         print(f"  - Entropy coefficient: {actual_ent_coef} ({'high for diversity' if enable_max_entropy else 'standard'})")
         print(f"  - OPTIMIZATION 1 - EAGLE-3 features: {'enabled' if use_eagle3_features else 'disabled'}")
         print(f"  - OPTIMIZATION 2 - Action caching: {'enabled' if action_cache_enabled else 'disabled'}")
@@ -463,9 +473,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         print(f"  - Wandb logging: {'enabled' if self.use_wandb else 'disabled'}")
         
         if enable_max_entropy:
-            print(f"🌟 OPTIMIZED MAX-ENTROPY MODE: EAGLE-3 features + action caching + higher exploration")
+            print(f"🌟 CUSTOM MAX-ENTROPY MODE: EAGLE-3 features + action caching + higher exploration")
         else:
-            print(f"⚙️  OPTIMIZED STANDARD PPO MODE: EAGLE-3 features + action caching + standard exploration")
+            print(f"⚙️  CUSTOM STANDARD PPO MODE: EAGLE-3 features + action caching + standard exploration")
     
     def predict_parameters(self, context=None, hidden_states=None, training_mode=True):
         """OPTIMIZED: Predict parameters using EAGLE-3 features with action caching
@@ -679,17 +689,12 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         with torch.no_grad():
             try:
-                # Get logits from policy network
-                features = self.model.policy.extract_features(obs_tensor)
-                if hasattr(self.model.policy, 'mlp_extractor'):
-                    latent_pi, _ = self.model.policy.mlp_extractor(features)
-                    logits = self.model.policy.action_net(latent_pi)
-                else:
-                    logits = self.model.policy.action_net(features)
+                # Get logits from our custom policy network
+                policy_logits, _ = self.model.policy(obs_tensor)
                 
                 # Apply temperature scaling
                 if temperature > 0:
-                    scaled_logits = logits / temperature
+                    scaled_logits = policy_logits / temperature
                     probs = torch.softmax(scaled_logits, dim=-1)
                     
                     # Sample from the distribution
@@ -698,7 +703,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     
                     return action.item()
                 else:
-                    return torch.argmax(logits, dim=-1).item()
+                    return torch.argmax(policy_logits, dim=-1).item()
                     
             except Exception as e:
                 print(f"Temperature sampling error: {e}")
@@ -895,16 +900,6 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             return
         
         try:
-            # Convert rollout buffer to format suitable for SB3 learning
-            # Since SB3 handles its own rollout collection, we need to manually trigger learning
-            # by feeding our collected experiences
-            
-            # Create temporary vectorized environment for learning
-            from stable_baselines3.common.vec_env import DummyVecEnv
-            
-            # The key insight: we need to manually call the model's learning methods
-            # with our collected experiences, but SB3 expects a specific format
-            
             print(f"🎯 Triggering PPO learning with {len(self.rollout_buffer)} experiences")
             
             # Extract observations, actions, and rewards from rollout buffer
@@ -912,19 +907,13 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             actions = np.array([exp['action'] for exp in self.rollout_buffer])
             rewards = np.array([exp['reward'] for exp in self.rollout_buffer])
             
-            # Create a temporary environment with the collected data
-            # and trigger one learning step
-            if hasattr(self.model, 'learn'):
-                # We can't directly call learn() with our data, so we'll use a workaround:
-                # Set the model's rollout buffer manually and trigger learning
-                
-                # Manual learning step using collected experiences
-                obs_tensor = torch.FloatTensor(observations).to(self.device)
-                actions_tensor = torch.LongTensor(actions).to(self.device)
-                rewards_tensor = torch.FloatTensor(rewards).to(self.device)
-                
-                # Perform one gradient step
-                self._manual_ppo_update(obs_tensor, actions_tensor, rewards_tensor)
+            # Use our custom PPO's manual update method
+            obs_tensor = torch.FloatTensor(observations).to(self.device)
+            actions_tensor = torch.LongTensor(actions).to(self.device)
+            rewards_tensor = torch.FloatTensor(rewards).to(self.device)
+            
+            # Perform one gradient step
+            self._manual_ppo_update(obs_tensor, actions_tensor, rewards_tensor)
             
             if self.use_wandb:
                 wandb.log({
@@ -935,24 +924,22 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 })
                 
         except Exception as e:
-            raise e
             print(f"Warning: PPO learning failed: {e}")
             # Continue without learning rather than crashing
             if self.use_wandb:
                 wandb.log({"ppo_learning_error": 1})
     
     def _manual_ppo_update(self, observations, actions, rewards):
-        """Manually perform a PPO update step"""
+        """Manually perform a PPO update step using our custom implementation"""
         try:
             # Get policy and value function outputs
             with torch.no_grad():
-                values = self.model.policy.predict_values(observations)
-                log_probs = self.model.policy.get_distribution(observations).log_prob(actions)
+                values, log_probs, entropy = self.model.policy.evaluate_actions(observations, actions)
                 old_log_probs = log_probs.detach()
             
             # Calculate advantages (simplified - normally would use GAE)
-            advantages = rewards.unsqueeze(1) - values
-            returns = rewards.unsqueeze(1)
+            advantages = rewards - values
+            returns = rewards
             
             # Normalize advantages
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -960,36 +947,31 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             # PPO update for several epochs
             for epoch in range(self.model.n_epochs):
                 # Get current policy outputs
-                distribution = self.model.policy.get_distribution(observations)
-                new_log_probs = distribution.log_prob(actions)
-                entropy = distribution.entropy().mean()
+                current_values, new_log_probs, current_entropy = self.model.policy.evaluate_actions(observations, actions)
                 
                 # Policy loss (PPO clipped objective)
                 ratio = torch.exp(new_log_probs - old_log_probs)
-                # Get current clip range value (handle both callable and scalar)
-                current_clip_range = self.model.clip_range(self.model.num_timesteps) if callable(self.model.clip_range) else self.model.clip_range
-                clipped_ratio = torch.clamp(ratio, 1 - current_clip_range, 1 + current_clip_range)
-                policy_loss = -torch.min(ratio * advantages.squeeze(), clipped_ratio * advantages.squeeze()).mean()
+                clipped_ratio = torch.clamp(ratio, 1 - self.model.clip_range, 1 + self.model.clip_range)
+                policy_loss = -torch.min(ratio * advantages, clipped_ratio * advantages).mean()
                 
                 # Value loss
-                current_values = self.model.policy.predict_values(observations)
                 value_loss = nn.MSELoss()(current_values, returns)
                 
                 # Total loss
-                loss = policy_loss + self.model.vf_coef * value_loss - self.model.ent_coef * entropy
+                loss = policy_loss + self.model.vf_coef * value_loss - self.model.ent_coef * current_entropy.mean()
                 
                 # Gradient step
-                self.model.policy.optimizer.zero_grad()
+                self.model.optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.policy.parameters(), self.model.max_grad_norm)
-                self.model.policy.optimizer.step()
+                self.model.optimizer.step()
             
             # Log learning metrics
             if self.use_wandb:
                 wandb.log({
                     "policy_loss": policy_loss.item(),
                     "value_loss": value_loss.item(),
-                    "entropy": entropy.item(),
+                    "entropy": current_entropy.mean().item(),
                     "total_loss": loss.item(),
                     "mean_advantage": advantages.mean().item(),
                     "mean_return": returns.mean().item()
@@ -998,7 +980,6 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             print(f"   PPO update completed at step {self.step_count} - Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
             
         except Exception as e:
-            raise e
             print(f"   PPO manual update failed: {e}")
             raise
     
@@ -1120,16 +1101,16 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         if hasattr(self, 'env'):
             self.env.reset()
         
-        # print(f"🔄 Reset SB3 PPO policy state - cache cleared, step counter reset to 0")
+        # print(f"🔄 Reset Custom PPO policy state - cache cleared, step counter reset to 0")
     
     def save_checkpoint(self, checkpoint_name=None):
         """Save model checkpoint"""
         if checkpoint_name is None:
             checkpoint_name = f"checkpoint_step_{self.questions_processed}"
         
-        checkpoint_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}.zip")
+        checkpoint_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}.pt")
         
-        # Save SB3 model
+        # Save custom PPO model
         self.model.save(checkpoint_path)
         
         # Update last checkpoint step to prevent duplicate saves
@@ -1193,8 +1174,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             checkpoint_path = self._find_latest_checkpoint()
         
         if checkpoint_path and os.path.exists(checkpoint_path):
-            # Load SB3 model
-            self.model = PPO.load(checkpoint_path, env=self.env, device=self.device)
+            # Load custom PPO model
+            self.model.load(checkpoint_path)
             
             # Load additional state
             state_path = checkpoint_path.replace('.zip', '_state.json')
@@ -1237,7 +1218,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         if not os.path.exists(self.checkpoint_dir):
             return None
         
-        checkpoints = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.zip')]
+        checkpoints = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.pt')]
         if not checkpoints:
             return None
         
@@ -1250,7 +1231,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         if not os.path.exists(self.checkpoint_dir):
             return
         
-        checkpoints = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.zip')]
+        checkpoints = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.pt')]
         if len(checkpoints) <= self.max_checkpoints:
             return
         
@@ -1260,7 +1241,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Remove old checkpoints
         for checkpoint in checkpoints[self.max_checkpoints:]:
             checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint)
-            state_path = checkpoint_path.replace('.zip', '_state.json')
+            state_path = checkpoint_path.replace('.pt', '_state.json')
             
             try:
                 os.remove(checkpoint_path)
@@ -1338,7 +1319,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         self.model.save(path)
         
         # Save additional metadata
-        metadata_path = path.replace('.zip', '_metadata.json')
+        metadata_path = path.replace('.pt', '_metadata.json')
         metadata = {
             "questions_processed": self.questions_processed,
             "step_count": self.step_count,
@@ -1353,15 +1334,15 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        print(f"💾 Saved optimized policy to: {path}")
+        print(f"💾 Saved custom PPO policy to: {path}")
     
     def load(self, path):
         """Load the entire policy"""
         if os.path.exists(path):
-            self.model = PPO.load(path, env=self.env, device=self.device)
+            self.model.load(path)
             
             # Load metadata if available
-            metadata_path = path.replace('.zip', '_metadata.json')
+            metadata_path = path.replace('.pt', '_metadata.json')
             if os.path.exists(metadata_path):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
@@ -1370,14 +1351,14 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 self.step_count = metadata.get("step_count", 0)
                 self.last_checkpoint_step = metadata.get("last_checkpoint_step", -1)
             
-            print(f"📂 Loaded optimized policy from: {path}")
+            print(f"📂 Loaded custom PPO policy from: {path}")
             return True
         else:
             print(f"❌ Policy file not found: {path}")
             return False
 
-def calculate_optimized_sb3_discrete_ppo_reward(generation_time, new_tokens, total_tokens, depth, top_k):
-    """Calculate reward for optimized SB3 discrete PPO learning with appropriate scale"""
+def calculate_custom_ppo_reward(generation_time, new_tokens, total_tokens, depth, top_k):
+    """Calculate reward for custom PPO learning with appropriate scale"""
     # Primary reward: tokens per second (speed)
     if generation_time <= 0 or new_tokens <= 0:
         return 0.0

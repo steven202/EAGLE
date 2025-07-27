@@ -22,32 +22,32 @@ DATE="${DATE}_optimized_ppo"
 # DATE='20250726_0904_optimized_ppo'
 MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=10
+QUESTION_END=4000
 
 # EXECUTION MODE CONFIGURATION
 # Set these to "true" or "false" to control which modes to run
 
 # Policy implementation version selection
-RUN_STANDARD_VERSION=0   # Run standard policy version
+RUN_STANDARD_VERSION=1   # Run standard policy version
 RUN_OFL_VERSION=1       # Run OFL policy version with enhanced features
 
 # State representation modes
 RUN_STANDARD=1          # Run without --use-context-only-state  
-RUN_CONTEXT_ONLY=0      # Run with --use-context-only-state
+RUN_CONTEXT_ONLY=1      # Run with --use-context-only-state
 
 # Entropy modes  
 RUN_MAX_ENTROPY=1       # Run with max-entropy PPO
-RUN_NO_MAX_ENTROPY=0    # Run without max-entropy (standard PPO)
+RUN_NO_MAX_ENTROPY=1    # Run without max-entropy (standard PPO)
 
 # Benchmark names for testing
 BENCHMARKS=("mt_bench" "humaneval" "gsm8k" "alpaca" "sum" "qa")
 BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natural Questions")
-BENCHMARKS=("gsm8k" "mt_bench")
-BENCHMARK_NAMES=("GSM8K" "MT-Bench")
-BENCHMARKS=("sum")
-BENCHMARK_NAMES=("CNN/DailyMail")
-# BENCHMARKS=("gsm8k")
-# BENCHMARKS=("gsm8k")
+# BENCHMARKS=("gsm8k" "mt_bench")
+# BENCHMARK_NAMES=("GSM8K" "MT-Bench")
+# BENCHMARKS=("sum")
+# BENCHMARK_NAMES=("CNN/DailyMail")
+# # BENCHMARKS=("gsm8k")
+# # BENCHMARKS=("gsm8k")
 
 echo "=== EXECUTION MODE CONFIGURATION ===" | tee -a log/execution_config.txt
 echo "POLICY VERSIONS:" | tee -a log/execution_config.txt
@@ -184,6 +184,12 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --ppo-n-steps 64 \
                 --ppo-batch-size 32 \
                 --ppo-epochs 4 \
+                --ppo-gamma 0.95 \
+                --ppo-gae-lambda 0.9 \
+                --ppo-clip-range 0.2 \
+                --ppo-vf-coef 0.5 \
+                --ppo-ent-coef 0.01 \
+                --max-grad-norm 0.5 \
                 --enable-max-entropy \
                 --max-entropy-ent-coef 0.1 \
                 --inference-temperature 1.5 \
@@ -237,6 +243,12 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --ppo-n-steps 64 \
                 --ppo-batch-size 32 \
                 --ppo-epochs 4 \
+                --ppo-gamma 0.95 \
+                --ppo-gae-lambda 0.9 \
+                --ppo-clip-range 0.2 \
+                --ppo-vf-coef 0.5 \
+                --ppo-ent-coef 0.01 \
+                --max-grad-norm 0.5 \
                 --disable-max-entropy \
                 --action-cache-steps 10 \
                 --action-cache-enabled \
@@ -290,6 +302,12 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --ppo-n-steps 64 \
                 --ppo-batch-size 32 \
                 --ppo-epochs 4 \
+                --ppo-gamma 0.95 \
+                --ppo-gae-lambda 0.9 \
+                --ppo-clip-range 0.2 \
+                --ppo-vf-coef 0.5 \
+                --ppo-ent-coef 0.01 \
+                --max-grad-norm 0.5 \
                 --enable-max-entropy \
                 --max-entropy-ent-coef 0.1 \
                 --inference-temperature 1.5 \
@@ -343,6 +361,12 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --ppo-n-steps 64 \
                 --ppo-batch-size 32 \
                 --ppo-epochs 4 \
+                --ppo-gamma 0.95 \
+                --ppo-gae-lambda 0.9 \
+                --ppo-clip-range 0.2 \
+                --ppo-vf-coef 0.5 \
+                --ppo-ent-coef 0.01 \
+                --max-grad-norm 0.5 \
                 --disable-max-entropy \
                 --action-cache-steps 10 \
                 --action-cache-enabled \
@@ -398,6 +422,12 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --ppo-n-steps 64 \
                 --ppo-batch-size 32 \
                 --ppo-epochs 4 \
+                --ppo-gamma 0.95 \
+                --ppo-gae-lambda 0.9 \
+                --ppo-clip-range 0.2 \
+                --ppo-vf-coef 0.5 \
+                --ppo-ent-coef 0.01 \
+                --max-grad-norm 0.5 \
                 --enable-max-entropy \
                 --max-entropy-ent-coef 0.1 \
                 --inference-temperature 1.5 \
@@ -452,6 +482,12 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --ppo-n-steps 64 \
                 --ppo-batch-size 32 \
                 --ppo-epochs 4 \
+                --ppo-gamma 0.95 \
+                --ppo-gae-lambda 0.9 \
+                --ppo-clip-range 0.2 \
+                --ppo-vf-coef 0.5 \
+                --ppo-ent-coef 0.01 \
+                --max-grad-norm 0.5 \
                 --disable-max-entropy \
                 --action-cache-steps 10 \
                 --action-cache-enabled \
@@ -505,6 +541,12 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --ppo-n-steps 64 \
                 --ppo-batch-size 32 \
                 --ppo-epochs 4 \
+                --ppo-gamma 0.95 \
+                --ppo-gae-lambda 0.9 \
+                --ppo-clip-range 0.2 \
+                --ppo-vf-coef 0.5 \
+                --ppo-ent-coef 0.01 \
+                --max-grad-norm 0.5 \
                 --enable-max-entropy \
                 --max-entropy-ent-coef 0.1 \
                 --inference-temperature 1.5 \
@@ -559,6 +601,12 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --ppo-n-steps 64 \
                 --ppo-batch-size 32 \
                 --ppo-epochs 4 \
+                --ppo-gamma 0.95 \
+                --ppo-gae-lambda 0.9 \
+                --ppo-clip-range 0.2 \
+                --ppo-vf-coef 0.5 \
+                --ppo-ent-coef 0.01 \
+                --max-grad-norm 0.5 \
                 --disable-max-entropy \
                 --action-cache-steps 10 \
                 --action-cache-enabled \
