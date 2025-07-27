@@ -49,17 +49,20 @@ BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natura
 # # BENCHMARKS=("gsm8k")
 # # BENCHMARKS=("gsm8k")
 
-echo "=== EXECUTION MODE CONFIGURATION ===" | tee -a log/execution_config.txt
-echo "POLICY VERSIONS:" | tee -a log/execution_config.txt
-echo "RUN_STANDARD_VERSION: $RUN_STANDARD_VERSION" | tee -a log/execution_config.txt
-echo "RUN_OFL_VERSION: $RUN_OFL_VERSION" | tee -a log/execution_config.txt
-echo "STATE MODES:" | tee -a log/execution_config.txt
-echo "RUN_CONTEXT_ONLY: $RUN_CONTEXT_ONLY" | tee -a log/execution_config.txt
-echo "RUN_STANDARD: $RUN_STANDARD" | tee -a log/execution_config.txt
-echo "ENTROPY MODES:" | tee -a log/execution_config.txt
-echo "RUN_MAX_ENTROPY: $RUN_MAX_ENTROPY" | tee -a log/execution_config.txt
-echo "RUN_NO_MAX_ENTROPY: $RUN_NO_MAX_ENTROPY" | tee -a log/execution_config.txt
-echo "" | tee -a log/execution_config.txt
+# Write execution config to each policy directory
+for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+    echo "=== EXECUTION MODE CONFIGURATION ===" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "POLICY VERSIONS:" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "RUN_STANDARD_VERSION: $RUN_STANDARD_VERSION" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "RUN_OFL_VERSION: $RUN_OFL_VERSION" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "STATE MODES:" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "RUN_CONTEXT_ONLY: $RUN_CONTEXT_ONLY" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "RUN_STANDARD: $RUN_STANDARD" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "ENTROPY MODES:" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "RUN_MAX_ENTROPY: $RUN_MAX_ENTROPY" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "RUN_NO_MAX_ENTROPY: $RUN_NO_MAX_ENTROPY" | tee -a log/$DATE/$dir/execution_config.txt
+    echo "" | tee -a log/$DATE/$dir/execution_config.txt
+done
 
 # Create log directory - dynamic based on execution mode
 DIRECTORIES_TO_CREATE=()
@@ -106,9 +109,6 @@ if [ "$RUN_OFL_VERSION" -eq 1 ]; then
     fi
 fi
 
-# Always create baseline_results directory
-DIRECTORIES_TO_CREATE+=("baseline_results")
-
 # Create directories
 if [ ${#DIRECTORIES_TO_CREATE[@]} -gt 0 ]; then
     # Create each directory individually to avoid brace expansion issues
@@ -116,35 +116,43 @@ if [ ${#DIRECTORIES_TO_CREATE[@]} -gt 0 ]; then
         mkdir -p log/$DATE/$dir
     done
     
-    # Create subdirectories for each policy directory (excluding baseline_results)
+    # Create subdirectories for each policy directory
     for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
-        if [ "$dir" != "baseline_results" ]; then
-            mkdir -p log/$DATE/$dir/{checkpoints,evaluation}
-        fi
+        mkdir -p log/$DATE/$dir/{checkpoints,evaluation,baseline_results}
     done
 fi
 
-echo "=== OPTIMIZED EAGLE SB3 PPO Training & Multi-Benchmark Evaluation ===" | tee -a log/$DATE/comparison.txt
-echo "Model: $MODEL_PATH" | tee -a log/$DATE/comparison.txt
-echo "Base Model: $BASE_MODEL_PATH" | tee -a log/$DATE/comparison.txt
-echo "Training Dataset: eagle/data/rl_training/question.jsonl" | tee -a log/$DATE/comparison.txt
+# Function to write to a specific policy directory
+write_to_policy_dir() {
+    local policy_dir="$1"
+    local message="$2"
+    echo "$message" | tee -a log/$DATE/$policy_dir/comparison.txt
+}
 
-# Show which versions are being run
-if [ "$RUN_STANDARD_VERSION" -eq 1 ] && [ "$RUN_OFL_VERSION" -eq 1 ]; then
-    echo "Policy Versions: BOTH (Standard + OFL with enhanced features)" | tee -a log/$DATE/comparison.txt
-elif [ "$RUN_OFL_VERSION" -eq 1 ]; then
-    echo "Policy Version: OFL (with enhanced features)" | tee -a log/$DATE/comparison.txt
-elif [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
-    echo "Policy Version: Standard" | tee -a log/$DATE/comparison.txt
-fi
+# Write comparison info to each policy directory
+for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+    write_to_policy_dir "$dir" "=== OPTIMIZED EAGLE SB3 PPO Training & Multi-Benchmark Evaluation ==="
+    write_to_policy_dir "$dir" "Model: $MODEL_PATH"
+    write_to_policy_dir "$dir" "Base Model: $BASE_MODEL_PATH"
+    write_to_policy_dir "$dir" "Training Dataset: eagle/data/rl_training/question.jsonl"
 
-echo "OPTIMIZATION 1: EAGLE-3 layer features instead of SBERT embeddings" | tee -a log/$DATE/comparison.txt
-echo "OPTIMIZATION 2: Action caching - generate action every 10 steps" | tee -a log/$DATE/comparison.txt
-if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
-    echo "OPTIMIZATION 3: Context-only state representation (SBERT 384D directly)" | tee -a log/$DATE/comparison.txt
-fi
-echo "Expected speedup: ~50% reduction in RL policy computation" | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
+    # Show which versions are being run
+    if [ "$RUN_STANDARD_VERSION" -eq 1 ] && [ "$RUN_OFL_VERSION" -eq 1 ]; then
+        write_to_policy_dir "$dir" "Policy Versions: BOTH (Standard + OFL with enhanced features)"
+    elif [ "$RUN_OFL_VERSION" -eq 1 ]; then
+        write_to_policy_dir "$dir" "Policy Version: OFL (with enhanced features)"
+    elif [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
+        write_to_policy_dir "$dir" "Policy Version: Standard"
+    fi
+
+    write_to_policy_dir "$dir" "OPTIMIZATION 1: EAGLE-3 layer features instead of SBERT embeddings"
+    write_to_policy_dir "$dir" "OPTIMIZATION 2: Action caching - generate action every 10 steps"
+    if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
+        write_to_policy_dir "$dir" "OPTIMIZATION 3: Context-only state representation (SBERT 384D directly)"
+    fi
+    write_to_policy_dir "$dir" "Expected speedup: ~50% reduction in RL policy computation"
+    write_to_policy_dir "$dir" ""
+done
 
 # PHASE 1: STANDARD TRAINING (if enabled)
 if [ "$RUN_STANDARD" -eq 1 ]; then
@@ -152,16 +160,16 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
     if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
         # Phase 2a: Max-Entropy PPO (Standard) - if enabled
         if [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "" | tee -a log/$DATE/comparison.txt
-            echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY PPO (Standard) - Standard Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- High entropy coefficient 0.1 for exploration" | tee -a log/$DATE/comparison.txt
-            echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
-            echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-            echo "- Standard version" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" ""
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY PPO (Standard) - Standard Version ==="
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" "- EAGLE-3 layer features for state representation"
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" "- Action caching every 30 steps"
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" "- High entropy coefficient 0.1 for exploration"
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" "- Temperature-based inference T=1.5"
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" "- Full feature state representation (EAGLE-3 + context)"
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" "- Standard version"
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" "- Training dataset: questions 0-$QUESTION_END for faster training"
+            write_to_policy_dir "optimized_max_entropy_ppo_standard" ""
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -801,7 +809,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --use-stepwise-rl \
                 --use-eagle3 2>&1 | tee log/$DATE/$policy_dir/evaluation/${benchmark}_evaluation.log
         else
-            echo "Results already exist for $policy_label on $benchmark_name" | tee -a log/$DATE/comparison.txt
+            write_to_policy_dir "$policy_dir" "Results already exist for $policy_label on $benchmark_name"
         fi
     done
 done
@@ -812,120 +820,128 @@ echo "=== Phase 4: Performance Analysis Across All Benchmarks ===" | tee -a log/
 echo "Generating baseline results for comprehensive comparison..." | tee -a log/$DATE/comparison.txt
 echo "" | tee -a log/$DATE/comparison.txt
 
-# Create consolidated results summary
-echo "Performance Summary Report" >> log/$DATE/summary.txt
-echo "=========================" >> log/$DATE/summary.txt
-echo "Training Date: $DATE" >> log/$DATE/summary.txt
-echo "Model: $MODEL_PATH" >> log/$DATE/summary.txt
-echo "Base Model: $BASE_MODEL_PATH" >> log/$DATE/summary.txt
-echo "" >> log/$DATE/summary.txt
-
-# Generate baseline results for all benchmarks (LLaMA 3.1 8B)
-echo "=== Generating LLaMA 3.1 8B Baseline Results ===" | tee -a log/$DATE/comparison.txt
-
-for benchmark in "${BENCHMARKS[@]}"; do
-    echo "Generating baseline for $benchmark..." | tee -a log/$DATE/comparison.txt
-    
-    # Generate EAGLE3 baseline
-    if [ ! -f "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" ]; then
-        python -m eagle.evaluation.gen_ea_answer_llama3chat \
-            --ea-model-path "$MODEL_PATH" \
-            --base-model-path "$BASE_MODEL_PATH" \
-            --bench-name "$benchmark" \
-            --answer-file "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" \
-            --temperature 0.0 \
-            --use_eagle3 \
-            2>&1 | tee -a log/$DATE/baseline_results/baseline_${benchmark}_eagle3.log
-    else
-        echo "EAGLE3 baseline for $benchmark already exists" | tee -a log/$DATE/comparison.txt
-    fi
-    
-    # Generate standard baseline
-    if [ ! -f "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" ]; then
-        python -m eagle.evaluation.gen_baseline_answer_llama3chat \
-            --ea-model-path "$MODEL_PATH" \
-            --base-model-path "$BASE_MODEL_PATH" \
-            --bench-name "$benchmark" \
-            --answer-file "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" \
-            --temperature 0.0 \
-            2>&1 | tee -a log/$DATE/baseline_results/baseline_${benchmark}_standard.log
-    else
-        echo "Standard baseline for $benchmark already exists" | tee -a log/$DATE/comparison.txt
-    fi
+# Create consolidated results summary for each policy directory
+for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+    echo "Performance Summary Report" >> log/$DATE/$dir/summary.txt
+    echo "=========================" >> log/$DATE/$dir/summary.txt
+    echo "Training Date: $DATE" >> log/$DATE/$dir/summary.txt
+    echo "Model: $MODEL_PATH" >> log/$DATE/$dir/summary.txt
+    echo "Base Model: $BASE_MODEL_PATH" >> log/$DATE/$dir/summary.txt
+    echo "" >> log/$DATE/$dir/summary.txt
 done
 
-# Analyze results for each benchmark with comprehensive comparisons
-echo "" | tee -a log/$DATE/comparison.txt
-echo "=== Comprehensive Performance Analysis ===" | tee -a log/$DATE/comparison.txt
+# Generate baseline results for all benchmarks (LLaMA 3.1 8B) - per policy directory
+for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+    write_to_policy_dir "$dir" "=== Generating LLaMA 3.1 8B Baseline Results ==="
 
-for i in "${!BENCHMARKS[@]}"; do
-    benchmark="${BENCHMARKS[$i]}"
-    benchmark_name="${BENCHMARK_NAMES[$i]}"
-    
-    echo "=== $benchmark_name - $benchmark Performance Analysis ===" | tee -a log/$DATE/comparison.txt
-    echo "Benchmark: $benchmark_name - $benchmark" >> log/$DATE/summary.txt
-    echo "===========================================" >> log/$DATE/summary.txt
-    
-    # Define baseline files
-    eagle3_file="log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl"
-    baseline_file="log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl"
-    
-    # Create list of result files for this benchmark
-    RESULT_FILES=()
-    RESULT_LABELS=()
-    
-    for j in "${!POLICIES_TO_EVALUATE[@]}"; do
-        policy_dir="${POLICIES_TO_EVALUATE[$j]}"
-        policy_label="${POLICY_LABELS[$j]}"
-        result_file="log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
+    for benchmark in "${BENCHMARKS[@]}"; do
+        write_to_policy_dir "$dir" "Generating baseline for $benchmark..."
         
-        if [ -f "$result_file" ]; then
-            RESULT_FILES+=("$result_file")
-            RESULT_LABELS+=("$policy_label")
+        # Generate EAGLE3 baseline
+        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" ]; then
+            python -m eagle.evaluation.gen_ea_answer_llama3chat \
+                --ea-model-path "$MODEL_PATH" \
+                --base-model-path "$BASE_MODEL_PATH" \
+                --bench-name "$benchmark" \
+                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" \
+                --temperature 0.0 \
+                --use_eagle3 \
+                2>&1 | tee -a log/$DATE/$dir/baseline_results/baseline_${benchmark}_eagle3.log
+        else
+            write_to_policy_dir "$dir" "EAGLE3 baseline for $benchmark already exists"
         fi
     done
     
-    if [ ${#RESULT_FILES[@]} -gt 0 ] && [ -f "$eagle3_file" ] && [ -f "$baseline_file" ]; then
-        echo "✅ Found ${#RESULT_FILES[@]} policy results and baseline files for $benchmark_name" | tee -a log/$DATE/comparison.txt
+    for benchmark in "${BENCHMARKS[@]}"; do
+        write_to_policy_dir "$dir" "Generating standard baseline for $benchmark..."
+        
+        # Generate standard baseline
+        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" ]; then
+            python -m eagle.evaluation.gen_baseline_answer_llama3chat \
+                --ea-model-path "$MODEL_PATH" \
+                --base-model-path "$BASE_MODEL_PATH" \
+                --bench-name "$benchmark" \
+                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" \
+                --temperature 0.0 \
+                2>&1 | tee -a log/$DATE/$dir/baseline_results/baseline_${benchmark}_standard.log
+        else
+            write_to_policy_dir "$dir" "Standard baseline for $benchmark already exists"
+        fi
+    done
+done
+
+# Analyze results for each benchmark with comprehensive comparisons - per policy directory
+for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+    write_to_policy_dir "$dir" ""
+    write_to_policy_dir "$dir" "=== Comprehensive Performance Analysis ==="
+
+    for i in "${!BENCHMARKS[@]}"; do
+        benchmark="${BENCHMARKS[$i]}"
+        benchmark_name="${BENCHMARK_NAMES[$i]}"
+        
+        write_to_policy_dir "$dir" "=== $benchmark_name - $benchmark Performance Analysis ==="
+        echo "Benchmark: $benchmark_name - $benchmark" >> log/$DATE/$dir/summary.txt
+        echo "===========================================" >> log/$DATE/$dir/summary.txt
+        
+        # Define baseline files for this policy directory
+        eagle3_file="log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl"
+        baseline_file="log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl"
+    
+        # Create list of result files for this benchmark
+        RESULT_FILES=()
+        RESULT_LABELS=()
+        
+        # For each policy directory, check if it has results for this benchmark
+        for policy_dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+            result_file="log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
+            
+            if [ -f "$result_file" ]; then
+                RESULT_FILES+=("$result_file")
+                RESULT_LABELS+=("$policy_dir")
+            fi
+        done
+        
+        if [ ${#RESULT_FILES[@]} -gt 0 ] && [ -f "$eagle3_file" ] && [ -f "$baseline_file" ]; then
+            write_to_policy_dir "$dir" "✅ Found ${#RESULT_FILES[@]} policy results and baseline files for $benchmark_name"
         
         # Speed comparison using existing speed.py tool
         if [ -f "eagle/evaluation/speed.py" ]; then
-            echo "" >> log/$DATE/summary.txt
+            echo "" >> log/$DATE/$dir/summary.txt
             
             # Compare each policy against baselines
             for k in "${!RESULT_FILES[@]}"; do
                 policy_file="${RESULT_FILES[$k]}"
                 policy_label="${RESULT_LABELS[$k]}"
                 
-                echo "$((k*2+1)). $policy_label vs EAGLE3 Baseline:" >> log/$DATE/summary.txt
+                echo "$((k*2+1)). $policy_label vs EAGLE3 Baseline:" >> log/$DATE/$dir/summary.txt
                 python eagle/evaluation/speed.py \
                     --ea-file "$policy_file" \
                     --baseline-file "$eagle3_file" \
                     --tokenizer-path "$BASE_MODEL_PATH" \
-                    2>&1 | tee -a log/$DATE/summary.txt
+                    2>&1 | tee -a log/$DATE/$dir/summary.txt
                 
-                echo "" >> log/$DATE/summary.txt
-                echo "$((k*2+2)). $policy_label vs Standard LLaMA Baseline:" >> log/$DATE/summary.txt
+                echo "" >> log/$DATE/$dir/summary.txt
+                echo "$((k*2+2)). $policy_label vs Standard LLaMA Baseline:" >> log/$DATE/$dir/summary.txt
                 python eagle/evaluation/speed.py \
                     --ea-file "$policy_file" \
                     --baseline-file "$baseline_file" \
                     --tokenizer-path "$BASE_MODEL_PATH" \
-                    2>&1 | tee -a log/$DATE/summary.txt
-                echo "" >> log/$DATE/summary.txt
+                    2>&1 | tee -a log/$DATE/$dir/summary.txt
+                echo "" >> log/$DATE/$dir/summary.txt
             done
             
             # Compare baselines against each other
-            echo "EAGLE3 Baseline vs Standard LLaMA Baseline:" >> log/$DATE/summary.txt
+            echo "EAGLE3 Baseline vs Standard LLaMA Baseline:" >> log/$DATE/$dir/summary.txt
             python eagle/evaluation/speed.py \
                 --ea-file "$eagle3_file" \
                 --baseline-file "$baseline_file" \
                 --tokenizer-path "$BASE_MODEL_PATH" \
-                2>&1 | tee -a log/$DATE/summary.txt
+                2>&1 | tee -a log/$DATE/$dir/summary.txt
             
             # Compare policies against each other if we have multiple
             if [ ${#RESULT_FILES[@]} -gt 1 ]; then
-                echo "" >> log/$DATE/summary.txt
-                echo "Policy Comparisons:" >> log/$DATE/summary.txt
+                echo "" >> log/$DATE/$dir/summary.txt
+                echo "Policy Comparisons:" >> log/$DATE/$dir/summary.txt
                 for k in "${!RESULT_FILES[@]}"; do
                     for l in "${!RESULT_FILES[@]}"; do
                         if [ $k -lt $l ]; then
@@ -934,48 +950,50 @@ for i in "${!BENCHMARKS[@]}"; do
                             policy2_file="${RESULT_FILES[$l]}"
                             policy2_label="${RESULT_LABELS[$l]}"
                             
-                            echo "$policy1_label vs $policy2_label:" >> log/$DATE/summary.txt
+                            echo "$policy1_label vs $policy2_label:" >> log/$DATE/$dir/summary.txt
                             python eagle/evaluation/speed.py \
                                 --ea-file "$policy1_file" \
                                 --baseline-file "$policy2_file" \
                                 --tokenizer-path "$BASE_MODEL_PATH" \
-                                2>&1 | tee -a log/$DATE/summary.txt
-                            echo "" >> log/$DATE/summary.txt
+                                2>&1 | tee -a log/$DATE/$dir/summary.txt
+                            echo "" >> log/$DATE/$dir/summary.txt
                         fi
                     done
                 done
             fi
                 
         else
-            echo "Speed analysis tool not found" >> log/$DATE/summary.txt
+            echo "Speed analysis tool not found" >> log/$DATE/$dir/summary.txt
         fi
         
         # Basic statistics
-        echo "" >> log/$DATE/summary.txt
-        echo "Result File Statistics:" >> log/$DATE/summary.txt
+        echo "" >> log/$DATE/$dir/summary.txt
+        echo "Result File Statistics:" >> log/$DATE/$dir/summary.txt
         for k in "${!RESULT_FILES[@]}"; do
             policy_file="${RESULT_FILES[$k]}"
             policy_label="${RESULT_LABELS[$k]}"
-            echo "$policy_label: $(wc -l < "$policy_file") samples" >> log/$DATE/summary.txt
+            echo "$policy_label: $(wc -l < "$policy_file") samples" >> log/$DATE/$dir/summary.txt
         done
-        echo "EAGLE3 Baseline: $(wc -l < "$eagle3_file") samples" >> log/$DATE/summary.txt
-        echo "Standard Baseline: $(wc -l < "$baseline_file") samples" >> log/$DATE/summary.txt
+        echo "EAGLE3 Baseline: $(wc -l < "$eagle3_file") samples" >> log/$DATE/$dir/summary.txt
+        echo "Standard Baseline: $(wc -l < "$baseline_file") samples" >> log/$DATE/$dir/summary.txt
         
     else
-        echo "❌ Missing result files for $benchmark_name" | tee -a log/$DATE/comparison.txt
-        echo "Required files:" | tee -a log/$DATE/comparison.txt
+        write_to_policy_dir "$dir" "❌ Missing result files for $benchmark_name"
+        write_to_policy_dir "$dir" "Required files:"
         for k in "${!RESULT_FILES[@]}"; do
             policy_file="${RESULT_FILES[$k]}"
             policy_label="${RESULT_LABELS[$k]}"
-            echo "  $policy_label: $policy_file $([ -f "$policy_file" ] && echo "✅" || echo "❌")" | tee -a log/$DATE/comparison.txt
+            write_to_policy_dir "$dir" "  $policy_label: $policy_file $([ -f "$policy_file" ] && echo "✅" || echo "❌")"
         done
-        echo "  EAGLE3 Baseline: $eagle3_file $([ -f "$eagle3_file" ] && echo "✅" || echo "❌")" | tee -a log/$DATE/comparison.txt
-        echo "  Standard Baseline: $baseline_file $([ -f "$baseline_file" ] && echo "✅" || echo "❌")" | tee -a log/$DATE/comparison.txt
-        echo "Missing result files - check evaluation and baseline generation logs" >> log/$DATE/summary.txt
+        write_to_policy_dir "$dir" "  EAGLE3 Baseline: $eagle3_file $([ -f "$eagle3_file" ] && echo "✅" || echo "❌")"
+        write_to_policy_dir "$dir" "  Standard Baseline: $baseline_file $([ -f "$baseline_file" ] && echo "✅" || echo "❌")"
+        echo "Missing result files - check evaluation and baseline generation logs" >> log/$DATE/$dir/summary.txt
     fi
     
-    echo "" >> log/$DATE/summary.txt
-    echo "" | tee -a log/$DATE/comparison.txt
+    echo "" >> log/$DATE/$dir/summary.txt
+    write_to_policy_dir "$dir" ""
+    done
+done
 done
 
 # Count policies trained and evaluated for summary
@@ -1024,37 +1042,42 @@ elif [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
     EXECUTION_MODE="$EXECUTION_MODE + Standard Version"
 fi
 
-echo "" | tee -a log/$DATE/comparison.txt
-echo "=== Summary ===" | tee -a log/$DATE/comparison.txt
-echo "Training completed with optimized PPO policies!" | tee -a log/$DATE/comparison.txt
-echo "Execution Mode: $EXECUTION_MODE" | tee -a log/$DATE/comparison.txt
-echo "Policies trained: $TRAINED_POLICIES" | tee -a log/$DATE/comparison.txt
-echo "Results saved in: log/$DATE/" | tee -a log/$DATE/comparison.txt
-echo "Key optimizations implemented:" | tee -a log/$DATE/comparison.txt
-echo "1. EAGLE-3 layer features with optional context-only mode" | tee -a log/$DATE/comparison.txt
-echo "2. Action caching every 30 steps (~50% computation reduction)" | tee -a log/$DATE/comparison.txt
-echo "3. Flexible execution modes for targeted experiments" | tee -a log/$DATE/comparison.txt
-echo "4. Enhanced PPO with temperature-based action sampling" | tee -a log/$DATE/comparison.txt
-if [ "$RUN_OFL_VERSION" -eq 1 ]; then
-    echo "5. OFL version with enhanced features (set_max_timesteps, set_training_mode, enhanced PPO updates)" | tee -a log/$DATE/comparison.txt
-fi
-echo "" | tee -a log/$DATE/comparison.txt
-
-# Create performance summary
-echo "Performance Summary Report" >> log/$DATE/summary.txt
-echo "=========================" >> log/$DATE/summary.txt
-echo "Date: $DATE" >> log/$DATE/summary.txt
-echo "Execution Mode: $EXECUTION_MODE" >> log/$DATE/summary.txt
-echo "Policies Trained: $TRAINED_POLICIES" >> log/$DATE/summary.txt
-echo "Model: $MODEL_PATH" >> log/$DATE/summary.txt
-echo "Algorithm: Optimized PPO" >> log/$DATE/summary.txt
-echo "Optimizations: EAGLE-3 features + Action caching + Flexible execution" >> log/$DATE/summary.txt
-echo "Training questions: $QUESTION_END" >> log/$DATE/summary.txt
-echo "Benchmarks evaluated: ${BENCHMARKS[*]}" >> log/$DATE/summary.txt
-echo "Policies evaluated: ${#POLICIES_TO_EVALUATE[@]}" >> log/$DATE/summary.txt
-for j in "${!POLICY_LABELS[@]}"; do
-    echo "  - ${POLICY_LABELS[$j]}" >> log/$DATE/summary.txt
+# Write summary to each policy directory
+for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+    write_to_policy_dir "$dir" ""
+    write_to_policy_dir "$dir" "=== Summary ==="
+    write_to_policy_dir "$dir" "Training completed with optimized PPO policies!"
+    write_to_policy_dir "$dir" "Execution Mode: $EXECUTION_MODE"
+    write_to_policy_dir "$dir" "Policies trained: $TRAINED_POLICIES"
+    write_to_policy_dir "$dir" "Results saved in: log/$DATE/$dir/"
+    write_to_policy_dir "$dir" "Key optimizations implemented:"
+    write_to_policy_dir "$dir" "1. EAGLE-3 layer features with optional context-only mode"
+    write_to_policy_dir "$dir" "2. Action caching every 30 steps (~50% computation reduction)"
+    write_to_policy_dir "$dir" "3. Flexible execution modes for targeted experiments"
+    write_to_policy_dir "$dir" "4. Enhanced PPO with temperature-based action sampling"
+    if [ "$RUN_OFL_VERSION" -eq 1 ]; then
+        write_to_policy_dir "$dir" "5. OFL version with enhanced features (set_max_timesteps, set_training_mode, enhanced PPO updates)"
+    fi
+    write_to_policy_dir "$dir" ""
 done
-echo "" >> log/$DATE/summary.txt
 
-echo "Check log/$DATE/summary.txt for detailed results." | tee -a log/$DATE/comparison.txt
+# Create performance summary for each policy directory
+for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+    echo "Performance Summary Report" >> log/$DATE/$dir/summary.txt
+    echo "=========================" >> log/$DATE/$dir/summary.txt
+    echo "Date: $DATE" >> log/$DATE/$dir/summary.txt
+    echo "Execution Mode: $EXECUTION_MODE" >> log/$DATE/$dir/summary.txt
+    echo "Policies Trained: $TRAINED_POLICIES" >> log/$DATE/$dir/summary.txt
+    echo "Model: $MODEL_PATH" >> log/$DATE/$dir/summary.txt
+    echo "Algorithm: Optimized PPO" >> log/$DATE/$dir/summary.txt
+    echo "Optimizations: EAGLE-3 features + Action caching + Flexible execution" >> log/$DATE/$dir/summary.txt
+    echo "Training questions: $QUESTION_END" >> log/$DATE/$dir/summary.txt
+    echo "Benchmarks evaluated: ${BENCHMARKS[*]}" >> log/$DATE/$dir/summary.txt
+    echo "Policies evaluated: ${#DIRECTORIES_TO_CREATE[@]}" >> log/$DATE/$dir/summary.txt
+    for policy_dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+        echo "  - $policy_dir" >> log/$DATE/$dir/summary.txt
+    done
+    echo "" >> log/$DATE/$dir/summary.txt
+
+    write_to_policy_dir "$dir" "Check log/$DATE/$dir/summary.txt for detailed results."
+done
