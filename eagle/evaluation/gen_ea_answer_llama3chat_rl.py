@@ -44,6 +44,7 @@ try:
     from .sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
     # OPTIMIZED POLICIES
     from .optimized_sb3_discrete_ppo_online_rl_policy import OptimizedSB3DiscretePPOOnlineTreePolicy, calculate_optimized_sb3_discrete_ppo_reward
+    from .optimized_sb3_discrete_ppo_online_rl_policy_ofl import OptimizedSB3DiscretePPOOnlineTreePolicy as OptimizedSB3DiscretePPOOnlineTreePolicyOFL
     from .optimized_online_rl_policy import OptimizedOnlineTreePolicy, calculate_optimized_online_reward
 except:
     from eagle.model.ea_model import EaModel
@@ -57,6 +58,7 @@ except:
     from eagle.evaluation.sb3_discrete_ppo_online_rl_policy import SB3DiscretePPOOnlineTreePolicy, calculate_sb3_discrete_ppo_reward
     # OPTIMIZED POLICIES
     from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy import OptimizedSB3DiscretePPOOnlineTreePolicy, calculate_optimized_sb3_discrete_ppo_reward
+    from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy_ofl import OptimizedSB3DiscretePPOOnlineTreePolicy as OptimizedSB3DiscretePPOOnlineTreePolicyOFL
     from eagle.evaluation.optimized_online_rl_policy import OptimizedOnlineTreePolicy, calculate_optimized_online_reward
 
 
@@ -203,11 +205,21 @@ def get_model_answers(
             max_entropy_inference_enabled = getattr(args, 'max_entropy_inference', True) and enable_max_entropy
             action_cache_steps = getattr(args, 'action_cache_steps', 10)
             hidden_size = getattr(args, 'hidden_size', 4096)
+            policy_version = getattr(args, 'optimized_policy_version', 'standard')
             
             mode_description = "OPTIMIZED SB3 Max-Entropy Discrete PPO" if enable_max_entropy else "OPTIMIZED SB3 Standard Discrete PPO"
-            print(f"🚀⚡ Using {mode_description} with EAGLE-3 features + action caching (every {action_cache_steps} steps)")
+            version_description = f" ({policy_version.upper()} version)" if policy_version != "standard" else ""
+            print(f"🚀⚡ Using {mode_description}{version_description} with EAGLE-3 features + action caching (every {action_cache_steps} steps)")
             
-            online_policy = OptimizedSB3DiscretePPOOnlineTreePolicy(
+            # Choose policy implementation based on version
+            if policy_version == "ofl":
+                PolicyClass = OptimizedSB3DiscretePPOOnlineTreePolicyOFL
+                print(f"📋 Using OFL version with enhanced features (set_max_timesteps, set_training_mode, enhanced PPO updates)")
+            else:
+                PolicyClass = OptimizedSB3DiscretePPOOnlineTreePolicy
+                print(f"📋 Using standard version")
+            
+            online_policy = PolicyClass(
                 learning_rate=args.online_lr,
                 n_steps=getattr(args, 'ppo_n_steps', 64),
                 batch_size=getattr(args, 'ppo_batch_size', 32),
@@ -516,7 +528,9 @@ def get_model_answers(
                 predicted_depth = args.depth
                 predicted_top_k = args.top_k
                 # print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
-            
+            # Clear GPU memory before retry
+            # if torch.cuda.is_available():
+                # torch.cuda.empty_cache()         
             torch.cuda.synchronize()
             start_time = time.time()
 
@@ -560,9 +574,9 @@ def get_model_answers(
                     print(f"   Falling back to ultra-conservative warmup parameters...")
                     
                     # Use ultra-safe parameters for warmup that definitely won't overflow
-                    safe_total_tokens = 16
-                    safe_depth = 3
-                    safe_top_k = 4
+                    safe_total_tokens = 60
+                    safe_depth = 5
+                    safe_top_k = 10
                 
                     try:
                         with torch.no_grad():
@@ -752,6 +766,9 @@ def get_model_answers(
                     predicted_top_k = args.top_k
                     # print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
 
+                # Clear GPU memory before retry
+                # if torch.cuda.is_available():
+                    # torch.cuda.empty_cache()
                 torch.cuda.synchronize()
                 start_time = time.time()
 
@@ -850,16 +867,13 @@ def get_model_answers(
                             
                             if retry_count < max_retries:
                                 print(f"   Trying more conservative parameters...")
-                                # Clear GPU memory before retry
-                                if torch.cuda.is_available():
-                                    torch.cuda.empty_cache()
                                 # Make parameters increasingly conservative with each retry
                                 if "KV cache buffer overflow" in str(e) or "CUDA out of memory" in str(e) or "out of memory" in str(e):
                                     # For memory-related errors, be very aggressive with reduction
                                     if retry_count == 1:
-                                        predicted_total_tokens = min(16, predicted_total_tokens // 4)
-                                        predicted_depth = max(2, predicted_depth // 2)
-                                        predicted_top_k = max(2, predicted_top_k // 2)
+                                        predicted_total_tokens = 60
+                                        predicted_depth = 5
+                                        predicted_top_k = 10
                                     elif retry_count == 2:
                                         predicted_total_tokens = 8
                                         predicted_depth = 2
@@ -868,9 +882,9 @@ def get_model_answers(
                                     # For other errors, use moderate reduction
                                     if retry_count == 1:
                                         # First retry: moderate reduction
-                                        predicted_total_tokens = min(32, predicted_total_tokens // 2)
-                                        predicted_depth = max(3, min(predicted_depth, 4))  
-                                        predicted_top_k = max(4, min(predicted_top_k, 8))
+                                        predicted_total_tokens = 60
+                                        predicted_depth = 5
+                                        predicted_top_k = 10
                                     elif retry_count == 2:
                                         # Second retry: very conservative
                                         predicted_total_tokens = 16
@@ -1448,6 +1462,13 @@ if __name__ == "__main__":
         "--use-optimized-sb3-discrete-ppo",
         action="store_true",
         help="Use optimized SB3 Discrete PPO with EAGLE-3 features and action caching"
+    )
+    parser.add_argument(
+        "--optimized-policy-version",
+        type=str,
+        choices=["standard", "ofl"],
+        default="standard",
+        help="Choose between standard optimized policy or OFL (Offline) version with enhanced features"
     )
     parser.add_argument(
         "--use-optimized-dqn",

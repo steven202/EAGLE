@@ -197,7 +197,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=4096,  # Increased from 2048 to accommodate larger sequences
+            max_length=2048,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
             total_tokens=None,
@@ -309,7 +309,17 @@ class EaModel(nn.Module):
             if step_total_tokens:
                 # Ensure total_tokens doesn't exceed available buffer space
                 max_available_tokens = max_length - input_ids.shape[1] - 10  # Leave some buffer
-                step_total_tokens = min(step_total_tokens, max_available_tokens)
+                
+                # Ensure max_available_tokens is at least 1
+                if max_available_tokens < 1:
+                    max_available_tokens = 1
+                
+                if step_total_tokens > max_available_tokens:
+                    step_total_tokens = max_available_tokens
+                
+                # Ensure total_tokens is at least 1 to prevent negative values
+                if step_total_tokens < 1:
+                    step_total_tokens = 1
             
             # Store step info for training
             if True: # training_mode:
@@ -331,15 +341,35 @@ class EaModel(nn.Module):
         # prefill - model inference, disable gradients for efficiency
         with torch.no_grad():
             # Final safety check before calling initialize_tree
-            if step_total_tokens and step_total_tokens > max_length - input_ids.shape[1] - 10:
-                print(f"Warning: RL predicted total_tokens ({step_total_tokens}) too large, clamping to {max_length - input_ids.shape[1] - 10}")
-                step_total_tokens = max_length - input_ids.shape[1] - 10
+            if step_total_tokens:
+                max_available_tokens = max_length - input_ids.shape[1] - 10  # Leave some buffer
+                
+                # Ensure max_available_tokens is at least 1
+                if max_available_tokens < 1:
+                    print(f"Warning: max_available_tokens ({max_available_tokens}) too small, setting to minimum value 1")
+                    max_available_tokens = 1
+                
+                if step_total_tokens > max_available_tokens:
+                    print(f"Warning: RL predicted total_tokens ({step_total_tokens}) too large, clamping to {max_available_tokens}")
+                    step_total_tokens = max_available_tokens
+                
+                # Ensure total_tokens is at least 1 to prevent negative values
+                if step_total_tokens < 1:
+                    print(f"Warning: Clamped total_tokens ({step_total_tokens}) too small, setting to minimum value 1")
+                    step_total_tokens = 1
             
             draft_tokens, retrieve_indices, tree_mask, tree_position_ids, logits, hidden_state, sample_token = initialize_tree(
                 input_ids, self, past_key_values, logits_processor, step_total_tokens, step_depth, step_top_k
             )
         new_token = 0
         max_length = max_length - self.ea_layer.total_tokens - 10
+        
+        # Ensure max_length doesn't become too small
+        min_safe_length = input_ids.shape[1] + 20  # At least 20 tokens buffer
+        if max_length < min_safe_length:
+            print(f"Warning: max_length ({max_length}) too small, adjusting to minimum safe length ({min_safe_length})")
+            max_length = min_safe_length
+        
         for idx in range(max_length):
             # For step-wise RL: predict parameters at each step (except first which was done above)
             step_start_time = time.time()
@@ -409,9 +439,21 @@ class EaModel(nn.Module):
                 if step_total_tokens:
                     # Ensure total_tokens doesn't exceed available buffer space
                     max_available_tokens = max_length - input_ids.shape[1] - 10  # Leave some buffer
+                    
+                    # Ensure max_available_tokens is at least 1
+                    if max_available_tokens < 1:
+                        print(f"Warning: Step {idx} max_available_tokens ({max_available_tokens}) too small, setting to minimum value 1")
+                        max_available_tokens = 1
+                    
                     if step_total_tokens > max_available_tokens:
                         print(f"Warning: Step {idx} RL predicted total_tokens ({step_total_tokens}) too large, clamping to {max_available_tokens}")
-                    step_total_tokens = min(step_total_tokens, max_available_tokens)
+                        step_total_tokens = max_available_tokens
+                    
+                    # Ensure total_tokens is at least 1 to prevent negative values
+                    if step_total_tokens < 1:
+                        print(f"Warning: Step {idx} clamped total_tokens ({step_total_tokens}) too small, setting to minimum value 1")
+                        step_total_tokens = 1
+                    
                     self.ea_layer.total_tokens = step_total_tokens - 1
                 if step_depth:
                     self.ea_layer.depth = step_depth
@@ -554,7 +596,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=4096,  # Increased from 2048 to accommodate larger sequences
+            max_length=2048,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
@@ -631,7 +673,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=4096,  # Increased from 2048 to accommodate larger sequences
+            max_length=2048,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
@@ -734,7 +776,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=4096,  # Increased from 2048 to accommodate larger sequences
+            max_length=2048,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
