@@ -94,11 +94,27 @@ echo "Number of scripts to generate: ${#COMBINATIONS[@]}"
 echo "Available GPUs: $NUM_GPUS"
 
 # Create output directory (based on input file name)
-# OUTPUT_DIR="${BASE_SCRIPT}_multi_gpu_$(date +%Y%m%d_%H%M%S)"
-# mkdir -p "$OUTPUT_DIR"
-OUTPUT_DIR="."
+OUTPUT_DIR="${BASE_SCRIPT}_multi_gpu_$(date +%Y%m%d_%H%M%S)"
+
+# Check if any existing generated scripts exist in current directory
+EXISTING_SCRIPTS=$(ls ${FILE_PREFIX}__gpu*_*.sh 2>/dev/null | wc -l)
+if [ $EXISTING_SCRIPTS -gt 0 ]; then
+    echo "Found $EXISTING_SCRIPTS existing generated scripts in current directory."
+    read -p "Do you want to delete existing scripts and regenerate? (y/n): " DELETE_EXISTING
+    if [[ "$DELETE_EXISTING" =~ ^[Yy]$ ]]; then
+        echo "Deleting existing generated scripts..."
+        rm -f ${FILE_PREFIX}__gpu*_*.sh
+        rm -f run_all_scripts.sh launch.sh script_summary.txt
+        echo "Existing scripts deleted."
+    else
+        echo "Exiting to avoid overwriting existing files."
+        exit 1
+    fi
+fi
+
+mkdir -p "$OUTPUT_DIR"
 echo ""
-# echo "Generating scripts in directory: $OUTPUT_DIR"
+echo "Generating scripts in directory: $OUTPUT_DIR"
 
 # Function to get combination parameters
 get_combination_params() {
