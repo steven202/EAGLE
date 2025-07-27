@@ -22,7 +22,7 @@ DATE="${DATE}_optimized_ppo"
 # DATE='20250726_0904_optimized_ppo'
 MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=4000
+QUESTION_END=10
 
 # EXECUTION MODE CONFIGURATION
 # Set these to "true" or "false" to control which modes to run
@@ -44,6 +44,8 @@ BENCHMARKS=("mt_bench" "humaneval" "gsm8k" "alpaca" "sum" "qa")
 BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natural Questions")
 BENCHMARKS=("gsm8k" "mt_bench")
 BENCHMARK_NAMES=("GSM8K" "MT-Bench")
+BENCHMARKS=("sum")
+BENCHMARK_NAMES=("CNN/DailyMail")
 # BENCHMARKS=("gsm8k")
 # BENCHMARKS=("gsm8k")
 
