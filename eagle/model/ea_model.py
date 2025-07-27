@@ -312,7 +312,7 @@ class EaModel(nn.Module):
                 step_total_tokens = min(step_total_tokens, max_available_tokens)
             
             # Store step info for training
-            if training_mode:
+            if True: # training_mode:
                 step_states.append(initial_state)
                 step_actions.append((step_total_tokens, step_depth, step_top_k))
                 
@@ -365,7 +365,7 @@ class EaModel(nn.Module):
                         )
                     
                     # Store step info for training
-                    if training_mode:
+                    if True: # training_mode:
                         step_states.append(current_state)
                         step_actions.append((step_total_tokens, step_depth, step_top_k))
                         
@@ -393,7 +393,7 @@ class EaModel(nn.Module):
                             )
                         
                         # Store step info for training
-                        if training_mode:
+                        if True: # training_mode:
                             step_states.append(current_state)
                             step_actions.append((step_total_tokens, step_depth, step_top_k))
                             
