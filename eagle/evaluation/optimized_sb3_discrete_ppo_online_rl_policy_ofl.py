@@ -417,6 +417,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Initialize SB3 PPO model
         self.model = PPO(
             "MlpPolicy", #CustomPolicy,
+            policy_kwargs={dict(net_arch=[{"pi": [128, 128], "vf": [128, 128]}])},
             self.env,
             learning_rate=learning_rate,
             n_steps=n_steps,
