@@ -970,7 +970,6 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
     echo "" 
     done
 done
-done
 
 # Count policies trained and evaluated for summary
 TRAINED_POLICIES=0
