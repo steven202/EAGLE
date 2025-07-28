@@ -632,52 +632,69 @@ def get_model_answers(
                         print(f"❌ Even ultra-conservative warmup failed: {e2}")
                         print("   Skipping warmup - proceeding with standard generation")
                         # We'll skip warmup if even ultra-conservative parameters fail
-                        pass
+                        # Set dummy values to avoid UnboundLocalError
+                        output_ids = torch.tensor([[tokenizer.eos_token_id]]).to(input_ids.device)
+                        new_token = torch.tensor(0)
+                        idx = torch.tensor(0)
+                        total_time = 0.0
                 else:
                     raise e  # Re-raise if it's a different error
-            torch.cuda.synchronize()
-            total_time = time.time() - start_time
-            output_ids = output_ids[0][len(input_ids[0]):]
-            # be consistent with the template's stop_token_ids
-            stop_token_ids = [
-                tokenizer.eos_token_id,
-                tokenizer.convert_tokens_to_ids("<|eot_id|>")
-            ]
-
-            if stop_token_ids:
-                stop_token_ids_index = [
-                    i
-                    for i, id in enumerate(output_ids)
-                    if id in stop_token_ids
+            
+            # Only process output_ids if warmup was successful
+            if 'output_ids' in locals() and output_ids is not None:
+                torch.cuda.synchronize()
+                total_time = time.time() - start_time
+                output_ids = output_ids[0][len(input_ids[0]):]
+                
+                # be consistent with the template's stop_token_ids
+                stop_token_ids = [
+                    tokenizer.eos_token_id,
+                    tokenizer.convert_tokens_to_ids("<|eot_id|>")
                 ]
-                if len(stop_token_ids_index) > 0:
-                    output_ids = output_ids[: stop_token_ids_index[0]]
 
-            output = tokenizer.decode(
-                output_ids,
-                spaces_between_special_tokens=False,
-            )
-            # stop_str = "</s>"
-            # if stop_str and output.find(stop_str) > 0:
-            #     output = output[: output.find(stop_str)]
-            for special_token in tokenizer.special_tokens_map.values():
-                if isinstance(special_token, list):
-                    for special_tok in special_token:
-                        output = output.replace(special_tok, "")
-                else:
-                    output = output.replace(special_token, "")
-            output = output.strip()
+                if stop_token_ids:
+                    stop_token_ids_index = [
+                        i
+                        for i, id in enumerate(output_ids)
+                        if id in stop_token_ids
+                    ]
+                    if len(stop_token_ids_index) > 0:
+                        output_ids = output_ids[: stop_token_ids_index[0]]
 
+                output = tokenizer.decode(
+                    output_ids,
+                    spaces_between_special_tokens=False,
+                )
+                # stop_str = "</s>"
+                # if stop_str and output.find(stop_str) > 0:
+                #     output = output[: output.find(stop_str)]
+                for special_token in tokenizer.special_tokens_map.values():
+                    if isinstance(special_token, list):
+                        for special_tok in special_token:
+                            output = output.replace(special_tok, "")
+                    else:
+                        output = output.replace(special_token, "")
+                output = output.strip()
 
-
-            turns.append(output)
-            idxs.append(int(idx))
-            new_tokens.append(int(new_token))
-            wall_time.append(total_time)
-            messages.append({
-                "role": "assistant",
-                "content": output
-            })
+                turns.append(output)
+                idxs.append(int(idx))
+                new_tokens.append(int(new_token))
+                wall_time.append(total_time)
+                messages.append({
+                    "role": "assistant",
+                    "content": output
+                })
+            else:
+                # Warmup failed completely, add empty response
+                print("   ⚠️  Warmup failed - adding empty response")
+                turns.append("")
+                idxs.append(0)
+                new_tokens.append(0)
+                wall_time.append(0.0)
+                messages.append({
+                    "role": "assistant",
+                    "content": ""
+                })
     print('Warmup done')
 
     # questions=questions[6:]
