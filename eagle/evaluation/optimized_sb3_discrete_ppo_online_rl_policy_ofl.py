@@ -418,6 +418,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         self.model = PPO(
             "MlpPolicy", #CustomPolicy,
             self.env,
+            policy_kwargs=dict(net_arch=[{"pi": [256, 256], "vf": [256, 256]}]),
             learning_rate=learning_rate,
             n_steps=n_steps,
             batch_size=batch_size,
@@ -1398,6 +1399,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             "action_cache_enabled": self.action_cache_enabled,
             "action_cache_steps": self.action_cache_steps,
             "use_eagle3_features": self.use_eagle3_features,
+            "use_context_only_state": self.use_context_only_state,  # NEW: Save state configuration
+            "hidden_size": self.hidden_size,  # NEW: Save hidden size
+            "observation_space_shape": list(self.env.observation_space.shape),  # NEW: Save obs space
             # NEW: Reward aggregation state
             "cached_rewards": self.cached_rewards,
             "cached_generation_times": self.cached_generation_times,
@@ -1426,36 +1430,86 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             checkpoint_path = self._find_latest_checkpoint()
         
         if checkpoint_path and os.path.exists(checkpoint_path):
-            # Load SB3 model
+            # CRITICAL FIX: Check state file first for configuration info
+            state_path = checkpoint_path.replace('.zip', '_state.json')
+            saved_config = None
+            
+            if os.path.exists(state_path):
+                with open(state_path, 'r') as f:
+                    saved_config = json.load(f)
+                print(f"📋 Found checkpoint state file, checking configuration")
+            
+            # Load model without environment to inspect its configuration
+            temp_model_data = PPO.load(checkpoint_path, env=None, device=self.device)
+            
+            # Get observation space from the saved model
+            saved_obs_space = temp_model_data.observation_space
+            current_obs_space = self.env.observation_space
+            
+            # Check if observation spaces match
+            if saved_obs_space.shape != current_obs_space.shape:
+                print(f"⚠️  Observation space mismatch detected:")
+                print(f"   Saved checkpoint expects: {saved_obs_space.shape}")
+                print(f"   Current environment: {current_obs_space.shape}")
+                
+                # Determine the correct configuration
+                if saved_config and "use_context_only_state" in saved_config:
+                    # Use state file configuration (most reliable)
+                    use_context_only = saved_config["use_context_only_state"]
+                    hidden_size = saved_config.get("hidden_size", 4096)
+                    print(f"   📝 From state file: context_only={use_context_only}, hidden_size={hidden_size}")
+                else:
+                    # Fallback to observation space size detection
+                    if saved_obs_space.shape[0] == 384:
+                        use_context_only = True
+                        hidden_size = 384
+                        print(f"   📝 Detected from obs space: SBERT context-only state (384D)")
+                    elif saved_obs_space.shape[0] == 4096:
+                        use_context_only = False
+                        hidden_size = 4096
+                        print(f"   📝 Detected from obs space: EAGLE-3 layer features (4096D)")
+                    else:
+                        print(f"   ❌ Unknown observation space dimension: {saved_obs_space.shape[0]}")
+                        print(f"   🔄 Continuing with current environment configuration")
+                        use_context_only = self.use_context_only_state
+                        hidden_size = self.hidden_size
+                
+                # Reinitialize environment with correct configuration
+                if use_context_only != self.use_context_only_state or hidden_size != self.hidden_size:
+                    self.use_context_only_state = use_context_only
+                    self.hidden_size = hidden_size
+                    self.env = OptimizedEagleParameterEnv(
+                        hidden_size=hidden_size,
+                        use_context_only_state=use_context_only
+                    )
+                    print(f"   ✅ Reinitialized environment: context_only={use_context_only}, hidden_size={hidden_size}")
+            
+            # Now load the model with the correct environment
             self.model = PPO.load(checkpoint_path, env=self.env, device=self.device)
             
             # Load additional state
-            state_path = checkpoint_path.replace('.zip', '_state.json')
-            if os.path.exists(state_path):
-                with open(state_path, 'r') as f:
-                    state = json.load(f)
-                
-                self.questions_processed = state.get("questions_processed", 0)
-                self.training_seed = state.get("training_seed", None)
-                self.step_count = state.get("step_count", 0)
-                self.reward_history = deque(state.get("reward_history", []), maxlen=1000)
-                self.cache_step_counter = state.get("cache_step_counter", 0)
-                self.cached_params = tuple(state["cached_params"]) if state.get("cached_params") else None
+            if saved_config:
+                self.questions_processed = saved_config.get("questions_processed", 0)
+                self.training_seed = saved_config.get("training_seed", None)
+                self.step_count = saved_config.get("step_count", 0)
+                self.reward_history = deque(saved_config.get("reward_history", []), maxlen=1000)
+                self.cache_step_counter = saved_config.get("cache_step_counter", 0)
+                self.cached_params = tuple(saved_config["cached_params"]) if saved_config.get("cached_params") else None
                 # NEW: Restore reward aggregation state
-                self.cached_rewards = state.get("cached_rewards", [])
-                self.cached_generation_times = state.get("cached_generation_times", [])
+                self.cached_rewards = saved_config.get("cached_rewards", [])
+                self.cached_generation_times = saved_config.get("cached_generation_times", [])
                 # Restore cached_new_tokens (already deserialized as Python numbers)
-                self.cached_new_tokens = state.get("cached_new_tokens", [])
-                self.last_cache_update_step = state.get("last_cache_update_step", 0)
+                self.cached_new_tokens = saved_config.get("cached_new_tokens", [])
+                self.last_cache_update_step = saved_config.get("last_cache_update_step", 0)
                 
                 # Restore PPO learning state
-                self.episode_length = state.get("episode_length", 0)
+                self.episode_length = saved_config.get("episode_length", 0)
                 # Don't restore rollout buffer - start fresh
                 self.rollout_buffer = []
                 self.episode_rewards = []
                 self.current_obs = self.env.reset()
                 # NEW: Restore checkpoint tracking
-                self.last_checkpoint_step = state.get("last_checkpoint_step", -1)
+                self.last_checkpoint_step = saved_config.get("last_checkpoint_step", -1)
             
             print(f"✅ Loaded checkpoint: {checkpoint_path}")
             print(f"   Questions processed: {self.questions_processed}")
@@ -1584,7 +1638,9 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             "action_cache_enabled": self.action_cache_enabled,
             "action_cache_steps": self.action_cache_steps,
             "use_eagle3_features": self.use_eagle3_features,
+            "use_context_only_state": self.use_context_only_state,  # NEW: Save state configuration
             "hidden_size": self.hidden_size,
+            "observation_space_shape": list(self.env.observation_space.shape),  # NEW: Save obs space
             "last_checkpoint_step": self.last_checkpoint_step
         }
         
@@ -1596,17 +1652,68 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
     def load(self, path):
         """Load the entire policy"""
         if os.path.exists(path):
+            # CRITICAL FIX: Check metadata first for configuration info
+            metadata_path = path.replace('.zip', '_metadata.json')
+            saved_config = None
+            
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    saved_config = json.load(f)
+                print(f"📋 Found metadata file, using saved configuration")
+            
+            # Load model without environment to inspect its configuration
+            temp_model_data = PPO.load(path, env=None, device=self.device)
+            
+            # Get observation space from the saved model
+            saved_obs_space = temp_model_data.observation_space
+            current_obs_space = self.env.observation_space
+            
+            # Check if observation spaces match
+            if saved_obs_space.shape != current_obs_space.shape:
+                print(f"⚠️  Observation space mismatch detected:")
+                print(f"   Saved model expects: {saved_obs_space.shape}")
+                print(f"   Current environment: {current_obs_space.shape}")
+                
+                # Determine the correct configuration
+                if saved_config and "use_context_only_state" in saved_config:
+                    # Use metadata configuration (most reliable)
+                    use_context_only = saved_config["use_context_only_state"]
+                    hidden_size = saved_config.get("hidden_size", 4096)
+                    print(f"   📝 From metadata: context_only={use_context_only}, hidden_size={hidden_size}")
+                else:
+                    # Fallback to observation space size detection
+                    if saved_obs_space.shape[0] == 384:
+                        use_context_only = True
+                        hidden_size = 384
+                        print(f"   📝 Detected from obs space: SBERT context-only state (384D)")
+                    elif saved_obs_space.shape[0] == 4096:
+                        use_context_only = False
+                        hidden_size = 4096
+                        print(f"   📝 Detected from obs space: EAGLE-3 layer features (4096D)")
+                    else:
+                        print(f"   ❌ Unknown observation space dimension: {saved_obs_space.shape[0]}")
+                        print(f"   🔄 Continuing with current environment configuration")
+                        use_context_only = self.use_context_only_state
+                        hidden_size = self.hidden_size
+                
+                # Reinitialize environment with correct configuration
+                if use_context_only != self.use_context_only_state or hidden_size != self.hidden_size:
+                    self.use_context_only_state = use_context_only
+                    self.hidden_size = hidden_size
+                    self.env = OptimizedEagleParameterEnv(
+                        hidden_size=hidden_size,
+                        use_context_only_state=use_context_only
+                    )
+                    print(f"   ✅ Reinitialized environment: context_only={use_context_only}, hidden_size={hidden_size}")
+            
+            # Now load the model with the correct environment
             self.model = PPO.load(path, env=self.env, device=self.device)
             
             # Load metadata if available
-            metadata_path = path.replace('.zip', '_metadata.json')
-            if os.path.exists(metadata_path):
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                
-                self.questions_processed = metadata.get("questions_processed", 0)
-                self.step_count = metadata.get("step_count", 0)
-                self.last_checkpoint_step = metadata.get("last_checkpoint_step", -1)
+            if saved_config:
+                self.questions_processed = saved_config.get("questions_processed", 0)
+                self.step_count = saved_config.get("step_count", 0)
+                self.last_checkpoint_step = saved_config.get("last_checkpoint_step", -1)
             
             print(f"📂 Loaded optimized policy from: {path}")
             return True
