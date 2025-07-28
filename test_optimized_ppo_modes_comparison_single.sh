@@ -761,6 +761,12 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 POLICY_VERSION_ARG="ofl"
             fi
             
+            # Determine hidden-size based on context-only mode
+            HIDDEN_SIZE_ARG="--hidden-size 4096"
+            if [[ "$policy_dir" == *"_context" ]]; then
+                HIDDEN_SIZE_ARG="--hidden-size 384"
+            fi
+            
             python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
                 --base-model-path $BASE_MODEL_PATH \
@@ -785,7 +791,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --action-cache-steps 30 \
                 --action-cache-enabled \
                 --use-eagle3-features \
-                --hidden-size 4096 \
+                $HIDDEN_SIZE_ARG \
                 --total-token 60 \
                 --depth 7 \
                 --top-k 10 \
