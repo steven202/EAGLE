@@ -122,31 +122,9 @@ if [ ${#DIRECTORIES_TO_CREATE[@]} -gt 0 ]; then
     done
 fi
 
-# Create main log directory
-mkdir -p log/$DATE
+# Note: Each policy directory will have its own complete set of files
 
-# Create fresh comparison.txt file (overwrite, don't append)
-echo "=== OPTIMIZED EAGLE SB3 PPO Training & Multi-Benchmark Evaluation ===" > log/$DATE/comparison.txt
-echo "Model: $MODEL_PATH" >> log/$DATE/comparison.txt
-echo "Base Model: $BASE_MODEL_PATH" >> log/$DATE/comparison.txt
-echo "Training Dataset: eagle/data/rl_training/question.jsonl" >> log/$DATE/comparison.txt
-
-# Show which versions are being run
-if [ "$RUN_STANDARD_VERSION" -eq 1 ] && [ "$RUN_OFL_VERSION" -eq 1 ]; then
-    echo "Policy Versions: BOTH (Standard + OFL with enhanced features)" | tee -a log/$DATE/comparison.txt
-elif [ "$RUN_OFL_VERSION" -eq 1 ]; then
-    echo "Policy Version: OFL (with enhanced features)" | tee -a log/$DATE/comparison.txt
-elif [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
-    echo "Policy Version: Standard" | tee -a log/$DATE/comparison.txt
-fi
-
-echo "OPTIMIZATION 1: EAGLE-3 layer features instead of SBERT embeddings" | tee -a log/$DATE/comparison.txt
-echo "OPTIMIZATION 2: Action caching - generate action every 10 steps" | tee -a log/$DATE/comparison.txt
-if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
-    echo "OPTIMIZATION 3: Context-only state representation (SBERT 384D directly)" | tee -a log/$DATE/comparison.txt
-fi
-echo "Expected speedup: ~50% reduction in RL policy computation" | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
+# Note: Each policy will write to its own comparison.txt file
 
 # Create fresh summary.txt files for each policy directory (overwrite, don't append)
 for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
@@ -165,16 +143,16 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
     if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
         # Phase 2a: Max-Entropy PPO (Standard) - if enabled
         if [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "" | tee -a log/$DATE/comparison.txt
-            echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY PPO (Standard) - Standard Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- High entropy coefficient 0.1 for exploration" | tee -a log/$DATE/comparison.txt
-            echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
-            echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-            echo "- Standard version" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            echo "" 
+            echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY PPO (Standard) - Standard Version ===" 
+            echo "- EAGLE-3 layer features for state representation" 
+            echo "- Action caching every 30 steps" 
+            echo "- High entropy coefficient 0.1 for exploration" 
+            echo "- Temperature-based inference T=1.5" 
+            echo "- Full feature state representation (EAGLE-3 + context)" 
+            echo "- Standard version" 
+            echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
+            echo "" 
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -224,16 +202,16 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
 
         # Phase 2b: Standard PPO (Standard) - if enabled
         if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
-            echo "" | tee -a log/$DATE/comparison.txt
-            echo "=== Phase 2b: Training with OPTIMIZED STANDARD PPO (Standard) - Standard Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
-            echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
-            echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-            echo "- Standard version" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            echo "" 
+            echo "=== Phase 2b: Training with OPTIMIZED STANDARD PPO (Standard) - Standard Version ===" 
+            echo "- EAGLE-3 layer features for state representation" 
+            echo "- Action caching every 30 steps" 
+            echo "- Low entropy coefficient 0.01" 
+            echo "- Deterministic inference" 
+            echo "- Full feature state representation (EAGLE-3 + context)" 
+            echo "- Standard version" 
+            echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
+            echo "" 
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -283,16 +261,16 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
     if [ "$RUN_OFL_VERSION" -eq 1 ]; then
         # Phase 2a: Max-Entropy PPO (Standard) - if enabled
         if [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "" | tee -a log/$DATE/comparison.txt
-            echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY PPO (Standard) - OFL Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- High entropy coefficient 0.1 for exploration" | tee -a log/$DATE/comparison.txt
-            echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
-            echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-            echo "- OFL version with enhanced features" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            echo "" 
+            echo "=== Phase 2a: Training with OPTIMIZED MAX-ENTROPY PPO (Standard) - OFL Version ===" 
+            echo "- EAGLE-3 layer features for state representation" 
+            echo "- Action caching every 30 steps" 
+            echo "- High entropy coefficient 0.1 for exploration" 
+            echo "- Temperature-based inference T=1.5" 
+            echo "- Full feature state representation (EAGLE-3 + context)" 
+            echo "- OFL version with enhanced features" 
+            echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
+            echo "" 
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -342,16 +320,16 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
 
         # Phase 2b: Standard PPO (Standard) - if enabled
         if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
-            echo "" | tee -a log/$DATE/comparison.txt
-            echo "=== Phase 2b: Training with OPTIMIZED STANDARD PPO (Standard) - OFL Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
-            echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
-            echo "- Full feature state representation (EAGLE-3 + context)" | tee -a log/$DATE/comparison.txt
-            echo "- OFL version with enhanced features" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            echo "" 
+            echo "=== Phase 2b: Training with OPTIMIZED STANDARD PPO (Standard) - OFL Version ===" 
+            echo "- EAGLE-3 layer features for state representation" 
+            echo "- Action caching every 30 steps" 
+            echo "- Low entropy coefficient 0.01" 
+            echo "- Deterministic inference" 
+            echo "- Full feature state representation (EAGLE-3 + context)" 
+            echo "- OFL version with enhanced features" 
+            echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
+            echo "" 
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -404,15 +382,15 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
     if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
         # Phase 1a: Max-Entropy PPO (Context-Only) - if enabled
         if [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "=== Phase 1a: Training with OPTIMIZED MAX-ENTROPY PPO (Context-Only) - Standard Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- High entropy coefficient 0.1 for exploration" | tee -a log/$DATE/comparison.txt
-            echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
-            echo "- Context-only state representation (SBERT 384D directly)" | tee -a log/$DATE/comparison.txt
-            echo "- Standard version" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            echo "=== Phase 1a: Training with OPTIMIZED MAX-ENTROPY PPO (Context-Only) - Standard Version ===" 
+            echo "- EAGLE-3 layer features for state representation" 
+            echo "- Action caching every 30 steps" 
+            echo "- High entropy coefficient 0.1 for exploration" 
+            echo "- Temperature-based inference T=1.5" 
+            echo "- Context-only state representation (SBERT 384D directly)" 
+            echo "- Standard version" 
+            echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
+            echo "" 
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -463,16 +441,16 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
 
         # Phase 1b: Standard PPO (Context-Only) - if enabled  
         if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
-            echo "" | tee -a log/$DATE/comparison.txt
-            echo "=== Phase 1b: Training with OPTIMIZED STANDARD PPO (Context-Only) - Standard Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
-            echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
-            echo "- Context-only state representation (SBERT 384D directly)" | tee -a log/$DATE/comparison.txt
-            echo "- Standard version" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            echo "" 
+            echo "=== Phase 1b: Training with OPTIMIZED STANDARD PPO (Context-Only) - Standard Version ===" 
+            echo "- EAGLE-3 layer features for state representation" 
+            echo "- Action caching every 30 steps" 
+            echo "- Low entropy coefficient 0.01" 
+            echo "- Deterministic inference" 
+            echo "- Context-only state representation (SBERT 384D directly)" 
+            echo "- Standard version" 
+            echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
+            echo "" 
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -523,15 +501,15 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
     if [ "$RUN_OFL_VERSION" -eq 1 ]; then
         # Phase 1a: Max-Entropy PPO (Context-Only) - if enabled
         if [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "=== Phase 1a: Training with OPTIMIZED MAX-ENTROPY PPO (Context-Only) - OFL Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- High entropy coefficient 0.1 for exploration" | tee -a log/$DATE/comparison.txt
-            echo "- Temperature-based inference T=1.5" | tee -a log/$DATE/comparison.txt
-            echo "- Context-only state representation (SBERT 384D directly)" | tee -a log/$DATE/comparison.txt
-            echo "- OFL version with enhanced features" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            echo "=== Phase 1a: Training with OPTIMIZED MAX-ENTROPY PPO (Context-Only) - OFL Version ===" 
+            echo "- EAGLE-3 layer features for state representation" 
+            echo "- Action caching every 30 steps" 
+            echo "- High entropy coefficient 0.1 for exploration" 
+            echo "- Temperature-based inference T=1.5" 
+            echo "- Context-only state representation (SBERT 384D directly)" 
+            echo "- OFL version with enhanced features" 
+            echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
+            echo "" 
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -582,16 +560,16 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
 
         # Phase 1b: Standard PPO (Context-Only) - if enabled  
         if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
-            echo "" | tee -a log/$DATE/comparison.txt
-            echo "=== Phase 1b: Training with OPTIMIZED STANDARD PPO (Context-Only) - OFL Version ===" | tee -a log/$DATE/comparison.txt
-            echo "- EAGLE-3 layer features for state representation" | tee -a log/$DATE/comparison.txt
-            echo "- Action caching every 30 steps" | tee -a log/$DATE/comparison.txt
-            echo "- Low entropy coefficient 0.01" | tee -a log/$DATE/comparison.txt
-            echo "- Deterministic inference" | tee -a log/$DATE/comparison.txt
-            echo "- Context-only state representation (SBERT 384D directly)" | tee -a log/$DATE/comparison.txt
-            echo "- OFL version with enhanced features" | tee -a log/$DATE/comparison.txt
-            echo "- Training dataset: questions 0-$QUESTION_END for faster training" | tee -a log/$DATE/comparison.txt
-            echo "" | tee -a log/$DATE/comparison.txt
+            echo "" 
+            echo "=== Phase 1b: Training with OPTIMIZED STANDARD PPO (Context-Only) - OFL Version ===" 
+            echo "- EAGLE-3 layer features for state representation" 
+            echo "- Action caching every 30 steps" 
+            echo "- Low entropy coefficient 0.01" 
+            echo "- Deterministic inference" 
+            echo "- Context-only state representation (SBERT 384D directly)" 
+            echo "- OFL version with enhanced features" 
+            echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
+            echo "" 
 
             PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
                 --ea-model-path $MODEL_PATH \
@@ -639,8 +617,8 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
     fi
 fi
 
-echo "" | tee -a log/$DATE/comparison.txt
-echo "=== Phase 3: Multi-Benchmark Evaluation ===" | tee -a log/$DATE/comparison.txt
+echo "" 
+echo "=== Phase 3: Multi-Benchmark Evaluation ===" 
 
 # Count total number of models to evaluate
 TOTAL_MODELS=0
@@ -661,13 +639,13 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
     fi
 fi
 
-echo "Testing $TOTAL_MODELS optimized trained policies on ${#BENCHMARKS[@]} benchmarks:" | tee -a log/$DATE/comparison.txt
+echo "Testing $TOTAL_MODELS optimized trained policies on ${#BENCHMARKS[@]} benchmarks:" 
 for i in "${!BENCHMARKS[@]}"; do
     benchmark="${BENCHMARKS[$i]}"
     benchmark_name="${BENCHMARK_NAMES[$i]}"
-    echo "$((i+1)). $benchmark_name - $benchmark" | tee -a log/$DATE/comparison.txt
+    echo "$((i+1)). $benchmark_name - $benchmark" 
 done
-echo "" | tee -a log/$DATE/comparison.txt
+echo "" 
 
 # Check if trained policies exist and create evaluation plan
 POLICIES_TO_EVALUATE=()
@@ -680,14 +658,14 @@ if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
             POLICIES_TO_EVALUATE+=("optimized_max_entropy_ppo_context")
             POLICY_LABELS+=("Max-Entropy PPO (Context-Only) - Standard")
         elif [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "❌ Context-only max-entropy policy (Standard) not found!" | tee -a log/$DATE/comparison.txt
+            echo "❌ Context-only max-entropy policy (Standard) not found!" 
         fi
         
         if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_standard_ppo_context")
             POLICY_LABELS+=("Standard PPO (Context-Only) - Standard")
         elif [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
-            echo "❌ Context-only standard policy (Standard) not found!" | tee -a log/$DATE/comparison.txt
+            echo "❌ Context-only standard policy (Standard) not found!" 
         fi
     fi
 
@@ -696,14 +674,14 @@ if [ "$RUN_STANDARD_VERSION" -eq 1 ]; then
             POLICIES_TO_EVALUATE+=("optimized_max_entropy_ppo_standard")
             POLICY_LABELS+=("Max-Entropy PPO (Standard) - Standard")
         elif [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "❌ Standard max-entropy policy (Standard) not found!" | tee -a log/$DATE/comparison.txt
+            echo "❌ Standard max-entropy policy (Standard) not found!" 
         fi
         
         if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.pt" ]; then
             POLICIES_TO_EVALUATE+=("optimized_standard_ppo_standard")
             POLICY_LABELS+=("Standard PPO (Standard) - Standard")
         elif [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
-            echo "❌ Standard policy (Standard) not found!" | tee -a log/$DATE/comparison.txt
+            echo "❌ Standard policy (Standard) not found!" 
         fi
     fi
 fi
@@ -715,14 +693,14 @@ if [ "$RUN_OFL_VERSION" -eq 1 ]; then
             POLICIES_TO_EVALUATE+=("optimized_max_entropy_ppo_context_ofl")
             POLICY_LABELS+=("Max-Entropy PPO (Context-Only) - OFL")
         elif [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "❌ Context-only max-entropy policy (OFL) not found!" | tee -a log/$DATE/comparison.txt
+            echo "❌ Context-only max-entropy policy (OFL) not found!" 
         fi
         
         if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_context_ofl/optimized_standard_ppo_policy_sb3.zip" ]; then
             POLICIES_TO_EVALUATE+=("optimized_standard_ppo_context_ofl")
             POLICY_LABELS+=("Standard PPO (Context-Only) - OFL")
         elif [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
-            echo "❌ Context-only standard policy (OFL) not found!" | tee -a log/$DATE/comparison.txt
+            echo "❌ Context-only standard policy (OFL) not found!" 
         fi
     fi
 
@@ -731,25 +709,25 @@ if [ "$RUN_OFL_VERSION" -eq 1 ]; then
             POLICIES_TO_EVALUATE+=("optimized_max_entropy_ppo_standard_ofl")
             POLICY_LABELS+=("Max-Entropy PPO (Standard) - OFL")
         elif [ "$RUN_MAX_ENTROPY" -eq 1 ]; then
-            echo "❌ Standard max-entropy policy (OFL) not found!" | tee -a log/$DATE/comparison.txt
+            echo "❌ Standard max-entropy policy (OFL) not found!" 
         fi
         
         if [ "$RUN_NO_MAX_ENTROPY" -eq 1 ] && [ -f "log/$DATE/optimized_standard_ppo_standard_ofl/optimized_standard_ppo_policy_sb3.zip" ]; then
             POLICIES_TO_EVALUATE+=("optimized_standard_ppo_standard_ofl")
             POLICY_LABELS+=("Standard PPO (Standard) - OFL")
         elif [ "$RUN_NO_MAX_ENTROPY" -eq 1 ]; then
-            echo "❌ Standard policy (OFL) not found!" | tee -a log/$DATE/comparison.txt
+            echo "❌ Standard policy (OFL) not found!" 
         fi
     fi
 fi
 
 if [ ${#POLICIES_TO_EVALUATE[@]} -eq 0 ]; then
-    echo "❌ No trained policies found for evaluation!" | tee -a log/$DATE/comparison.txt
+    echo "❌ No trained policies found for evaluation!" 
     exit 1
 fi
 
-echo "✅ Found ${#POLICIES_TO_EVALUATE[@]} trained policies. Starting evaluation..." | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
+echo "✅ Found ${#POLICIES_TO_EVALUATE[@]} trained policies. Starting evaluation..." 
+echo "" 
 
 # Evaluate all policies on all benchmarks
 for j in "${!POLICIES_TO_EVALUATE[@]}"; do
@@ -760,7 +738,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
         benchmark="${BENCHMARKS[$i]}"
         benchmark_name="${BENCHMARK_NAMES[$i]}"
         
-        echo "=== Evaluating $benchmark_name with $policy_label ===" | tee -a log/$DATE/comparison.txt
+        echo "=== Evaluating $benchmark_name with $policy_label ===" 
 
         if [ ! -f log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl ]; then
             # Determine if this policy uses context-only mode
@@ -814,76 +792,76 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --use-stepwise-rl \
                 --use-eagle3 2>&1 | tee log/$DATE/$policy_dir/evaluation/${benchmark}_evaluation.log
         else
-            echo "Results already exist for $policy_label on $benchmark_name" | tee -a log/$DATE/comparison.txt
+            echo "Results already exist for $policy_label on $benchmark_name" 
         fi
     done
 done
 
 
-echo "" | tee -a log/$DATE/comparison.txt
-echo "=== Phase 4: Performance Analysis Across All Benchmarks ===" | tee -a log/$DATE/comparison.txt
-echo "Generating baseline results for comprehensive comparison..." | tee -a log/$DATE/comparison.txt
-echo "" | tee -a log/$DATE/comparison.txt
+echo "" 
+echo "=== Phase 4: Performance Analysis Across All Benchmarks ===" 
+echo "Generating baseline results for comprehensive comparison..." 
+echo "" 
 
 # Note: summary.txt files are already created fresh above
 
-# Generate baseline results for all benchmarks (LLaMA 3.1 8B) - shared location
-echo "=== Generating LLaMA 3.1 8B Baseline Results ===" | tee -a log/$DATE/comparison.txt
-
-# Create shared baseline directory
-mkdir -p log/$DATE/baseline_results
-
-for benchmark in "${BENCHMARKS[@]}"; do
-    echo "Generating baseline for $benchmark..." | tee -a log/$DATE/comparison.txt
-        
-    # Generate EAGLE3 baseline
-    if [ ! -f "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" ]; then
-        python -m eagle.evaluation.gen_ea_answer_llama3chat \
-            --ea-model-path "$MODEL_PATH" \
-            --base-model-path "$BASE_MODEL_PATH" \
-            --bench-name "$benchmark" \
-            --answer-file "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" \
-            --temperature 0.0 \
-            --use_eagle3 \
-            2>&1 | tee -a log/$DATE/baseline_results/baseline_${benchmark}_eagle3.log
-    else
-        echo "EAGLE3 baseline for $benchmark already exists" | tee -a log/$DATE/comparison.txt
-    fi
-done
-
-for benchmark in "${BENCHMARKS[@]}"; do
-    echo "Generating standard baseline for $benchmark..." | tee -a log/$DATE/comparison.txt
+# Generate baselines for each policy directory
+for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+    echo "=== Generating LLaMA 3.1 8B Baseline Results for $dir ===" >> log/$DATE/$dir/comparison.txt
+    mkdir -p log/$DATE/$dir/baseline_results
     
-    # Generate standard baseline
-    if [ ! -f "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" ]; then
-        python -m eagle.evaluation.gen_baseline_answer_llama3chat \
-            --ea-model-path "$MODEL_PATH" \
-            --base-model-path "$BASE_MODEL_PATH" \
-            --bench-name "$benchmark" \
-            --answer-file "log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" \
-            --temperature 0.0 \
-            2>&1 | tee -a log/$DATE/baseline_results/baseline_${benchmark}_standard.log
-    else
-        echo "Standard baseline for $benchmark already exists" | tee -a log/$DATE/comparison.txt
-    fi
+    for benchmark in "${BENCHMARKS[@]}"; do
+        echo "Generating baseline for $benchmark..." >> log/$DATE/$dir/comparison.txt
+        
+        # Generate EAGLE3 baseline
+        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" ]; then
+            python -m eagle.evaluation.gen_ea_answer_llama3chat \
+                --ea-model-path "$MODEL_PATH" \
+                --base-model-path "$BASE_MODEL_PATH" \
+                --bench-name "$benchmark" \
+                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" \
+                --temperature 0.0 \
+                --use_eagle3 \
+                2>&1 | tee -a log/$DATE/$dir/baseline_results/baseline_${benchmark}_eagle3.log
+        else
+            echo "EAGLE3 baseline for $benchmark already exists" >> log/$DATE/$dir/comparison.txt
+        fi
+    done
+    
+    for benchmark in "${BENCHMARKS[@]}"; do
+        echo "Generating standard baseline for $benchmark..." >> log/$DATE/$dir/comparison.txt
+        
+        # Generate standard baseline
+        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" ]; then
+            python -m eagle.evaluation.gen_baseline_answer_llama3chat \
+                --ea-model-path "$MODEL_PATH" \
+                --base-model-path "$BASE_MODEL_PATH" \
+                --bench-name "$benchmark" \
+                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" \
+                --temperature 0.0 \
+                2>&1 | tee -a log/$DATE/$dir/baseline_results/baseline_${benchmark}_standard.log
+        else
+            echo "Standard baseline for $benchmark already exists" >> log/$DATE/$dir/comparison.txt
+        fi
+    done
 done
 
 # Analyze results for each benchmark with comprehensive comparisons - per policy directory
 for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
-    echo "" | tee -a log/$DATE/comparison.txt
-    echo "=== Comprehensive Performance Analysis ===" | tee -a log/$DATE/comparison.txt
+    echo "" 
+    echo "=== Comprehensive Performance Analysis ===" 
 
     for i in "${!BENCHMARKS[@]}"; do
         benchmark="${BENCHMARKS[$i]}"
         benchmark_name="${BENCHMARK_NAMES[$i]}"
         
-        echo "=== $benchmark_name - $benchmark Performance Analysis ===" | tee -a log/$DATE/comparison.txt
+        echo "=== $benchmark_name - $benchmark Performance Analysis ===" 
         echo "Benchmark: $benchmark_name - $benchmark" >> log/$DATE/$dir/summary.txt
         echo "===========================================" >> log/$DATE/$dir/summary.txt
         
-        # Define baseline files (shared location)
-        eagle3_file="log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl"
-        baseline_file="log/$DATE/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl"
+        # Define baseline files for this policy directory
+        eagle3_file="log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl"
+        baseline_file="log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl"
     
         # Create list of result files for this benchmark
         RESULT_FILES=()
@@ -900,7 +878,7 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
         done
         
         if [ ${#RESULT_FILES[@]} -gt 0 ] && [ -f "$eagle3_file" ] && [ -f "$baseline_file" ]; then
-            echo "✅ Found ${#RESULT_FILES[@]} policy results and baseline files for $benchmark_name" | tee -a log/$DATE/comparison.txt
+            echo "✅ Found ${#RESULT_FILES[@]} policy results and baseline files for $benchmark_name" 
         
         # Speed comparison using existing speed.py tool
         if [ -f "eagle/evaluation/speed.py" ]; then
@@ -976,20 +954,20 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
         echo "Standard Baseline: $(wc -l < "$baseline_file") samples" >> log/$DATE/$dir/summary.txt
         
     else
-        echo "❌ Missing result files for $benchmark_name" | tee -a log/$DATE/comparison.txt
-        echo "Required files:" | tee -a log/$DATE/comparison.txt
+        echo "❌ Missing result files for $benchmark_name" 
+        echo "Required files:" 
         for k in "${!RESULT_FILES[@]}"; do
             policy_file="${RESULT_FILES[$k]}"
             policy_label="${RESULT_LABELS[$k]}"
-            echo "  $policy_label: $policy_file $([ -f " | tee -a log/$DATE/comparison.txt$policy_file" ] && echo "✅" || echo "❌")"
+            echo "  $policy_label: $policy_file $([ -f " $policy_file" ] && echo "✅" || echo "❌")"
         done
-        echo "  EAGLE3 Baseline: $eagle3_file $([ -f " | tee -a log/$DATE/comparison.txt$eagle3_file" ] && echo "✅" || echo "❌")"
-        echo "  Standard Baseline: $baseline_file $([ -f " | tee -a log/$DATE/comparison.txt$baseline_file" ] && echo "✅" || echo "❌")"
+        echo "  EAGLE3 Baseline: $eagle3_file $([ -f " $eagle3_file" ] && echo "✅" || echo "❌")"
+        echo "  Standard Baseline: $baseline_file $([ -f " $baseline_file" ] && echo "✅" || echo "❌")"
         echo "Missing result files - check evaluation and baseline generation logs" >> log/$DATE/$dir/summary.txt
     fi
     
     echo "" >> log/$DATE/$dir/summary.txt
-    echo "" | tee -a log/$DATE/comparison.txt
+    echo "" 
     done
 done
 done
@@ -1042,21 +1020,21 @@ fi
 
 # Write summary to each policy directory
 for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
-    echo "" | tee -a log/$DATE/comparison.txt
-    echo "=== Summary ===" | tee -a log/$DATE/comparison.txt
-    echo "Training completed with optimized PPO policies!" | tee -a log/$DATE/comparison.txt
-    echo "Execution Mode: $EXECUTION_MODE" | tee -a log/$DATE/comparison.txt
-    echo "Policies trained: $TRAINED_POLICIES" | tee -a log/$DATE/comparison.txt
-    echo "Results saved in: log/$DATE/$dir/" | tee -a log/$DATE/comparison.txt
-    echo "Key optimizations implemented:" | tee -a log/$DATE/comparison.txt
-    echo "1. EAGLE-3 layer features with optional context-only mode" | tee -a log/$DATE/comparison.txt
-    echo "2. Action caching every 30 steps (~50% computation reduction)" | tee -a log/$DATE/comparison.txt
-    echo "3. Flexible execution modes for targeted experiments" | tee -a log/$DATE/comparison.txt
-    echo "4. Enhanced PPO with temperature-based action sampling" | tee -a log/$DATE/comparison.txt
+    echo "" 
+    echo "=== Summary ===" 
+    echo "Training completed with optimized PPO policies!" 
+    echo "Execution Mode: $EXECUTION_MODE" 
+    echo "Policies trained: $TRAINED_POLICIES" 
+    echo "Results saved in: log/$DATE/$dir/" 
+    echo "Key optimizations implemented:" 
+    echo "1. EAGLE-3 layer features with optional context-only mode" 
+    echo "2. Action caching every 30 steps (~50% computation reduction)" 
+    echo "3. Flexible execution modes for targeted experiments" 
+    echo "4. Enhanced PPO with temperature-based action sampling" 
     if [ "$RUN_OFL_VERSION" -eq 1 ]; then
-        echo "5. OFL version with enhanced features (set_max_timesteps, set_training_mode, enhanced PPO updates)" | tee -a log/$DATE/comparison.txt
+        echo "5. OFL version with enhanced features (set_max_timesteps, set_training_mode, enhanced PPO updates)" 
     fi
-    echo "" | tee -a log/$DATE/comparison.txt
+    echo "" 
 done
 
 # Create performance summary for each policy directory
@@ -1077,5 +1055,5 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
     done
     echo "" >> log/$DATE/$dir/summary.txt
 
-    echo "Check log/$DATE/$dir/summary.txt for detailed results." | tee -a log/$DATE/comparison.txt
+    echo "Check log/$DATE/$dir/summary.txt for detailed results." 
 done
