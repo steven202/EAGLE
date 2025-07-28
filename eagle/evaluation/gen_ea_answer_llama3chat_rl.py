@@ -633,9 +633,11 @@ def get_model_answers(
                         print("   Skipping warmup - proceeding with standard generation")
                         # We'll skip warmup if even ultra-conservative parameters fail
                         # Set dummy values to avoid UnboundLocalError
-                        output_ids = torch.tensor([[tokenizer.eos_token_id]]).to(input_ids.device)
-                        new_token = torch.tensor(0)
-                        idx = torch.tensor(0)
+                        # Get device from model instead of input_ids (which is a list)
+                        device = next(model.parameters()).device
+                        output_ids = torch.tensor([[tokenizer.eos_token_id]]).to(device)
+                        new_token = torch.tensor(0).to(device)
+                        idx = torch.tensor(0).to(device)
                         total_time = 0.0
                 else:
                     raise e  # Re-raise if it's a different error
