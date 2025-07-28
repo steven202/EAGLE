@@ -108,6 +108,9 @@ if [ ${#DIRECTORIES_TO_CREATE[@]} -gt 0 ]; then
     
     # Write execution config to each policy directory
     for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
+        echo "ofl 128 x 128" | tee -a log/$DATE/$dir/execution_config.txt
+        echo "ofl 128 x 128" | tee -a log/$DATE/$dir/summary.txt
+        echo "ofl 128 x 128" | tee -a log/$DATE/$dir/comparison.txt
         echo "=== EXECUTION MODE CONFIGURATION ===" | tee -a log/$DATE/$dir/execution_config.txt
         echo "POLICY VERSIONS:" | tee -a log/$DATE/$dir/execution_config.txt
         echo "RUN_STANDARD_VERSION: $RUN_STANDARD_VERSION" | tee -a log/$DATE/$dir/execution_config.txt
