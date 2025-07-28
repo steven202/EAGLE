@@ -168,7 +168,7 @@ def get_model_answers(
     tokenizer = model.get_tokenizer()
 
     # Set max_length parameter once to avoid repeated computation
-    max_length_param = 2100 if args.bench_name == "sum" and args.online_inference_only else 2048
+    max_length_param = 2100 if (args.bench_name == "sum" or "sum" in args.question_file) and args.online_inference_only else 2048
 
     # Initialize RL policy if requested
     rl_policy = None
