@@ -773,7 +773,6 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --model-id ${policy_dir}_$benchmark \
                 --question-file eagle/data/$benchmark/question.jsonl \
                 --question-begin 0 \
-                --question-end -1 \
                 --answer-file log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl \
                 --num-choices 1 \
                 --num-gpus-per-model 1 \
