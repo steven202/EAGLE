@@ -51,7 +51,6 @@ BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natura
 
 # Write execution config to each policy directory
 for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
-    echo "=== 64 x 64 ===" | tee -a log/$DATE/$dir/execution_config.txt
     echo "=== EXECUTION MODE CONFIGURATION ===" | tee -a log/$DATE/$dir/execution_config.txt
     echo "POLICY VERSIONS:" | tee -a log/$DATE/$dir/execution_config.txt
     echo "RUN_STANDARD_VERSION: $RUN_STANDARD_VERSION" | tee -a log/$DATE/$dir/execution_config.txt
