@@ -582,8 +582,11 @@ def get_model_answers(
                             max_length=max_length_param,
                         )
             except RuntimeError as e:
-                if "selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or "start" in str(e):
+                if ("selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or 
+                    "start" in str(e) or "KV cache buffer overflow" in str(e) or 
+                    "CUDA out of memory" in str(e) or "out of memory" in str(e)):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
+                    print(f"   Error: {e}")
                     print(f"   Falling back to ultra-conservative warmup parameters...")
                     
                     # Use ultra-safe parameters for warmup that definitely won't overflow
