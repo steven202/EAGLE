@@ -640,15 +640,40 @@ def get_model_answers(
                 while retry_count < max_retries and not success:
                     try:
                         # Use RL-predicted parameters or fallback values (matching LLaMA3 RL version)
-                        output_ids, new_token, idx = model.eagenerate(
-                            torch.as_tensor(input_ids).cuda(),
-                            temperature=temperature,
-                            log=True,
-                            total_tokens=predicted_total_tokens,
-                            depth=predicted_depth,
-                            tree_top_k=predicted_top_k,
-                            max_length=max_length_param,
-                        )
+                        if args.use_stepwise_rl and online_policy is not None:
+                            # Step-wise RL mode: pass RL policy and training mode
+                            result = model.eagenerate(
+                                torch.as_tensor(input_ids).cuda(),
+                                temperature=temperature,
+                                log=True,
+                                total_tokens=predicted_total_tokens,
+                                depth=predicted_depth,
+                                tree_top_k=predicted_top_k,
+                                rl_policy=online_policy,
+                                training_mode=not args.online_inference_only,
+                                max_length=max_length_param,
+                            )
+                            # Handle variable return values from step-wise RL
+                            if len(result) == 5:  # Step-wise RL with log=True
+                                output_ids, new_token, idx, step_rewards, step_count = result
+                                if not args.online_inference_only:
+                                    print(f"Step-wise RL training: {new_token} tokens, {step_count} steps, avg reward: {sum(step_rewards)/len(step_rewards):.2f}")
+                                else:
+                                    print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                            else:  # Fallback to traditional
+                                output_ids, new_token, idx = result
+                                print(f"Step-wise RL (fallback): {new_token} tokens generated")
+                        else:
+                            # Traditional mode: fixed parameters for entire generation
+                            output_ids, new_token, idx = model.eagenerate(
+                                torch.as_tensor(input_ids).cuda(),
+                                temperature=temperature,
+                                log=True,
+                                total_tokens=predicted_total_tokens,
+                                depth=predicted_depth,
+                                tree_top_k=predicted_top_k,
+                                max_length=max_length_param,
+                            )
                         success = True
                         
                     except RuntimeError as e:
