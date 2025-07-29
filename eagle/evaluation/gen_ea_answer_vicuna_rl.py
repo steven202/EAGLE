@@ -429,18 +429,91 @@ def get_model_answers(
             )
             reward_function = calculate_online_reward
         
-        # Load existing policy if specified
-        if args.online_policy_path:
-            try:
-                online_policy.load(args.online_policy_path)
-                print(f"✅ Loaded existing online RL policy from {args.online_policy_path}")
-            except Exception as e:
-                print(f"⚠️  Failed to load policy from {args.online_policy_path}: {e}")
-                print("   Starting with fresh policy")
+        # Resume mechanism: check for existing checkpoint first, then explicit policy
+        resumed = False
+        if not args.online_inference_only:  # Only try to resume during training
+            # Try to resume from latest checkpoint first (unless disabled)
+            if getattr(args, 'resume_training', True) and not getattr(args, 'no_resume', False):
+                if online_policy.load_checkpoint():
+                    print("✅ Resumed training from latest checkpoint")
+                    resumed = True
+                    
+                    # Set the training seed for reproducible continuation
+                    if online_policy.training_seed:
+                        training_seed = online_policy.training_seed
+                        import random
+                        random.seed(training_seed)
+                        # Re-shuffle questions with same seed to get same order
+                        random.shuffle(questions)
+                        
+                        # Skip already processed questions
+                        questions_to_skip = online_policy.questions_processed
+                        if questions_to_skip > 0 and questions_to_skip < len(questions):
+                            questions = questions[questions_to_skip:]
+                            print(f"📋 Resuming from question {questions_to_skip+1}/{len(questions) + questions_to_skip}")
+                        elif questions_to_skip >= len(questions):
+                            print("⚠️  All questions already processed in checkpoint")
+                            print(f"processed {questions_to_skip} questions")
+                            questions = []
+                            exit(0)
+                    else:
+                        print("⚠️  No training seed in checkpoint, shuffling with default seed")
+                        training_seed = getattr(args, 'training_seed', 42)
+                        online_policy.set_training_seed(training_seed)
+                        random.shuffle(questions)
+        
+        # Fallback to explicit policy path if no checkpoint resume
+        if not resumed:
+            if args.online_policy_path:
+                # For SB3 discrete PPO, check the converted path format
+                policy_exists = False
+                if getattr(args, 'use_sb3_discrete_ppo', False):
+                    # Check for SB3 format: .pth -> _sb3.zip
+                    sb3_path = args.online_policy_path.replace('.pth', '_sb3.zip') if args.online_policy_path.endswith('.pth') else args.online_policy_path + '.zip'
+                    policy_exists = os.path.exists(sb3_path)
+                    if policy_exists:
+                        print(f"Found SB3 policy file: {sb3_path}")
+                else:
+                    # Standard path check for other policies
+                    policy_exists = os.path.exists(args.online_policy_path)
+                
+                if policy_exists:
+                    # Load the policy (let the policy class handle path conversion internally)
+                    if online_policy.load(args.online_policy_path):
+                        print(f"Loaded existing online policy from {args.online_policy_path}")
+                    else:
+                        print("❗ Failed to load online policy: file exists but loading failed")
+                        if args.online_inference_only:
+                            print("❗ Online inference mode only, no training allowed")
+                            quit()
+                else:
+                    print(f"Policy file not found: {args.online_policy_path}")
+                    if args.online_inference_only:
+                        print("❗ Failed to load online policy: online inference mode only, no training allowed")
+                        quit()
+                    else:
+                        print("Starting with fresh online policy")
+            else:
+                print("Starting with fresh online policy")
+                if args.online_inference_only:
+                    print("❗ Failed to load online policy: online inference mode only, no training allowed")
+                    quit()
+                
+            # Set training seed for fresh start
+            if not args.online_inference_only:
+                training_seed = getattr(args, 'training_seed', 42)
+                online_policy.set_training_seed(training_seed)
+                # Questions already shuffled above with this seed
             
     elif args.use_rl_policy:
-        print("Loading RL Tree Policy for dynamic parameter prediction...")
-        rl_policy = RLTreePolicy(args.rl_policy_path)
+        # Use traditional offline RL policy
+        try:
+            rl_policy = RLTreePolicy(args.rl_policy_path)
+            print(f"Loaded offline RL policy from {args.rl_policy_path}")
+        except Exception as e:
+            print(f"Failed to load RL policy: {e}")
+            print("Falling back to fixed parameters from args")
+            rl_policy = None
 
     if temperature > 1e-5:
         logits_processor = prepare_logits_processor(temperature=temperature)
@@ -471,25 +544,83 @@ def get_model_answers(
             prompt = conv.get_prompt()
             input_ids = tokenizer([prompt]).input_ids
 
-            # try:
+            # Get context for RL policy prediction during warmup
+            context_parts = []
+            for msg in conv.messages[:-1]:  # Exclude the last empty assistant message
+                if len(msg) >= 2 and msg[1] is not None:  # Make sure message has content
+                    context_parts.append(str(msg[1]))
+            full_context = " ".join(context_parts)
+            
+            if online_policy is not None:
+                # Check if this is an optimized policy
+                is_optimized_policy = hasattr(online_policy, 'use_eagle3_features') and online_policy.use_eagle3_features
+                
+                if is_optimized_policy:
+                    # Optimized RL: predict parameters using EAGLE-3 features (inference mode during warmup)
+                    # Note: hidden_states not available during warmup, so pass None
+                    # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                        # context=full_context, hidden_states=None, training_mode=False  # No exploration during warmup
+                    # )
+                    predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)  # Conservative warmup params
+                else:
+                    # Traditional Online RL: predict parameters (inference mode during warmup)
+                    predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                        full_context, training_mode=False  # No exploration during warmup
+                    )
+                print(f"Online RL predicted params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+            elif rl_policy is not None:
+                # Offline RL policy
+                predicted_total_tokens, predicted_depth, predicted_top_k = rl_policy.predict_parameters(full_context)
+                print(f"Offline RL predicted params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+            else:
+                # Fallback to defaults
+                predicted_total_tokens = args.total_token
+                predicted_depth = args.depth
+                predicted_top_k = args.top_k
+                # print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+
             torch.cuda.synchronize()
             start_time = time.time()
 
+            # Use no_grad for warmup since it's always inference mode
             try:
-                output_ids, new_token, idx = model.eagenerate(
-                    torch.as_tensor(input_ids).cuda(),
-                    temperature=temperature,
-                    log=True,
-                    total_tokens=args.total_token,
-                    depth=args.depth,
-                    tree_top_k=args.top_k,
-                    max_length=max_length_param,
-                )
+                with torch.no_grad():
+                    if args.use_stepwise_rl and online_policy is not None:
+                        # Step-wise RL mode: pass RL policy to eagenerate
+                        result = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            total_tokens=predicted_total_tokens,  # Use predicted values, not args
+                            depth=predicted_depth,
+                            tree_top_k=predicted_top_k,
+                            rl_policy=online_policy,
+                            training_mode=False,  # No training during warmup
+                            max_length=max_length_param,
+                        )
+                        # Handle variable return values from step-wise RL
+                        if len(result) == 5:  # Step-wise RL with log=True
+                            output_ids, new_token, idx, step_rewards, step_count = result
+                            print(f"Warmup with step-wise RL completed: {new_token} tokens, {step_count} steps")
+                        else:  # Fallback to traditional
+                            output_ids, new_token, idx = result
+                            print(f"Warmup completed: {new_token} tokens generated")
+                    else:
+                        # Traditional mode: fixed parameters for entire generation
+                        output_ids, new_token, idx = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            total_tokens=predicted_total_tokens,  # Use predicted values, not args
+                            depth=predicted_depth,
+                            tree_top_k=predicted_top_k,
+                            max_length=max_length_param,
+                        )
             except RuntimeError as e:
                 if ("selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or 
                     "start" in str(e) or "KV cache buffer overflow" in str(e) or 
                     "CUDA out of memory" in str(e) or "out of memory" in str(e)):
-                    print(f"❌ Warmup error with params: tt={args.total_token}, d={args.depth}, k={args.top_k}")
+                    print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                     print(f"   Error: {e}")
                     print(f"   Falling back to ultra-conservative warmup parameters...")
                     
@@ -499,15 +630,37 @@ def get_model_answers(
                     safe_top_k = 10
                 
                     try:
-                        output_ids, new_token, idx = model.eagenerate(
-                            torch.as_tensor(input_ids).cuda(),
-                            temperature=temperature,
-                            log=True,
-                            total_tokens=safe_total_tokens,
-                            depth=safe_depth,
-                            tree_top_k=safe_top_k,
-                            max_length=max_length_param,
-                        )
+                        with torch.no_grad():
+                            if args.use_stepwise_rl and online_policy is not None:
+                                # Step-wise RL fallback mode
+                                result = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    total_tokens=safe_total_tokens,  # Conservative fallback
+                                    depth=safe_depth,
+                                    tree_top_k=safe_top_k,
+                                    rl_policy=online_policy,
+                                    training_mode=False,  # No training during fallback
+                                    max_length=max_length_param,
+                                )
+                                # Handle variable return values from step-wise RL
+                                if len(result) == 5:  # Step-wise RL with log=True
+                                    output_ids, new_token, idx, step_rewards, step_count = result
+                                    print(f"Fallback warmup with step-wise RL: {new_token} tokens, {step_count} steps")
+                                else:  # Fallback to traditional
+                                    output_ids, new_token, idx = result
+                            else:
+                                # Traditional fallback mode  
+                                output_ids, new_token, idx = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    total_tokens=safe_total_tokens,
+                                    depth=safe_depth,
+                                    tree_top_k=safe_top_k,
+                                    max_length=max_length_param,
+                                )
                     except RuntimeError as e2:
                         print(f"❌ Even ultra-conservative warmup failed: {e2}")
                         print("   Skipping warmup - proceeding with standard generation")
@@ -574,7 +727,32 @@ def get_model_answers(
     # questions=questions[6:]
     question_count = 0
     for question in tqdm(questions, desc="Processing questions"):
+        
+        # Track question processing for online RL resume mechanism (count even skipped questions)
         question_count += 1
+        if online_policy is not None and not args.online_inference_only:
+            online_policy.increment_questions_processed()
+            
+            # Progress update with checkpoint info
+            if question_count % 10 == 0:
+                resume_info = online_policy.get_resume_info()
+                step_count = resume_info.get('step_count', 0)
+                progress_msg = (f"📊 Progress: {question_count}/{len(questions)} questions, "
+                               f"Step: {step_count}")
+                
+                # Add policy-specific metrics
+                if 'epsilon' in resume_info:
+                    # DQN-based policies (discrete/continuous Actor-Critic)
+                    progress_msg += f", Epsilon: {resume_info['epsilon']:.3f}"
+                elif 'ppo_updates' in resume_info:
+                    # PPO-based policies
+                    progress_msg += f", PPO Updates: {resume_info['ppo_updates']}"
+                
+                print(progress_msg)
+                
+                if online_policy.should_save_checkpoint():
+                    print(f"   💾 Checkpoint will be saved at step {step_count}")
+
         question_failed = False  # Track if question processing fails
 
         choices = []
@@ -602,29 +780,50 @@ def get_model_answers(
                 context = " ".join(context_parts)
 
                 # Predict tree parameters using RL policy
-                predicted_total_tokens = args.total_token
-                predicted_depth = args.depth  
-                predicted_top_k = args.top_k
+                predicted_total_tokens = args.total_token  # Default fallback
+                predicted_depth = args.depth  # Default fallback
+                predicted_top_k = args.top_k  # Default fallback
 
                 if online_policy is not None:
                     # Use online RL policy for parameter prediction
-                    try:
-                        predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(context)
-                    except Exception as e:
-                        print(f"⚠️  Online RL prediction failed: {e}")
-                        print(f"   Using fallback parameters: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
+                    # Check if this is an optimized policy that needs EAGLE-3 features
+                    is_optimized_policy = hasattr(online_policy, 'use_eagle3_features') and online_policy.use_eagle3_features
+                    
+                    if is_optimized_policy:
+                        # Optimized RL: predict parameters using EAGLE-3 features or context-only state
+                        # Note: hidden_states not available here, so context-only for now
                         if args.online_inference_only:
-                            # In inference-only mode, if policy fails, skip this question
-                            print(f"   Skipping question {question_count} due to policy failure in inference-only mode")
-                            question_failed = True
-                            break
+                            # Inference-only mode: no training, no exploration
+                            # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                                # context=context, hidden_states=None, training_mode=False
+                            # )
+                            predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
+                            # print(f"Optimized Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                        else:
+                            # Training mode: enable exploration and learning
+                            # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                                # context=context, hidden_states=None, training_mode=True
+                            # )
+                            predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
+                            print(f"Optimized Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                    else:
+                        # Traditional Online RL: predict parameters with context only
+                        if args.online_inference_only:
+                            # Inference-only mode: no training, no exploration
+                            predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                                context, training_mode=False
+                            )
+                            print(f"Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+                        else:
+                            # Training mode: enable exploration and learning
+                            predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                                context, training_mode=True
+                            )
+                            print(f"Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                 elif rl_policy is not None:
                     # Use offline RL policy for parameter prediction
-                    try:
-                        predicted_total_tokens, predicted_depth, predicted_top_k = rl_policy.predict_parameters(context)
-                    except Exception as e:
-                        print(f"⚠️  RL prediction failed: {e}")
-                        print(f"   Using fallback parameters: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
+                    predicted_total_tokens, predicted_depth, predicted_top_k = rl_policy.predict_parameters(context)
+                    print(f"Offline RL predicted params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
 
                 if question_failed:
                     break  # Break out of the turns loop
@@ -639,41 +838,81 @@ def get_model_answers(
                 
                 while retry_count < max_retries and not success:
                     try:
-                        # Use RL-predicted parameters or fallback values (matching LLaMA3 RL version)
-                        if args.use_stepwise_rl and online_policy is not None:
-                            # Step-wise RL mode: pass RL policy and training mode
-                            result = model.eagenerate(
-                                torch.as_tensor(input_ids).cuda(),
-                                temperature=temperature,
-                                log=True,
-                                total_tokens=predicted_total_tokens,
-                                depth=predicted_depth,
-                                tree_top_k=predicted_top_k,
-                                rl_policy=online_policy,
-                                training_mode=not args.online_inference_only,
-                                max_length=max_length_param,
-                            )
-                            # Handle variable return values from step-wise RL
-                            if len(result) == 5:  # Step-wise RL with log=True
-                                output_ids, new_token, idx, step_rewards, step_count = result
-                                if not args.online_inference_only:
-                                    print(f"Step-wise RL training: {new_token} tokens, {step_count} steps, avg reward: {sum(step_rewards)/len(step_rewards):.2f}")
-                                else:
-                                    print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
-                            else:  # Fallback to traditional
-                                output_ids, new_token, idx = result
-                                print(f"Step-wise RL (fallback): {new_token} tokens generated")
+                        # Conditionally use torch.no_grad() only during inference mode
+                        training_mode = not args.online_inference_only
+                        
+                        if training_mode and online_policy is not None:
+                            # Training mode: allow gradients for RL policy learning
+                            if args.use_stepwise_rl and online_policy is not None:
+                                # Step-wise RL mode: pass RL policy and enable training
+                                result = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    total_tokens=predicted_total_tokens,  # Fallback values
+                                    depth=predicted_depth,
+                                    tree_top_k=predicted_top_k,
+                                    rl_policy=online_policy,
+                                    training_mode=training_mode,
+                                    max_length=max_length_param,
+                                )
+                                # Handle variable return values from step-wise RL
+                                if len(result) == 5:  # Step-wise RL with log=True
+                                    output_ids, new_token, idx, step_rewards, step_count = result
+                                    if training_mode:
+                                        print(f"Step-wise RL training: {new_token} tokens, {step_count} steps, avg reward: {sum(step_rewards)/len(step_rewards):.2f}")
+                                    else:
+                                        # print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                                        pass
+                                else:  # Fallback to traditional
+                                    output_ids, new_token, idx = result
+                                    print(f"Step-wise RL (fallback): {new_token} tokens, {idx+1} steps")
+                            else:
+                                # Traditional mode: fixed parameters for entire generation
+                                output_ids, new_token, idx = model.eagenerate(
+                                    torch.as_tensor(input_ids).cuda(),
+                                    temperature=temperature,
+                                    log=True,
+                                    total_tokens=predicted_total_tokens,
+                                    depth=predicted_depth,
+                                    tree_top_k=predicted_top_k,
+                                    max_length=max_length_param,
+                                )
                         else:
-                            # Traditional mode: fixed parameters for entire generation
-                            output_ids, new_token, idx = model.eagenerate(
-                                torch.as_tensor(input_ids).cuda(),
-                                temperature=temperature,
-                                log=True,
-                                total_tokens=predicted_total_tokens,
-                                depth=predicted_depth,
-                                tree_top_k=predicted_top_k,
-                                max_length=max_length_param,
-                            )
+                            # Inference mode: use torch.no_grad() for memory efficiency
+                            with torch.no_grad():
+                                if args.use_stepwise_rl and online_policy is not None:
+                                    # Step-wise RL mode: pass RL policy but disable training
+                                    result = model.eagenerate(
+                                        torch.as_tensor(input_ids).cuda(),
+                                        temperature=temperature,
+                                        log=True,
+                                        total_tokens=predicted_total_tokens,  # Fallback values
+                                        depth=predicted_depth,
+                                        tree_top_k=predicted_top_k,
+                                        rl_policy=online_policy,
+                                        training_mode=False,  # Inference only
+                                        max_length=max_length_param,
+                                    )
+                                    # Handle variable return values from step-wise RL
+                                    if len(result) == 5:  # Step-wise RL with log=True
+                                        output_ids, new_token, idx, step_rewards, step_count = result
+                                        # print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
+                                        pass
+                                    else:  # Fallback to traditional
+                                        output_ids, new_token, idx = result
+                                        print(f"Step-wise RL (fallback): {new_token} tokens, {idx+1} steps")
+                                else:
+                                    # Traditional mode: fixed parameters for entire generation
+                                    output_ids, new_token, idx = model.eagenerate(
+                                        torch.as_tensor(input_ids).cuda(),
+                                        temperature=temperature,
+                                        log=True,
+                                        total_tokens=predicted_total_tokens,
+                                        depth=predicted_depth,
+                                        tree_top_k=predicted_top_k,
+                                        max_length=max_length_param,
+                                    )
                         success = True
                         
                     except RuntimeError as e:
@@ -690,7 +929,7 @@ def get_model_answers(
                                 if "KV cache buffer overflow" in str(e) or "CUDA out of memory" in str(e) or "out of memory" in str(e):
                                     # For memory-related errors, be very aggressive with reduction
                                     if retry_count == 1:
-                                        predicted_total_tokens = 60
+                                        predicted_total_tokens = 60  # Match LLaMA3 script
                                         predicted_depth = 5
                                         predicted_top_k = 10
                                     elif retry_count == 2:
@@ -701,7 +940,7 @@ def get_model_answers(
                                     # For other errors, use moderate reduction
                                     if retry_count == 1:
                                         # First retry: moderate reduction
-                                        predicted_total_tokens = 60
+                                        predicted_total_tokens = 60  # Match LLaMA3 script
                                         predicted_depth = 5
                                         predicted_top_k = 10
                                     elif retry_count == 2:
@@ -1015,6 +1254,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--use_eagle3", "--use-eagle3",
+        dest="use_eagle3",
         action="store_true"
     )
     parser.add_argument(
@@ -1121,7 +1361,7 @@ if __name__ == "__main__":
         "--checkpoint-dir",
         type=str,
         default="checkpoints",
-        help="Directory to save training checkpoints"
+        help="Directory to save training checkpoints for resume capability"
     )
     parser.add_argument(
         "--checkpoint-freq",
@@ -1132,13 +1372,24 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-checkpoints",
         type=int,
-        default=3,
-        help="Maximum number of checkpoints to keep"
+        default=1,
+        help="Maximum number of checkpoints to keep (older ones are automatically deleted)"
+    )
+    parser.add_argument(
+        "--resume-training",
+        type=bool,
+        default=True,
+        help="Automatically resume from latest checkpoint if available (default: True)"
     )
     parser.add_argument(
         "--no-resume",
         action="store_true",
-        help="Disable automatic resume from latest checkpoint"
+        help="Disable automatic resume and start fresh training"
+    )
+    parser.add_argument(
+        "--continuous-action-space",
+        action="store_true",
+        help="Use continuous action space instead of discrete bins for more flexibility"
     )
     
     # PPO-specific arguments
@@ -1150,172 +1401,163 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use-discrete-ppo",
         action="store_true",
-        help="Use Discrete PPO algorithm for online RL (discrete action space with actor-critic)"
+        help="Use PPO with discrete action space (combines PPO stability with parameter bins)"
     )
     parser.add_argument(
         "--use-sb3-discrete-ppo",
         action="store_true",
-        help="Use SB3-based Discrete PPO for online RL (uses Stable-Baselines3 implementation)"
-    )
-    parser.add_argument(
-        "--ppo-n-steps",
-        type=int,
-        default=64,
-        help="Number of steps to run for each environment per update (PPO)"
-    )
-    parser.add_argument(
-        "--ppo-batch-size",
-        type=int,
-        default=32,
-        help="Minibatch size for PPO updates"
+        help="Use Stable Baselines 3 Discrete PPO for optimized and robust learning"
     )
     parser.add_argument(
         "--ppo-epochs",
         type=int,
-        default=4,
-        help="Number of epochs when optimizing the surrogate loss (PPO)"
+        default=10,
+        help="Number of epochs when optimizing the surrogate loss for PPO (both continuous and discrete)"
     )
     parser.add_argument(
-        "--ppo-gamma",
-        type=float,
-        default=0.95,
-        help="Discount factor (PPO)"
-    )
-    parser.add_argument(
-        "--ppo-gae-lambda",
-        type=float,
-        default=0.9,
-        help="Factor for trade-off of bias vs variance for Generalized Advantage Estimator (PPO)"
+        "--ppo-batch-size",
+        type=int,
+        default=64,
+        help="Minibatch size for PPO updates (both continuous and discrete)"
     )
     parser.add_argument(
         "--ppo-clip-range",
         type=float,
         default=0.2,
-        help="Clipping parameter for PPO"
+        help="Clipping parameter for PPO surrogate loss (both continuous and discrete)"
     )
     parser.add_argument(
-        "--ppo-vf-coef",
+        "--ppo-gamma",
         type=float,
-        default=0.5,
-        help="Value function coefficient for the loss calculation (PPO)"
+        default=0.99,
+        help="Discount factor for PPO (both continuous and discrete)"
+    )
+    parser.add_argument(
+        "--ppo-gae-lambda",
+        type=float,
+        default=0.95,
+        help="Factor for trade-off of bias vs variance for Generalized Advantage Estimator (both continuous and discrete)"
+    )
+    parser.add_argument(
+        "--ppo-n-steps",
+        type=int,
+        default=2048,
+        help="Number of steps to run for each environment per update for PPO (continuous PPO only)"
     )
     parser.add_argument(
         "--ppo-ent-coef",
         type=float,
         default=0.01,
-        help="Entropy coefficient for the loss calculation (PPO)"
+        help="Entropy coefficient for the loss calculation (SB3 PPO only)"
+    )
+    parser.add_argument(
+        "--ppo-vf-coef",
+        type=float,
+        default=0.5,
+        help="Value function coefficient for the loss calculation (SB3 PPO only)"
     )
     parser.add_argument(
         "--max-grad-norm",
         type=float,
         default=0.5,
-        help="Maximum value for gradient clipping"
+        help="The maximum value for the gradient clipping (PPO only)"
     )
     
-    # Continuous action space arguments
-    parser.add_argument(
-        "--continuous-action-space",
-        action="store_true",
-        help="Use continuous action space for online RL (Actor-Critic with continuous parameters)"
-    )
-    parser.add_argument(
-        "--continuous-gamma",
-        type=float,
-        default=0.99,
-        help="Discount factor for continuous action space RL"
-    )
-    parser.add_argument(
-        "--continuous-tau",
-        type=float,
-        default=0.001,
-        help="Soft update coefficient for target networks (continuous action space)"
-    )
-    
-    # Max-entropy arguments
+    # Max-entropy RL arguments
     parser.add_argument(
         "--enable-max-entropy",
         action="store_true",
-        help="Enable max-entropy mode for diverse parameter exploration (default for SB3 PPO)"
+        default=True,  # DEFAULT: Max-entropy mode enabled
+        help="Enable max-entropy RL mode for SB3 PPO (higher exploration, temperature-based inference) - DEFAULT ENABLED"
     )
     parser.add_argument(
         "--disable-max-entropy",
         action="store_true",
-        help="Disable max-entropy mode and use standard exploration"
+        help="Disable max-entropy RL mode and use standard PPO (lower exploration, deterministic inference)"
     )
     parser.add_argument(
         "--max-entropy-ent-coef",
         type=float,
         default=0.1,
-        help="Entropy coefficient for max-entropy exploration (higher = more diverse)"
+        help="Entropy coefficient for max-entropy mode (default: 0.1, standard PPO uses ~0.01)"
     )
     parser.add_argument(
         "--inference-temperature",
         type=float,
         default=1.5,
-        help="Temperature for action sampling during max-entropy inference"
+        help="Temperature for exploration during inference (Max-Entropy mode only). Higher values increase diversity."
     )
     parser.add_argument(
         "--max-entropy-inference",
         action="store_true",
-        help="Enable max-entropy exploration during inference (not just training)"
+        default=True,  # DEFAULT: Max-entropy inference enabled
+        help="Enable max-entropy inference for parameter diversity during inference (DEFAULT ENABLED)"
     )
     parser.add_argument(
         "--no-max-entropy-inference",
         action="store_true",
-        help="Disable max-entropy exploration during inference (deterministic inference)"
+        help="Disable max-entropy inference and use deterministic inference (SB3 PPO only)"
     )
     
     # Step-wise RL arguments
     parser.add_argument(
         "--use-stepwise-rl",
         action="store_true",
-        help="Enable step-wise RL: predict parameters at each draft step (vs once per turn)"
+        help="Enable step-wise RL: predict parameters at each draft step instead of once per turn (requires --use-online-rl)"
     )
     parser.add_argument(
         "--stepwise-reward-type",
         type=str,
         default="tokens_per_second",
         choices=["tokens_per_second", "acceptance_rate", "combined"],
-        help="Reward type for step-wise RL updates"
+        help="Type of reward to use for step-wise RL training (step-wise RL only)"
     )
     
-    # OPTIMIZED policy arguments
+    # Optimized RL arguments - Layer Features + Action Caching
+    parser.add_argument(
+        "--use-optimized-rl",
+        action="store_true",
+        help="Use optimized RL policy with layer feature concatenation and reduced action frequency"
+    )
     parser.add_argument(
         "--use-optimized-sb3-discrete-ppo",
         action="store_true",
-        help="Use OPTIMIZED SB3 Discrete PPO with EAGLE-3 features + action caching"
-    )
-    parser.add_argument(
-        "--use-optimized-dqn",
-        action="store_true",
-        help="Use OPTIMIZED DQN with EAGLE-3 features + action caching"
+        help="Use optimized SB3 Discrete PPO with EAGLE-3 features and action caching"
     )
     parser.add_argument(
         "--optimized-policy-version",
         type=str,
-        default="standard",
         choices=["standard", "ofl"],
-        help="Version of optimized policy implementation"
+        default="standard",
+        help="Choose between standard optimized policy or OFL (Offline) version with enhanced features"
+    )
+    parser.add_argument(
+        "--use-optimized-dqn",
+        action="store_true",
+        help="Use optimized DQN with EAGLE-3 features and action caching"
     )
     parser.add_argument(
         "--action-cache-steps",
         type=int,
         default=10,
-        help="Number of steps to cache actions for optimized policies"
+        help="Generate action every N steps for action caching optimization (optimized policies only)"
     )
     parser.add_argument(
         "--action-cache-enabled",
         action="store_true",
-        help="Enable action caching for optimized policies"
+        default=True,
+        help="Enable action caching optimization (optimized policies only)"
     )
     parser.add_argument(
         "--use-eagle3-features",
         action="store_true",
-        help="Use EAGLE-3 layer features for state representation in optimized policies"
+        default=True,
+        help="Use EAGLE-3 layer features instead of SBERT text embeddings (optimized policies only)"
     )
     parser.add_argument(
         "--use-context-only-state",
         action="store_true",
+        default=False,
         help="NEW: Use SBERT context embeddings directly (384D) instead of EAGLE-3 features or projection. Overrides --use-eagle3-features when enabled."
     )
     parser.add_argument(
@@ -1342,6 +1584,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
+
     # Handle max-entropy mode defaults and overrides
     if getattr(args, 'disable_max_entropy', False):
         args.enable_max_entropy = False
@@ -1441,6 +1684,22 @@ if __name__ == "__main__":
             print(f"   Action Space: Discrete (valid combinations from 6×6×5=180 total bins)")
         if not args.online_inference_only:
             print(f"   Training: Questions repeated {args.online_repeat_factor}x and shuffled")
+        else:
+            print(f"   Inference: Questions processed in original order")
+        if args.online_policy_path:
+            print(f"   Loading existing policy from: {args.online_policy_path}")
+    elif args.use_rl_policy:
+        print("\n🤖 Offline RL Policy Mode: Tree parameters will be predicted dynamically by RL policy")
+        print(f"   Fallback parameters: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
+        print(f"   RL policy path: {args.rl_policy_path}")
+        if getattr(args, 'use_stepwise_rl', False):
+            print("⚠️  Warning: Step-wise RL ignored in offline RL mode (requires online learning)")
+    else:
+        print(f"\n⚙️  Fixed Parameter Mode: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
+        if args.collect_rl_data:
+            print("   Data collection enabled for future RL training")
+        if getattr(args, 'use_stepwise_rl', False):
+            print("⚠️  Warning: Step-wise RL ignored in fixed parameter mode (requires online RL)")
         else:
             print(f"   Inference: Questions processed in original order")
         if args.online_policy_path:
