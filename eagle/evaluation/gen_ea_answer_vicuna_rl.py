@@ -171,7 +171,6 @@ def run_eval(
         ray.get(ans_handles)
 
 
-@torch.inference_mode()
 def get_model_answers(
         base_model_path,
         ea_model_path,
@@ -825,8 +824,16 @@ def get_model_answers(
                     predicted_total_tokens, predicted_depth, predicted_top_k = rl_policy.predict_parameters(context)
                     print(f"Offline RL predicted params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
 
-                if question_failed:
-                    break  # Break out of the turns loop
+                else:
+                    # Fallback to defaults
+                    predicted_total_tokens = args.total_token
+                    predicted_depth = args.depth
+                    predicted_top_k = args.top_k
+                    # print(f"Using default params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
+
+                # Clear GPU memory before retry
+                # if torch.cuda.is_available():
+                    # torch.cuda.empty_cache()
 
                 torch.cuda.synchronize()
                 start_time = time.time()
