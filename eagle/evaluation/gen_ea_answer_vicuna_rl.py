@@ -1700,22 +1700,6 @@ if __name__ == "__main__":
             print("   Data collection enabled for future RL training")
         if getattr(args, 'use_stepwise_rl', False):
             print("⚠️  Warning: Step-wise RL ignored in fixed parameter mode (requires online RL)")
-        else:
-            print(f"   Inference: Questions processed in original order")
-        if args.online_policy_path:
-            print(f"   Loading existing policy from: {args.online_policy_path}")
-    elif args.use_rl_policy:
-        print("\n🤖 Offline RL Policy Mode: Tree parameters will be predicted dynamically by RL policy")
-        print(f"   Fallback parameters: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
-        print(f"   RL policy path: {args.rl_policy_path}")
-        if getattr(args, 'use_stepwise_rl', False):
-            print("⚠️  Warning: Step-wise RL ignored in offline RL mode (requires online learning)")
-    else:
-        print(f"\n⚙️  Fixed Parameter Mode: total_token={args.total_token}, depth={args.depth}, top_k={args.top_k}")
-        if args.collect_rl_data:
-            print("   Data collection enabled for future RL training")
-        if getattr(args, 'use_stepwise_rl', False):
-            print("⚠️  Warning: Step-wise RL ignored in fixed parameter mode (requires online RL)")
 
     args.model_id = args.model_id + "-temperature-" + str(args.temperature)
     if args.num_gpus_total // args.num_gpus_per_model > 1:
