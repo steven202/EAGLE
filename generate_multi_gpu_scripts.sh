@@ -27,6 +27,7 @@ echo "  bash $0 1 2 3 4 5 6 7 8   # Pre-built combinations (non-interactive)"
 echo "  bash $0 1 3 5 7            # Specific pre-built combinations"
 echo "  bash $0 --datetime 20250207_151418_cu18 1 2 3 4  # With custom date/time"
 echo "  bash $0 --overwrite 1 2 3 4  # Overwrite existing scripts (keep same date/time)"
+echo "  bash $0 --datetime hello_world 1 2 3 4  # With custom folder name"
     echo ""
     echo "Combination modes (interactive):"
 echo "  1. Pre-built combinations - 8 standard parameter combinations"
@@ -42,6 +43,7 @@ echo "  2. Specify custom date/time (any string allowed)"
 echo "  3. Use simple folder name (no date/time)"
 echo "  4. Overwrite existing scripts (keep same date/time)"
 echo "  5. Delete old files and start fresh"
+echo "  6. Custom folder name (enter your own name)"
     echo ""
     echo "File handling options (when existing scripts found):"
     echo "  1. Keep old files (default) - new scripts alongside existing ones"
@@ -569,7 +571,7 @@ if [ "$OVERWRITE_MODE" == true ]; then
     if [ ${#EXISTING_FOLDERS[@]} -eq 0 ]; then
         echo "No existing generated folders found. Using current date/time instead."
         CUSTOM_DATE=$(date '+%Y%m%d_%H%M%S')
-        OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATE}"
+        OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}"
         echo "Using current date/time: $CUSTOM_DATE"
         echo "Folder name: $OUTPUT_DIR"
     else
@@ -596,7 +598,7 @@ if [ "$OVERWRITE_MODE" == true ]; then
 elif [ -n "$CUSTOM_DATETIME_ARG" ]; then
     # Use command-line specified date/time
     CUSTOM_DATE="$CUSTOM_DATETIME_ARG"
-    OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATETIME_ARG}"
+    OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATETIME_ARG}"
     echo "Using command-line specified date/time: $CUSTOM_DATETIME_ARG"
     echo "Folder name: $OUTPUT_DIR"
 else
@@ -608,7 +610,8 @@ echo "2. Specify custom date/time"
 echo "3. Use simple folder name (no date/time)"
 echo "4. Overwrite existing scripts (keep same date/time)"
 echo "5. Delete old files and start fresh"
-read -p "Choose option (1/2/3/4/5, default: 1): " DATE_OPTION
+echo "6. Custom folder name (enter your own name)"
+read -p "Choose option (1/2/3/4/5/6, default: 1): " DATE_OPTION
 
     if [[ "$DATE_OPTION" == "2" ]]; then
         echo ""
@@ -620,11 +623,11 @@ read -p "Choose option (1/2/3/4/5, default: 1): " DATE_OPTION
         read -p "Custom date/time: " CUSTOM_DATETIME
         
         CUSTOM_DATE="$CUSTOM_DATETIME"
-        OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATETIME}"
+        OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATETIME}"
         echo "Using custom date/time: $CUSTOM_DATETIME"
         echo "Folder name: $OUTPUT_DIR"
     elif [[ "$DATE_OPTION" == "3" ]]; then
-        OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu"
+        OUTPUT_DIR="${FILE_PREFIX}__multi_gpu"
         CUSTOM_DATE=""
         echo "Using simple folder name: $OUTPUT_DIR"
     elif [[ "$DATE_OPTION" == "4" ]]; then
@@ -638,7 +641,7 @@ read -p "Choose option (1/2/3/4/5, default: 1): " DATE_OPTION
         if [ ${#EXISTING_FOLDERS[@]} -eq 0 ]; then
             echo "No existing generated folders found. Using current date/time instead."
             CUSTOM_DATE=$(date '+%Y%m%d_%H%M%S')
-            OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATE}"
+            OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}"
             echo "Using current date/time: $CUSTOM_DATE"
             echo "Folder name: $OUTPUT_DIR"
         else
@@ -708,14 +711,36 @@ read -p "Choose option (1/2/3/4/5, default: 1): " DATE_OPTION
         
         # Use current date/time for new generation
         CUSTOM_DATE=$(date '+%Y%m%d_%H%M%S')
-        OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATE}"
+        OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}"
         echo "Using current date/time: $CUSTOM_DATE"
         echo "Folder name: $OUTPUT_DIR"
         echo "Starting fresh with clean environment."
+    elif [[ "$DATE_OPTION" == "6" ]]; then
+        # Custom folder name
+        echo ""
+        echo "Enter custom folder name (can be any string)"
+        echo "Examples:"
+        echo "  - 20250729_055123_cu16 (date with suffix)"
+        echo "  - hello_world (simple name)"
+        echo "  - experiment_v1_beta (descriptive name)"
+        echo "  - llama3_8b_test_run (model-specific name)"
+        read -p "Custom folder name: " CUSTOM_FOLDER_NAME
+        
+        # Validate folder name (no spaces, no special characters that could cause issues)
+        if [[ "$CUSTOM_FOLDER_NAME" =~ [\ /\\] ]]; then
+            echo "Error: Folder name cannot contain spaces, slashes, or backslashes."
+            echo "Please use underscores, hyphens, or alphanumeric characters only."
+            exit 1
+        fi
+        
+        CUSTOM_DATE="$CUSTOM_FOLDER_NAME"
+        OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_FOLDER_NAME}"
+        echo "Using custom folder name: $CUSTOM_FOLDER_NAME"
+        echo "Folder name: $OUTPUT_DIR"
     else
         # Default: use current date/time
         CUSTOM_DATE=$(date '+%Y%m%d_%H%M%S')
-        OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATE}"
+        OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}"
         echo "Using current date/time: $CUSTOM_DATE"
         echo "Folder name: $OUTPUT_DIR"
     fi
@@ -769,9 +794,9 @@ if [ -d "$OUTPUT_DIR" ]; then
             # Generate a new timestamp to avoid conflict
             if [ -n "$CUSTOM_DATE" ]; then
                 # Add a suffix to the custom date to avoid conflict
-                OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATE}_$(date +%H%M%S)"
+                OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}_$(date +%H%M%S)"
             else
-                OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_$(date +%H%M%S)"
+                OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_$(date +%H%M%S)"
             fi
             echo "Using new directory name: $OUTPUT_DIR"
         fi
