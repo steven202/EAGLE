@@ -1,4 +1,21 @@
 #!/bin/bash
+#SBATCH --job-name=cus_128
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=15
+#SBATCH --mem=62G
+#SBATCH --time=72:00:00
+#SBATCH --array=1
+#SBATCH --gres=gpu:1
+#SBATCH --output=outputs/cus_128_%A_%a.log
+#SBATCH --mail-user=cwang33@wm.edu
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --reservation=cwang33
+
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# source ~/anaconda3/etc/profile.d/conda.sh
+eval "$(conda shell.bash hook)"
+conda activate /sciclone/home/cwang33/.conda/envs/eagle-rl
 
 # OPTIMIZED EAGLE SB3 PPO Training & Multi-Benchmark Evaluation
 # This script demonstrates the optimized policy with:
