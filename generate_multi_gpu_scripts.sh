@@ -3,10 +3,16 @@
 # Multi-GPU Script Generator for EAGLE RL Training
 # This script generates multiple GPU-specific training scripts based on user preferences
 #
+# Features:
+#   - Pre-built combinations: 8 standard parameter combinations
+#   - Custom parameters: Define your own parameter combinations for each script
+#   - Multi-GPU support with round-robin or custom GPU assignment
+#   - Flexible date/time options and file handling
+#
 # Usage:
 #   bash generate_multi_gpu_scripts.sh                    # Interactive mode
-#   bash generate_multi_gpu_scripts.sh 1 2 3 4 5 6 7 8   # All combinations
-#   bash generate_multi_gpu_scripts.sh 1 3 5 7            # Specific combinations
+#   bash generate_multi_gpu_scripts.sh 1 2 3 4 5 6 7 8   # All pre-built combinations
+#   bash generate_multi_gpu_scripts.sh 1 3 5 7            # Specific pre-built combinations
 #   bash generate_multi_gpu_scripts.sh --datetime YYYYMMDD_HHMMSS 1 2 3 4  # With custom date/time
 #   bash generate_multi_gpu_scripts.sh --overwrite 1 2 3 4  # Overwrite existing scripts
 
@@ -16,11 +22,19 @@ echo ""
 # Show usage if no arguments provided
 if [ $# -eq 0 ]; then
     echo "Usage examples:"
-echo "  bash $0                    # Interactive mode (with file handling options)"
-echo "  bash $0 1 2 3 4 5 6 7 8   # All combinations"
-echo "  bash $0 1 3 5 7            # Specific combinations"
+echo "  bash $0                    # Interactive mode (choose pre-built or custom combinations)"
+echo "  bash $0 1 2 3 4 5 6 7 8   # Pre-built combinations (non-interactive)"
+echo "  bash $0 1 3 5 7            # Specific pre-built combinations"
 echo "  bash $0 --datetime 20250207_151418_cu18 1 2 3 4  # With custom date/time"
 echo "  bash $0 --overwrite 1 2 3 4  # Overwrite existing scripts (keep same date/time)"
+    echo ""
+    echo "Combination modes (interactive):"
+echo "  1. Pre-built combinations - 8 standard parameter combinations"
+echo "  2. Custom parameters - define your own parameter combinations for each script"
+    echo ""
+    echo "Custom parameter format (for mode 2):"
+echo "  6 space-separated values (0 or 1): 'RUN_STANDARD_VERSION RUN_OFL_VERSION RUN_STANDARD RUN_CONTEXT_ONLY RUN_MAX_ENTROPY RUN_NO_MAX_ENTROPY'"
+echo "  Example: '1 0 1 0 1 0' = Standard Version + Standard State + Max Entropy"
     echo ""
     echo "Date/Time options (interactive mode):"
 echo "  1. Use current date/time (default)"
@@ -64,6 +78,70 @@ if [ ! -f "${BASE_SCRIPT}.sh" ]; then
 fi
 echo "Using base script: ${BASE_SCRIPT}.sh"
 
+# Model Selection
+echo ""
+echo "=== Model Selection ==="
+echo "Available models:"
+echo "1. LLaMA3.1-8B (default) - meta-llama/Llama-3.1-8B-Instruct"
+echo "2. Vicuna-13B - lmsys/vicuna-13b-v1.3"
+echo "3. LLaMA3.3-70B - meta-llama/Llama-3.3-70B-Instruct"
+echo ""
+
+# Check for command line model selection
+MODEL_CHOICE=""
+if [ $# -gt 0 ]; then
+    # Non-interactive mode - use default model unless specified
+    MODEL_CHOICE=1
+    echo "Non-interactive mode: Using default LLaMA3.1-8B model"
+else
+    # Interactive mode - ask user
+    read -p "Choose model (1/2/3, default: 1): " MODEL_CHOICE
+    if [ -z "$MODEL_CHOICE" ]; then
+        MODEL_CHOICE=1
+        echo "Using default: LLaMA3.1-8B"
+    fi
+fi
+
+# Set model paths based on selection
+case $MODEL_CHOICE in
+    1)
+        MODEL_NAME="LLaMA3.1-8B"
+        MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
+        BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
+        GEN_SCRIPT="gen_ea_answer_llama3chat_rl"
+        BASELINE_SCRIPT="gen_baseline_answer_llama3chat"
+        ;;
+    2)
+        MODEL_NAME="Vicuna-13B"
+        MODEL_PATH="yuhuili/EAGLE3-Vicuna1.3-13B"
+        BASE_MODEL_PATH="lmsys/vicuna-13b-v1.3"
+        GEN_SCRIPT="gen_ea_answer_vicuna_rl"
+        BASELINE_SCRIPT="gen_baseline_answer_vicuna"
+        ;;
+    3)
+        MODEL_NAME="LLaMA3.3-70B"
+        MODEL_PATH="yuhuili/EAGLE3-LLaMA3.3-Instruct-70B"
+        BASE_MODEL_PATH="meta-llama/Llama-3.3-70B-Instruct"
+        GEN_SCRIPT="gen_ea_answer_llama3chat_rl"
+        BASELINE_SCRIPT="gen_baseline_answer_llama3chat"
+        ;;
+    *)
+        echo "Invalid model choice. Using default LLaMA3.1-8B"
+        MODEL_NAME="LLaMA3.1-8B"
+        MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
+        BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
+        GEN_SCRIPT="gen_ea_answer_llama3chat_rl"
+        BASELINE_SCRIPT="gen_baseline_answer_llama3chat"
+        ;;
+esac
+
+echo "Selected model: $MODEL_NAME"
+echo "  EAGLE model path: $MODEL_PATH"
+echo "  Base model path: $BASE_MODEL_PATH"
+echo "  Generation script: $GEN_SCRIPT"
+echo "  Baseline script: $BASELINE_SCRIPT"
+echo ""
+
 # Create a shorter prefix for generated files (first 15 characters)
 if [ ${#BASE_SCRIPT} -gt 7 ]; then
     FILE_PREFIX="${BASE_SCRIPT:0:7}"
@@ -82,31 +160,45 @@ fi
 # Function to get combination parameters
 get_combination_params() {
     local combo=$1
-    case $combo in
-        1) echo "1 0 1 0 1 0" ;;  # Standard Version + Standard State + Max Entropy
-        2) echo "1 0 1 0 0 1" ;;  # Standard Version + Standard State + No Max Entropy
-        3) echo "1 0 0 1 1 0" ;;  # Standard Version + Context Only + Max Entropy
-        4) echo "1 0 0 1 0 1" ;;  # Standard Version + Context Only + No Max Entropy
-        5) echo "0 1 1 0 1 0" ;;  # OFL Version + Standard State + Max Entropy
-        6) echo "0 1 1 0 0 1" ;;  # OFL Version + Standard State + No Max Entropy
-        7) echo "0 1 0 1 1 0" ;;  # OFL Version + Context Only + Max Entropy
-        8) echo "0 1 0 1 0 1" ;;  # OFL Version + Context Only + No Max Entropy
-    esac
+    if [ "$COMBINATION_MODE" -eq 1 ]; then
+        # Pre-built combinations mode
+        case $combo in
+            1) echo "1 0 1 0 1 0" ;;  # Standard Version + Standard State + Max Entropy
+            2) echo "1 0 1 0 0 1" ;;  # Standard Version + Standard State + No Max Entropy
+            3) echo "1 0 0 1 1 0" ;;  # Standard Version + Context Only + Max Entropy
+            4) echo "1 0 0 1 0 1" ;;  # Standard Version + Context Only + No Max Entropy
+            5) echo "0 1 1 0 1 0" ;;  # OFL Version + Standard State + Max Entropy
+            6) echo "0 1 1 0 0 1" ;;  # OFL Version + Standard State + No Max Entropy
+            7) echo "0 1 0 1 1 0" ;;  # OFL Version + Context Only + Max Entropy
+            8) echo "0 1 0 1 0 1" ;;  # OFL Version + Context Only + No Max Entropy
+        esac
+    else
+        # Custom parameters mode
+        local index=$((combo - 1))
+        echo "${CUSTOM_PARAMETERS[$index]}"
+    fi
 }
 
 # Function to get combination description
 get_combination_desc() {
     local combo=$1
-    case $combo in
-        1) echo "standard_hiddstat_maxent" ;;
-        2) echo "standard_hiddstat_noent" ;;
-        3) echo "standard_context_maxent" ;;
-        4) echo "standard_context_noent" ;;
-        5) echo "ofl_hiddstat_maxent" ;;
-        6) echo "ofl_hiddstat_noent" ;;
-        7) echo "ofl_context_maxent" ;;
-        8) echo "ofl_context_noent" ;;
-    esac
+    if [ "$COMBINATION_MODE" -eq 1 ]; then
+        # Pre-built combinations mode
+        case $combo in
+            1) echo "standard_hiddstat_maxent" ;;
+            2) echo "standard_hiddstat_noent" ;;
+            3) echo "standard_context_maxent" ;;
+            4) echo "standard_context_noent" ;;
+            5) echo "ofl_hiddstat_maxent" ;;
+            6) echo "ofl_hiddstat_noent" ;;
+            7) echo "ofl_context_maxent" ;;
+            8) echo "ofl_context_noent" ;;
+        esac
+    else
+        # Custom parameters mode
+        local index=$((combo - 1))
+        echo "${CUSTOM_DESCRIPTIONS[$index]}"
+    fi
 }
 
 # GPU Assignment Configuration (will be configured after combinations are selected)
@@ -115,51 +207,190 @@ declare -a GPU_ASSIGNMENTS
 
 # Define all possible combinations
 declare -a COMBINATIONS=()
+declare -a CUSTOM_PARAMETERS=()  # For storing custom parameter combinations
+declare -a CUSTOM_DESCRIPTIONS=()  # For storing custom descriptions
 
-echo ""
-echo "Available combinations:"
-echo "1. Standard Version + Standard State + Max Entropy"
-echo "2. Standard Version + Standard State + No Max Entropy"
-echo "3. Standard Version + Context Only + Max Entropy"
-echo "4. Standard Version + Context Only + No Max Entropy"
-echo "5. OFL Version + Standard State + Max Entropy"
-echo "6. OFL Version + Standard State + No Max Entropy"
-echo "7. OFL Version + Context Only + Max Entropy"
-echo "8. OFL Version + Context Only + No Max Entropy"
-echo ""
-
-# Check for command line arguments
+# Check if command line arguments are provided (force pre-built mode)
 if [ $# -gt 0 ]; then
-    SELECTED_COMBINATIONS="$*"
-    echo "Using command line arguments: $SELECTED_COMBINATIONS"
+    COMBINATION_MODE=1
+    echo "Command line arguments detected. Using pre-built combinations mode."
 else
-    # Get user selection
     echo ""
-    echo "Enter combination numbers to run:"
-    echo "  - Enter 'all' for all 8 combinations"
-    echo "  - Enter specific numbers (space-separated, e.g., 1 3 5 7)"
-    echo "  - Enter '1 2 3 4 5 6 7 8' for all combinations"
-    echo "  - Press Enter for default (all 8 combinations)"
-    read -p "Your choice: " SELECTED_COMBINATIONS
-    
-    # Set default if empty
-    if [ -z "$SELECTED_COMBINATIONS" ]; then
-        SELECTED_COMBINATIONS="1 2 3 4 5 6 7 8"
-        echo "Using default: $SELECTED_COMBINATIONS"
+    echo "=== Combination Mode Selection ==="
+    echo "Choose how to define parameter combinations:"
+    echo "1. Use pre-built combinations (default) - 8 standard combinations"
+    echo "2. Define custom parameters for each script"
+    echo ""
+    read -p "Choose mode (1/2, default: 1): " COMBINATION_MODE
+
+    if [ -z "$COMBINATION_MODE" ]; then
+        COMBINATION_MODE=1
+        echo "Using default: Pre-built combinations"
     fi
 fi
 
-# Parse selected combinations
-if [[ "$SELECTED_COMBINATIONS" == "all" ]]; then
-    COMBINATIONS=(1 2 3 4 5 6 7 8)
-else
-    for combo in $SELECTED_COMBINATIONS; do
-        if [ "$combo" -ge 1 ] && [ "$combo" -le 8 ]; then
-            COMBINATIONS+=($combo)
-        else
-            echo "Warning: Invalid combination number $combo, skipping..."
+if [ "$COMBINATION_MODE" -eq 1 ]; then
+    # Pre-built combinations mode
+    echo ""
+    echo "Available pre-built combinations:"
+    echo "1. Standard Version + Standard State + Max Entropy"
+    echo "2. Standard Version + Standard State + No Max Entropy"
+    echo "3. Standard Version + Context Only + Max Entropy"
+    echo "4. Standard Version + Context Only + No Max Entropy"
+    echo "5. OFL Version + Standard State + Max Entropy"
+    echo "6. OFL Version + Standard State + No Max Entropy"
+    echo "7. OFL Version + Context Only + Max Entropy"
+    echo "8. OFL Version + Context Only + No Max Entropy"
+    echo ""
+
+    # Check for command line arguments
+    if [ $# -gt 0 ]; then
+        SELECTED_COMBINATIONS="$*"
+        echo "Using command line arguments: $SELECTED_COMBINATIONS"
+    else
+        # Get user selection
+        echo ""
+        echo "Enter combination numbers to run:"
+        echo "  - Enter 'all' for all 8 combinations"
+        echo "  - Enter specific numbers (space-separated, e.g., 1 3 5 7)"
+        echo "  - Enter '1 2 3 4 5 6 7 8' for all combinations"
+        echo "  - Press Enter for default (all 8 combinations)"
+        read -p "Your choice: " SELECTED_COMBINATIONS
+        
+        # Set default if empty
+        if [ -z "$SELECTED_COMBINATIONS" ]; then
+            SELECTED_COMBINATIONS="1 2 3 4 5 6 7 8"
+            echo "Using default: $SELECTED_COMBINATIONS"
         fi
+    fi
+elif [ "$COMBINATION_MODE" -eq 2 ]; then
+    # Custom parameters mode
+    echo ""
+    echo "=== Custom Parameters Mode ==="
+    echo "You will define custom parameter combinations for each script."
+    echo ""
+    echo "Parameter format: 6 space-separated values (0 or 1)"
+    echo "Position 1: RUN_STANDARD_VERSION (1=yes, 0=no)"
+    echo "Position 2: RUN_OFL_VERSION (1=yes, 0=no)"
+    echo "Position 3: RUN_STANDARD (1=yes, 0=no) - standard state"
+    echo "Position 4: RUN_CONTEXT_ONLY (1=yes, 0=no) - context only state"
+    echo "Position 5: RUN_MAX_ENTROPY (1=yes, 0=no) - max entropy PPO"
+    echo "Position 6: RUN_NO_MAX_ENTROPY (1=yes, 0=no) - no max entropy PPO"
+    echo ""
+    echo "Examples:"
+    echo "  '1 0 1 0 1 0' = Standard Version + Standard State + Max Entropy"
+    echo "  '0 1 1 0 0 1' = OFL Version + Standard State + No Max Entropy"
+    echo "  '1 0 0 1 1 1' = Standard Version + Context Only + Both Entropy modes"
+    echo ""
+    
+    read -p "How many custom scripts do you want to generate? " NUM_CUSTOM_SCRIPTS
+    
+    if ! [[ "$NUM_CUSTOM_SCRIPTS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: Invalid number of scripts. Please enter a positive integer."
+        exit 1
+    fi
+    
+    # Collect custom parameters for each script
+    for ((i=1; i<=NUM_CUSTOM_SCRIPTS; i++)); do
+        echo ""
+        echo "Script $i/$NUM_CUSTOM_SCRIPTS:"
+        read -p "Enter parameters (6 values, e.g., '1 0 1 0 1 0'): " CUSTOM_PARAMS
+        
+        # Validate input
+        read -r p1 p2 p3 p4 p5 p6 <<< "$CUSTOM_PARAMS"
+        if [[ ! "$p1" =~ ^[01]$ ]] || [[ ! "$p2" =~ ^[01]$ ]] || [[ ! "$p3" =~ ^[01]$ ]] || \
+           [[ ! "$p4" =~ ^[01]$ ]] || [[ ! "$p5" =~ ^[01]$ ]] || [[ ! "$p6" =~ ^[01]$ ]]; then
+            echo "Error: Invalid parameters. Each value must be 0 or 1."
+            echo "You entered: '$CUSTOM_PARAMS'"
+            exit 1
+        fi
+        
+        # Basic validation: at least one version should be selected
+        if [ "$p1" -eq 0 ] && [ "$p2" -eq 0 ]; then
+            echo "Error: At least one version (Standard or OFL) must be selected."
+            exit 1
+        fi
+        
+        # Basic validation: at least one state type should be selected
+        if [ "$p3" -eq 0 ] && [ "$p4" -eq 0 ]; then
+            echo "Error: At least one state type (Standard or Context Only) must be selected."
+            exit 1
+        fi
+        
+        # Basic validation: at least one entropy mode should be selected
+        if [ "$p5" -eq 0 ] && [ "$p6" -eq 0 ]; then
+            echo "Error: At least one entropy mode (Max Entropy or No Max Entropy) must be selected."
+            exit 1
+        fi
+        
+        # Store parameters and create description
+        CUSTOM_PARAMETERS+=("$CUSTOM_PARAMS")
+        
+        # Generate description
+        VERSION_DESC=""
+        if [ "$p1" -eq 1 ] && [ "$p2" -eq 1 ]; then
+            VERSION_DESC="both"
+        elif [ "$p1" -eq 1 ]; then
+            VERSION_DESC="standard"
+        elif [ "$p2" -eq 1 ]; then
+            VERSION_DESC="ofl"
+        fi
+        
+        STATE_DESC=""
+        if [ "$p3" -eq 1 ] && [ "$p4" -eq 1 ]; then
+            STATE_DESC="allstat"
+        elif [ "$p3" -eq 1 ]; then
+            STATE_DESC="hiddstat"
+        elif [ "$p4" -eq 1 ]; then
+            STATE_DESC="context"
+        fi
+        
+        ENTROPY_DESC=""
+        if [ "$p5" -eq 1 ] && [ "$p6" -eq 1 ]; then
+            ENTROPY_DESC="allent"
+        elif [ "$p5" -eq 1 ]; then
+            ENTROPY_DESC="maxent"
+        elif [ "$p6" -eq 1 ]; then
+            ENTROPY_DESC="noent"
+        fi
+        
+        FULL_DESC="${VERSION_DESC}_${STATE_DESC}_${ENTROPY_DESC}"
+        CUSTOM_DESCRIPTIONS+=("$FULL_DESC")
+        
+        echo "  Parameters: $CUSTOM_PARAMS"
+        echo "  Description: $FULL_DESC"
     done
+    
+    # Set COMBINATIONS array for custom mode (using indices)
+    for ((i=1; i<=NUM_CUSTOM_SCRIPTS; i++)); do
+        COMBINATIONS+=($i)
+    done
+    
+    echo ""
+    echo "Custom parameter combinations defined:"
+    for i in "${!CUSTOM_PARAMETERS[@]}"; do
+        echo "  Script $((i+1)): ${CUSTOM_PARAMETERS[$i]} (${CUSTOM_DESCRIPTIONS[$i]})"
+    done
+    
+    SELECTED_COMBINATIONS="${COMBINATIONS[*]}"
+else
+    echo "Invalid combination mode. Using default pre-built combinations."
+    COMBINATION_MODE=1
+fi
+
+# Parse selected combinations (only for pre-built mode)
+if [ "$COMBINATION_MODE" -eq 1 ]; then
+    if [[ "$SELECTED_COMBINATIONS" == "all" ]]; then
+        COMBINATIONS=(1 2 3 4 5 6 7 8)
+    else
+        for combo in $SELECTED_COMBINATIONS; do
+            if [ "$combo" -ge 1 ] && [ "$combo" -le 8 ]; then
+                COMBINATIONS+=($combo)
+            else
+                echo "Warning: Invalid combination number $combo, skipping..."
+            fi
+        done
+    fi
 fi
 
 if [ ${#COMBINATIONS[@]} -eq 0 ]; then
@@ -168,7 +399,11 @@ if [ ${#COMBINATIONS[@]} -eq 0 ]; then
 fi
 
 echo ""
-echo "Selected combinations: ${COMBINATIONS[*]}"
+if [ "$COMBINATION_MODE" -eq 1 ]; then
+    echo "Selected pre-built combinations: ${COMBINATIONS[*]}"
+else
+    echo "Using custom parameter combinations for ${#COMBINATIONS[@]} scripts"
+fi
 echo "Number of scripts to generate: ${#COMBINATIONS[@]}"
 echo "Available GPUs: $NUM_GPUS"
 
@@ -176,13 +411,27 @@ echo "Available GPUs: $NUM_GPUS"
 NEED_STANDARD_VERSION=false
 NEED_OFL_VERSION=false
 
-for combo in "${COMBINATIONS[@]}"; do
-    if [ "$combo" -ge 1 ] && [ "$combo" -le 4 ]; then
-        NEED_STANDARD_VERSION=true
-    elif [ "$combo" -ge 5 ] && [ "$combo" -le 8 ]; then
-        NEED_OFL_VERSION=true
-    fi
-done
+if [ "$COMBINATION_MODE" -eq 1 ]; then
+    # Pre-built combinations mode
+    for combo in "${COMBINATIONS[@]}"; do
+        if [ "$combo" -ge 1 ] && [ "$combo" -le 4 ]; then
+            NEED_STANDARD_VERSION=true
+        elif [ "$combo" -ge 5 ] && [ "$combo" -le 8 ]; then
+            NEED_OFL_VERSION=true
+        fi
+    done
+else
+    # Custom parameters mode - check custom parameters
+    for params in "${CUSTOM_PARAMETERS[@]}"; do
+        read -r p1 p2 p3 p4 p5 p6 <<< "$params"
+        if [ "$p1" -eq 1 ]; then
+            NEED_STANDARD_VERSION=true
+        fi
+        if [ "$p2" -eq 1 ]; then
+            NEED_OFL_VERSION=true
+        fi
+    done
+fi
 
 # Get network architecture configurations (only for needed versions)
 echo ""
@@ -588,6 +837,21 @@ for i in "${!COMBINATIONS[@]}"; do
     sed -i "s/RUN_MAX_ENTROPY=.*/RUN_MAX_ENTROPY=$RUN_MAX_ENTROPY       # Run with max-entropy PPO/" "$OUTPUT_DIR/$script_name"
     sed -i "s/RUN_NO_MAX_ENTROPY=.*/RUN_NO_MAX_ENTROPY=$RUN_NO_MAX_ENTROPY    # Run without max-entropy (standard PPO)/" "$OUTPUT_DIR/$script_name"
     
+    # Replace model paths based on selection
+    sed -i "s|MODEL_PATH=\".*\"|MODEL_PATH=\"$MODEL_PATH\"|" "$OUTPUT_DIR/$script_name"
+    sed -i "s|BASE_MODEL_PATH=\".*\"|BASE_MODEL_PATH=\"$BASE_MODEL_PATH\"|" "$OUTPUT_DIR/$script_name"
+    
+    # Replace generation script modules for different model types
+    sed -i "s/gen_ea_answer_llama3chat_rl/$GEN_SCRIPT/g" "$OUTPUT_DIR/$script_name"
+    # Handle the non-RL version replacement carefully
+    if [[ "$GEN_SCRIPT" == "gen_ea_answer_vicuna_rl" ]]; then
+        sed -i "s/gen_ea_answer_llama3chat/gen_ea_answer_vicuna/g" "$OUTPUT_DIR/$script_name"
+    elif [[ "$GEN_SCRIPT" == "gen_ea_answer_llama3chat_rl" ]]; then
+        # Keep as is for LLaMA models
+        :
+    fi
+    sed -i "s/gen_baseline_answer_llama3chat/$BASELINE_SCRIPT/g" "$OUTPUT_DIR/$script_name"
+    
     # Replace network architecture arguments based on policy version
     if [ "$RUN_STANDARD_VERSION" -eq 1 ] && [ "$RUN_OFL_VERSION" -eq 0 ]; then
         # Only standard version - replace all --ppo-net-arch with standard architecture
@@ -635,20 +899,21 @@ for i in "${!COMBINATIONS[@]}"; do
         sed -i "1i# Generated script for GPU $gpu_id, Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
     fi
     sed -i "2i# Original script: ${BASE_SCRIPT}.sh" "$OUTPUT_DIR/$script_name"
+    sed -i "3i# Model: $MODEL_NAME ($MODEL_PATH)" "$OUTPUT_DIR/$script_name"
     if [ -n "$CUSTOM_DATE" ]; then
-        sed -i "3i# Generated on: $CUSTOM_DATE" "$OUTPUT_DIR/$script_name"
+        sed -i "4i# Generated on: $CUSTOM_DATE" "$OUTPUT_DIR/$script_name"
     else
-        sed -i "3i# Generated on: $(date)" "$OUTPUT_DIR/$script_name"
+        sed -i "4i# Generated on: $(date)" "$OUTPUT_DIR/$script_name"
     fi
     # Add network architecture info to script header
     if [ "$NEED_STANDARD_VERSION" = true ] && [ "$NEED_OFL_VERSION" = true ]; then
-        sed -i "4i# Network Architecture - Standard: $STANDARD_NET_ARCH, OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
+        sed -i "5i# Network Architecture - Standard: $STANDARD_NET_ARCH, OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
     elif [ "$NEED_STANDARD_VERSION" = true ]; then
-        sed -i "4i# Network Architecture - Standard: $STANDARD_NET_ARCH" "$OUTPUT_DIR/$script_name"
+        sed -i "5i# Network Architecture - Standard: $STANDARD_NET_ARCH" "$OUTPUT_DIR/$script_name"
     elif [ "$NEED_OFL_VERSION" = true ]; then
-        sed -i "4i# Network Architecture - OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
+        sed -i "5i# Network Architecture - OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
     fi
-    sed -i "5i#" "$OUTPUT_DIR/$script_name"
+    sed -i "6i#" "$OUTPUT_DIR/$script_name"
 done
 
 # Create a master script to run all generated scripts
@@ -656,6 +921,7 @@ MASTER_SCRIPT="$OUTPUT_DIR/run_all_scripts.sh"
 echo "#!/bin/bash" > "$MASTER_SCRIPT"
 echo "" >> "$MASTER_SCRIPT"
 echo "# Master script to run all generated GPU scripts" >> "$MASTER_SCRIPT"
+echo "# Model: $MODEL_NAME ($MODEL_PATH)" >> "$MASTER_SCRIPT"
 if [ -n "$CUSTOM_DATE" ]; then
     echo "# Generated on: $CUSTOM_DATE" >> "$MASTER_SCRIPT"
 else
@@ -771,6 +1037,7 @@ LAUNCHER_SCRIPT="$OUTPUT_DIR/launch.sh"
 echo "#!/bin/bash" > "$LAUNCHER_SCRIPT"
 echo "" >> "$LAUNCHER_SCRIPT"
 echo "# Simple launcher for EAGLE RL Multi-GPU Training" >> "$LAUNCHER_SCRIPT"
+echo "# Model: $MODEL_NAME ($MODEL_PATH)" >> "$LAUNCHER_SCRIPT"
 echo "# Usage: bash launch.sh" >> "$LAUNCHER_SCRIPT"
 if [ -n "$CUSTOM_DATE" ]; then
     echo "# Generated on: $CUSTOM_DATE" >> "$LAUNCHER_SCRIPT"
@@ -800,6 +1067,10 @@ else
     echo "Generated on: $(date)" >> "$SUMMARY_FILE"
 fi
 echo "Base script: ${BASE_SCRIPT}.sh" >> "$SUMMARY_FILE"
+echo "Model: $MODEL_NAME ($MODEL_PATH)" >> "$SUMMARY_FILE"
+echo "Base model: $BASE_MODEL_PATH" >> "$SUMMARY_FILE"
+echo "Generation script: $GEN_SCRIPT" >> "$SUMMARY_FILE"
+echo "Baseline script: $BASELINE_SCRIPT" >> "$SUMMARY_FILE"
 echo "Number of GPUs: $NUM_GPUS" >> "$SUMMARY_FILE"
 echo "Number of scripts: ${#COMBINATIONS[@]}" >> "$SUMMARY_FILE"
 if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
@@ -816,7 +1087,13 @@ if [ "$NEED_OFL_VERSION" = true ]; then
     echo "  OFL Version: $OFL_NET_ARCH" >> "$SUMMARY_FILE"
 fi
 echo "" >> "$SUMMARY_FILE"
-echo "Selected combinations:" >> "$SUMMARY_FILE"
+if [ "$COMBINATION_MODE" -eq 1 ]; then
+    echo "Mode: Pre-built combinations" >> "$SUMMARY_FILE"
+    echo "Selected combinations:" >> "$SUMMARY_FILE"
+else
+    echo "Mode: Custom parameter combinations" >> "$SUMMARY_FILE"
+    echo "Custom parameter combinations:" >> "$SUMMARY_FILE"
+fi
 for i in "${!COMBINATIONS[@]}"; do
     combo=${COMBINATIONS[$i]}
     desc=$(get_combination_desc $combo)
@@ -830,11 +1107,21 @@ for i in "${!COMBINATIONS[@]}"; do
             gpu_id_display="${GPUS[0]}"
         fi
         script_name="${FILE_PREFIX}__gpu${gpu_id_display}_${desc}_${combo}.sh"
-        echo "  Script $((i+1)): $script_name (GPUs: [$gpu_assignment], $desc)" >> "$SUMMARY_FILE"
+        if [ "$COMBINATION_MODE" -eq 1 ]; then
+            echo "  Script $((i+1)): $script_name (GPUs: [$gpu_assignment], $desc)" >> "$SUMMARY_FILE"
+        else
+            params=$(get_combination_params $combo)
+            echo "  Script $((i+1)): $script_name (GPUs: [$gpu_assignment], $desc, params: $params)" >> "$SUMMARY_FILE"
+        fi
     else
         gpu_id=$((i % NUM_GPUS))
         script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}_${combo}.sh"
-        echo "  Script $((i+1)): $script_name (GPU $gpu_id, $desc)" >> "$SUMMARY_FILE"
+        if [ "$COMBINATION_MODE" -eq 1 ]; then
+            echo "  Script $((i+1)): $script_name (GPU $gpu_id, $desc)" >> "$SUMMARY_FILE"
+        else
+            params=$(get_combination_params $combo)
+            echo "  Script $((i+1)): $script_name (GPU $gpu_id, $desc, params: $params)" >> "$SUMMARY_FILE"
+        fi
     fi
 done
 echo "" >> "$SUMMARY_FILE"
@@ -907,6 +1194,17 @@ echo ""
 echo "Master script: $MASTER_SCRIPT"
 echo "Launcher script: $LAUNCHER_SCRIPT"
 echo "Summary file: $SUMMARY_FILE"
+echo ""
+echo "Configuration Summary:"
+if [ "$COMBINATION_MODE" -eq 1 ]; then
+    echo "  Combination Mode: Pre-built combinations"
+else
+    echo "  Combination Mode: Custom parameter combinations"
+fi
+echo "  Selected Model: $MODEL_NAME"
+echo "  Model Path: $MODEL_PATH"
+echo "  Base Model Path: $BASE_MODEL_PATH"
+echo "  Generation Script: $GEN_SCRIPT"
 echo ""
 echo "Network Architecture Configuration:"
 if [ "$NEED_STANDARD_VERSION" = true ]; then
