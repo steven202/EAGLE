@@ -1,7 +1,7 @@
 """Generate answers with local models.
 
 Usage:
-python    # Enhanced question handling for online RL training vs inference
+zpython    # Enhanced question handling for online RL training vs inference
     if args.use_online_rl and not args.online_inference_only:
         # Training mode: repeat and shuffle questions for diverse training data
         original_count = len(questions)
