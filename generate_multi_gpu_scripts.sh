@@ -16,18 +16,18 @@ echo ""
 # Show usage if no arguments provided
 if [ $# -eq 0 ]; then
     echo "Usage examples:"
-    echo "  bash $0                    # Interactive mode (with file handling options)"
-    echo "  bash $0 1 2 3 4 5 6 7 8   # All combinations"
-    echo "  bash $0 1 3 5 7            # Specific combinations"
-    echo "  bash $0 --datetime 20241201_143052 1 2 3 4  # With custom date/time"
-    echo "  bash $0 --overwrite 1 2 3 4  # Overwrite existing scripts (keep same date/time)"
+echo "  bash $0                    # Interactive mode (with file handling options)"
+echo "  bash $0 1 2 3 4 5 6 7 8   # All combinations"
+echo "  bash $0 1 3 5 7            # Specific combinations"
+echo "  bash $0 --datetime 20250207_151418_cu18 1 2 3 4  # With custom date/time"
+echo "  bash $0 --overwrite 1 2 3 4  # Overwrite existing scripts (keep same date/time)"
     echo ""
     echo "Date/Time options (interactive mode):"
-    echo "  1. Use current date/time (default)"
-    echo "  2. Specify custom date/time"
-    echo "  3. Use simple folder name (no date/time)"
-    echo "  4. Overwrite existing scripts (keep same date/time)"
-    echo "  5. Delete old files and start fresh"
+echo "  1. Use current date/time (default)"
+echo "  2. Specify custom date/time (any string allowed)"
+echo "  3. Use simple folder name (no date/time)"
+echo "  4. Overwrite existing scripts (keep same date/time)"
+echo "  5. Delete old files and start fresh"
     echo ""
     echo "File handling options (when existing scripts found):"
     echo "  1. Keep old files (default) - new scripts alongside existing ones"
@@ -41,49 +41,10 @@ CUSTOM_DATETIME_ARG=""
 OVERWRITE_MODE=false
 if [ $# -gt 0 ] && [ "$1" == "--datetime" ]; then
     if [ $# -lt 2 ]; then
-        echo "Error: --datetime requires a date/time argument in format YYYYMMDD_HHMMSS"
+        echo "Error: --datetime requires a date/time argument"
         exit 1
     fi
     CUSTOM_DATETIME_ARG="$2"
-    # Validate the format
-    if [[ ! "$CUSTOM_DATETIME_ARG" =~ ^[0-9]{8}_[0-9]{6}$ ]]; then
-        echo "Error: Invalid date/time format. Please use YYYYMMDD_HHMMSS format."
-        exit 1
-    fi
-    
-    # Extract components for validation
-    YEAR=${CUSTOM_DATETIME_ARG:0:4}
-    MONTH=${CUSTOM_DATETIME_ARG:4:2}
-    DAY=${CUSTOM_DATETIME_ARG:6:2}
-    HOUR=${CUSTOM_DATETIME_ARG:9:2}
-    MINUTE=${CUSTOM_DATETIME_ARG:11:2}
-    SECOND=${CUSTOM_DATETIME_ARG:13:2}
-    
-    # Basic validation
-    if [ "$YEAR" -lt 2000 ] || [ "$YEAR" -gt 2100 ]; then
-        echo "Error: Year must be between 2000 and 2100"
-        exit 1
-    fi
-    if [ "$MONTH" -lt 1 ] || [ "$MONTH" -gt 12 ]; then
-        echo "Error: Month must be between 01 and 12"
-        exit 1
-    fi
-    if [ "$DAY" -lt 1 ] || [ "$DAY" -gt 31 ]; then
-        echo "Error: Day must be between 01 and 31"
-        exit 1
-    fi
-    if [ "$HOUR" -gt 23 ]; then
-        echo "Error: Hour must be between 00 and 23"
-        exit 1
-    fi
-    if [ "$MINUTE" -gt 59 ]; then
-        echo "Error: Minute must be between 00 and 59"
-        exit 1
-    fi
-    if [ "$SECOND" -gt 59 ]; then
-        echo "Error: Second must be between 00 and 59"
-        exit 1
-    fi
     
     echo "Using command-line specified date/time: $CUSTOM_DATETIME_ARG"
     # Remove the --datetime and its argument from the command line
@@ -117,6 +78,40 @@ if [ -z "$NUM_GPUS" ]; then
     NUM_GPUS=4
     echo "Using default: $NUM_GPUS GPUs"
 fi
+
+# Function to get combination parameters
+get_combination_params() {
+    local combo=$1
+    case $combo in
+        1) echo "1 0 1 0 1 0" ;;  # Standard Version + Standard State + Max Entropy
+        2) echo "1 0 1 0 0 1" ;;  # Standard Version + Standard State + No Max Entropy
+        3) echo "1 0 0 1 1 0" ;;  # Standard Version + Context Only + Max Entropy
+        4) echo "1 0 0 1 0 1" ;;  # Standard Version + Context Only + No Max Entropy
+        5) echo "0 1 1 0 1 0" ;;  # OFL Version + Standard State + Max Entropy
+        6) echo "0 1 1 0 0 1" ;;  # OFL Version + Standard State + No Max Entropy
+        7) echo "0 1 0 1 1 0" ;;  # OFL Version + Context Only + Max Entropy
+        8) echo "0 1 0 1 0 1" ;;  # OFL Version + Context Only + No Max Entropy
+    esac
+}
+
+# Function to get combination description
+get_combination_desc() {
+    local combo=$1
+    case $combo in
+        1) echo "standard_hiddstat_maxent" ;;
+        2) echo "standard_hiddstat_noent" ;;
+        3) echo "standard_context_maxent" ;;
+        4) echo "standard_context_noent" ;;
+        5) echo "ofl_hiddstat_maxent" ;;
+        6) echo "ofl_hiddstat_noent" ;;
+        7) echo "ofl_context_maxent" ;;
+        8) echo "ofl_context_noent" ;;
+    esac
+}
+
+# GPU Assignment Configuration (will be configured after combinations are selected)
+GPU_ASSIGNMENT_METHOD=1  # Default to round-robin
+declare -a GPU_ASSIGNMENTS
 
 # Define all possible combinations
 declare -a COMBINATIONS=()
@@ -177,6 +172,142 @@ echo "Selected combinations: ${COMBINATIONS[*]}"
 echo "Number of scripts to generate: ${#COMBINATIONS[@]}"
 echo "Available GPUs: $NUM_GPUS"
 
+# Determine which policy versions are needed based on selected combinations
+NEED_STANDARD_VERSION=false
+NEED_OFL_VERSION=false
+
+for combo in "${COMBINATIONS[@]}"; do
+    if [ "$combo" -ge 1 ] && [ "$combo" -le 4 ]; then
+        NEED_STANDARD_VERSION=true
+    elif [ "$combo" -ge 5 ] && [ "$combo" -le 8 ]; then
+        NEED_OFL_VERSION=true
+    fi
+done
+
+# Get network architecture configurations (only for needed versions)
+echo ""
+echo "=== Network Architecture Configuration ==="
+echo ""
+
+# Standard version network architecture (only if needed)
+if [ "$NEED_STANDARD_VERSION" = true ]; then
+    echo "Standard Version Network Architecture:"
+    echo "  - Format: comma-separated integers (e.g., '64,64' or '512,256,128')"
+    echo "  - Default: '64,64'"
+    read -p "Enter network architecture for standard version (default: 64,64): " STANDARD_NET_ARCH
+    if [ -z "$STANDARD_NET_ARCH" ]; then
+        STANDARD_NET_ARCH="64,64"
+        echo "Using default: $STANDARD_NET_ARCH"
+    fi
+    echo ""
+else
+    STANDARD_NET_ARCH="64,64"  # Default value (won't be used)
+fi
+
+# OFL version network architecture (only if needed)
+if [ "$NEED_OFL_VERSION" = true ]; then
+    echo "OFL Version Network Architecture:"
+    echo "  - Format: '64,64' for same pi/vf or '64,64;128,128' for different pi/vf"
+    echo "  - Default: '64,64;64,64'"
+    read -p "Enter network architecture for OFL version (default: 64,64;64,64): " OFL_NET_ARCH
+    if [ -z "$OFL_NET_ARCH" ]; then
+        OFL_NET_ARCH="64,64;64,64"
+        echo "Using default: $OFL_NET_ARCH"
+    fi
+    echo ""
+else
+    OFL_NET_ARCH="64,64;64,64"  # Default value (won't be used)
+fi
+
+# Show summary only for the versions that will be used
+echo "Network Architecture Summary:"
+if [ "$NEED_STANDARD_VERSION" = true ]; then
+    echo "  - Standard Version: $STANDARD_NET_ARCH"
+fi
+if [ "$NEED_OFL_VERSION" = true ]; then
+    echo "  - OFL Version: $OFL_NET_ARCH"
+fi
+echo ""
+
+# GPU Assignment Configuration
+echo ""
+echo "=== GPU Assignment Configuration ==="
+echo "Choose GPU assignment method:"
+echo "1. Automatic round-robin assignment (default) - scripts distributed evenly across GPUs"
+echo "2. Custom GPU assignment - specify exact GPU assignments for each script"
+read -p "Choose assignment method (1/2, default: 1): " GPU_ASSIGNMENT_METHOD
+
+if [ -z "$GPU_ASSIGNMENT_METHOD" ]; then
+    GPU_ASSIGNMENT_METHOD=1
+    echo "Using default: Automatic round-robin assignment"
+fi
+
+if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+    echo ""
+    echo "Custom GPU Assignment Mode"
+    echo "=========================="
+    echo "Enter GPU assignments for each script in the format: gpu1,gpu2;gpu3,gpu4;gpu5;gpu6,gpu7,gpu8"
+    echo "Examples:"
+    echo "  - '0,1;2,3;4,5;6,7,8,9' for 4 scripts with different GPU allocations"
+    echo "  - '0;1;2;3' for 4 scripts, each using 1 GPU"
+    echo "  - '0,1,2;3,4,5;6,7;8,9' for 4 scripts with varying GPU counts"
+    echo "  - '-1;0;1;2' for 4 scripts, first script uses no GPU (CPU only)"
+    echo ""
+    echo "Rules:"
+    echo "  - Use semicolon (;) to separate different scripts"
+    echo "  - Use comma (,) to separate multiple GPUs for one script"
+    echo "  - Use -1 to indicate no GPU (CPU only)"
+    echo "  - GPU numbers should be 0-based and less than $NUM_GPUS"
+    echo "  - You must provide exactly ${#COMBINATIONS[@]} assignments"
+    echo ""
+    
+    read -p "Enter GPU assignments: " CUSTOM_GPU_ASSIGNMENT
+    
+    # Parse the custom GPU assignment
+    IFS=';' read -ra SCRIPT_ASSIGNMENTS <<< "$CUSTOM_GPU_ASSIGNMENT"
+    
+    if [ ${#SCRIPT_ASSIGNMENTS[@]} -ne ${#COMBINATIONS[@]} ]; then
+        echo "Error: Expected ${#COMBINATIONS[@]} GPU assignments, but got ${#SCRIPT_ASSIGNMENTS[@]}"
+        exit 1
+    fi
+    
+    # Validate each assignment
+    for i in "${!SCRIPT_ASSIGNMENTS[@]}"; do
+        assignment="${SCRIPT_ASSIGNMENTS[$i]}"
+        IFS=',' read -ra GPUS <<< "$assignment"
+        
+        for gpu in "${GPUS[@]}"; do
+            if [ "$gpu" != "-1" ]; then
+                if ! [[ "$gpu" =~ ^[0-9]+$ ]]; then
+                    echo "Error: Invalid GPU number '$gpu' in assignment $((i+1))"
+                    exit 1
+                fi
+                if [ "$gpu" -ge "$NUM_GPUS" ]; then
+                    echo "Error: GPU $gpu is out of range (0-$((NUM_GPUS-1))) in assignment $((i+1))"
+                    exit 1
+                fi
+            fi
+        done
+        
+        # Store the assignment
+        GPU_ASSIGNMENTS[$i]="$assignment"
+    done
+    
+    echo ""
+    echo "Custom GPU assignments validated:"
+    for i in "${!COMBINATIONS[@]}"; do
+        combo=${COMBINATIONS[$i]}
+        desc=$(get_combination_desc $combo)
+        echo "  Script $((i+1)) (Combination $combo - $desc): GPUs [${GPU_ASSIGNMENTS[$i]}]"
+    done
+else
+    echo "Using automatic round-robin assignment"
+    # Initialize with round-robin assignment (will be set later)
+    for i in "${!COMBINATIONS[@]}"; do
+        GPU_ASSIGNMENTS[$i]=""
+    done
+fi
+
 # Handle date/time selection
 if [ "$OVERWRITE_MODE" == true ]; then
     # Overwrite mode - find the most recent generated folder
@@ -193,28 +324,18 @@ if [ "$OVERWRITE_MODE" == true ]; then
         echo "Using current date/time: $CUSTOM_DATE"
         echo "Folder name: $OUTPUT_DIR"
     else
-        # Use the most recent folder
+        # Use the most recent folder (first in sorted list)
         MOST_RECENT_FOLDER="${EXISTING_FOLDERS[0]}"
         echo "Found existing folder: $MOST_RECENT_FOLDER"
         
         # Extract date/time from folder name
         if [[ "$MOST_RECENT_FOLDER" =~ ${FILE_PREFIX}__multi_gpu_(.+)$ ]]; then
             EXTRACTED_DATE="${BASH_REMATCH[1]}"
-            # Validate if it looks like a date/time format
-            if [[ "$EXTRACTED_DATE" =~ ^[0-9]{8}_[0-9]{6}$ ]]; then
-                CUSTOM_DATE="$EXTRACTED_DATE"
-                OUTPUT_DIR="$MOST_RECENT_FOLDER"
-                echo "Using existing date/time: $CUSTOM_DATE"
-                echo "Formatted: ${CUSTOM_DATE:0:4}-${CUSTOM_DATE:4:2}-${CUSTOM_DATE:6:2} ${CUSTOM_DATE:9:2}:${CUSTOM_DATE:11:2}:${CUSTOM_DATE:13:2}"
-                echo "Folder name: $OUTPUT_DIR"
-                echo "This will overwrite existing scripts in this folder."
-            else
-                # Simple folder without date/time
-                CUSTOM_DATE=""
-                OUTPUT_DIR="$MOST_RECENT_FOLDER"
-                echo "Using existing simple folder: $OUTPUT_DIR"
-                echo "This will overwrite existing scripts in this folder."
-            fi
+            CUSTOM_DATE="$EXTRACTED_DATE"
+            OUTPUT_DIR="$MOST_RECENT_FOLDER"
+            echo "Using existing date/time: $CUSTOM_DATE"
+            echo "Folder name: $OUTPUT_DIR"
+            echo "This will overwrite existing scripts in this folder."
         else
             # Simple folder without date/time
             CUSTOM_DATE=""
@@ -228,7 +349,6 @@ elif [ -n "$CUSTOM_DATETIME_ARG" ]; then
     CUSTOM_DATE="$CUSTOM_DATETIME_ARG"
     OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATETIME_ARG}"
     echo "Using command-line specified date/time: $CUSTOM_DATETIME_ARG"
-    echo "Formatted: ${CUSTOM_DATETIME_ARG:0:4}-${CUSTOM_DATETIME_ARG:4:2}-${CUSTOM_DATETIME_ARG:6:2} ${CUSTOM_DATETIME_ARG:9:2}:${CUSTOM_DATETIME_ARG:11:2}:${CUSTOM_DATETIME_ARG:13:2}"
     echo "Folder name: $OUTPUT_DIR"
 else
     # Ask about custom date/time
@@ -243,54 +363,16 @@ read -p "Choose option (1/2/3/4/5, default: 1): " DATE_OPTION
 
     if [[ "$DATE_OPTION" == "2" ]]; then
         echo ""
-        echo "Enter custom date/time in format YYYYMMDD_HHMMSS"
-        echo "Example: 20241201_143052 for December 1, 2024 at 14:30:52"
+        echo "Enter custom date/time (can be any string)"
+        echo "Examples:"
+        echo "  - 20241201_143052 (standard format)"
+        echo "  - 20250207_151418_cu18 (with suffix)"
+        echo "  - my_experiment_v1 (custom name)"
         read -p "Custom date/time: " CUSTOM_DATETIME
-        
-        # Validate the format
-        if [[ ! "$CUSTOM_DATETIME" =~ ^[0-9]{8}_[0-9]{6}$ ]]; then
-            echo "Error: Invalid format. Please use YYYYMMDD_HHMMSS format."
-            exit 1
-        fi
-        
-        # Extract components for validation
-        YEAR=${CUSTOM_DATETIME:0:4}
-        MONTH=${CUSTOM_DATETIME:4:2}
-        DAY=${CUSTOM_DATETIME:6:2}
-        HOUR=${CUSTOM_DATETIME:9:2}
-        MINUTE=${CUSTOM_DATETIME:11:2}
-        SECOND=${CUSTOM_DATETIME:13:2}
-        
-        # Basic validation
-        if [ "$YEAR" -lt 2000 ] || [ "$YEAR" -gt 2100 ]; then
-            echo "Error: Year must be between 2000 and 2100"
-            exit 1
-        fi
-        if [ "$MONTH" -lt 1 ] || [ "$MONTH" -gt 12 ]; then
-            echo "Error: Month must be between 01 and 12"
-            exit 1
-        fi
-        if [ "$DAY" -lt 1 ] || [ "$DAY" -gt 31 ]; then
-            echo "Error: Day must be between 01 and 31"
-            exit 1
-        fi
-        if [ "$HOUR" -gt 23 ]; then
-            echo "Error: Hour must be between 00 and 23"
-            exit 1
-        fi
-        if [ "$MINUTE" -gt 59 ]; then
-            echo "Error: Minute must be between 00 and 59"
-            exit 1
-        fi
-        if [ "$SECOND" -gt 59 ]; then
-            echo "Error: Second must be between 00 and 59"
-            exit 1
-        fi
         
         CUSTOM_DATE="$CUSTOM_DATETIME"
         OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu_${CUSTOM_DATETIME}"
         echo "Using custom date/time: $CUSTOM_DATETIME"
-        echo "Formatted: ${CUSTOM_DATETIME:0:4}-${CUSTOM_DATETIME:4:2}-${CUSTOM_DATETIME:6:2} ${CUSTOM_DATETIME:9:2}:${CUSTOM_DATETIME:11:2}:${CUSTOM_DATETIME:13:2}"
         echo "Folder name: $OUTPUT_DIR"
     elif [[ "$DATE_OPTION" == "3" ]]; then
         OUTPUT_DIR="${BASE_SCRIPT:0:7}__multi_gpu"
@@ -318,21 +400,11 @@ read -p "Choose option (1/2/3/4/5, default: 1): " DATE_OPTION
             # Extract date/time from folder name
             if [[ "$MOST_RECENT_FOLDER" =~ ${FILE_PREFIX}__multi_gpu_(.+)$ ]]; then
                 EXTRACTED_DATE="${BASH_REMATCH[1]}"
-                # Validate if it looks like a date/time format
-                if [[ "$EXTRACTED_DATE" =~ ^[0-9]{8}_[0-9]{6}$ ]]; then
-                    CUSTOM_DATE="$EXTRACTED_DATE"
-                    OUTPUT_DIR="$MOST_RECENT_FOLDER"
-                    echo "Using existing date/time: $CUSTOM_DATE"
-                    echo "Formatted: ${CUSTOM_DATE:0:4}-${CUSTOM_DATE:4:2}-${CUSTOM_DATE:6:2} ${CUSTOM_DATE:9:2}:${CUSTOM_DATE:11:2}:${CUSTOM_DATE:13:2}"
-                    echo "Folder name: $OUTPUT_DIR"
-                    echo "This will overwrite existing scripts in this folder."
-                else
-                    # Simple folder without date/time
-                    CUSTOM_DATE=""
-                    OUTPUT_DIR="$MOST_RECENT_FOLDER"
-                    echo "Using existing simple folder: $OUTPUT_DIR"
-                    echo "This will overwrite existing scripts in this folder."
-                fi
+                CUSTOM_DATE="$EXTRACTED_DATE"
+                OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                echo "Using existing date/time: $CUSTOM_DATE"
+                echo "Folder name: $OUTPUT_DIR"
+                echo "This will overwrite existing scripts in this folder."
             else
                 # Simple folder without date/time
                 CUSTOM_DATE=""
@@ -341,11 +413,15 @@ read -p "Choose option (1/2/3/4/5, default: 1): " DATE_OPTION
                 echo "This will overwrite existing scripts in this folder."
             fi
             
-            # Ask for confirmation
+            # Ask for confirmation (default: y since user already chose to overwrite)
             read -p "Do you want to overwrite scripts in $OUTPUT_DIR? (y/n, default: y): " CONFIRM_OVERWRITE
             if [[ "$CONFIRM_OVERWRITE" =~ ^[Nn]$ ]]; then
                 echo "Operation cancelled."
                 exit 0
+            fi
+            # Default to yes if no input provided
+            if [ -z "$CONFIRM_OVERWRITE" ]; then
+                CONFIRM_OVERWRITE="y"
             fi
         fi
     elif [[ "$DATE_OPTION" == "5" ]]; then
@@ -435,8 +511,8 @@ if [ -d "$OUTPUT_DIR" ]; then
         echo "This directory will be used for regenerating scripts with the same date/time."
     else
         echo "Output directory $OUTPUT_DIR already exists."
-        read -p "Do you want to delete it and regenerate? (y/n, default: n): " DELETE_DIR
-        if [[ "$DELETE_DIR" =~ ^[Yy]$ ]]; then
+        read -p "Do you want to delete it and regenerate? (y/n, default: y): " DELETE_DIR
+        if [[ "$DELETE_DIR" =~ ^[Yy]$ ]] || [ -z "$DELETE_DIR" ]; then
             echo "Deleting existing directory: $OUTPUT_DIR"
             rm -rf "$OUTPUT_DIR"
         else
@@ -471,44 +547,31 @@ if [ "$OVERWRITE_MODE" == true ] || [ "$OVERWRITE_EXISTING" == true ]; then
     echo "Existing scripts cleaned up."
 fi
 
-# Function to get combination parameters
-get_combination_params() {
-    local combo=$1
-    case $combo in
-        1) echo "1 0 1 0 1 0" ;;  # Standard Version + Standard State + Max Entropy
-        2) echo "1 0 1 0 0 1" ;;  # Standard Version + Standard State + No Max Entropy
-        3) echo "1 0 0 1 1 0" ;;  # Standard Version + Context Only + Max Entropy
-        4) echo "1 0 0 1 0 1" ;;  # Standard Version + Context Only + No Max Entropy
-        5) echo "0 1 1 0 1 0" ;;  # OFL Version + Standard State + Max Entropy
-        6) echo "0 1 1 0 0 1" ;;  # OFL Version + Standard State + No Max Entropy
-        7) echo "0 1 0 1 1 0" ;;  # OFL Version + Context Only + Max Entropy
-        8) echo "0 1 0 1 0 1" ;;  # OFL Version + Context Only + No Max Entropy
-    esac
-}
-
-# Function to get combination description
-get_combination_desc() {
-    local combo=$1
-    case $combo in
-        1) echo "standard_hiddstat_maxent" ;;
-        2) echo "standard_hiddstat_noent" ;;
-        3) echo "standard_context_maxent" ;;
-        4) echo "standard_context_noent" ;;
-        5) echo "ofl_hiddstat_maxent" ;;
-        6) echo "ofl_hiddstat_noent" ;;
-        7) echo "ofl_context_maxent" ;;
-        8) echo "ofl_context_noent" ;;
-    esac
-}
-
 # Generate scripts
 for i in "${!COMBINATIONS[@]}"; do
     combo=${COMBINATIONS[$i]}
-    gpu_id=$((i % NUM_GPUS))
     desc=$(get_combination_desc $combo)
-    script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}_${combo}.sh"
     
-    echo "Generating script $((i+1))/${#COMBINATIONS[@]}: $script_name (GPU $gpu_id, $desc)"
+    # Determine GPU assignment
+    if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+        # Custom assignment
+        gpu_assignment="${GPU_ASSIGNMENTS[$i]}"
+        # For script naming, use all GPUs or a placeholder for -1
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            gpu_id_display="cpu"
+        else
+            # Replace commas with underscores for filename compatibility
+            gpu_id_display=$(echo "$gpu_assignment" | tr ',' '_')
+        fi
+        script_name="${FILE_PREFIX}__gpu${gpu_id_display}_${desc}_${combo}.sh"
+        echo "Generating script $((i+1))/${#COMBINATIONS[@]}: $script_name (GPUs: [$gpu_assignment], $desc)"
+    else
+        # Round-robin assignment
+        gpu_id=$((i % NUM_GPUS))
+        gpu_assignment="$gpu_id"
+        script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}_${combo}.sh"
+        echo "Generating script $((i+1))/${#COMBINATIONS[@]}: $script_name (GPU $gpu_id, $desc)"
+    fi
     
     # Read the base script
     cp "${BASE_SCRIPT}.sh" "$OUTPUT_DIR/$script_name"
@@ -525,8 +588,31 @@ for i in "${!COMBINATIONS[@]}"; do
     sed -i "s/RUN_MAX_ENTROPY=.*/RUN_MAX_ENTROPY=$RUN_MAX_ENTROPY       # Run with max-entropy PPO/" "$OUTPUT_DIR/$script_name"
     sed -i "s/RUN_NO_MAX_ENTROPY=.*/RUN_NO_MAX_ENTROPY=$RUN_NO_MAX_ENTROPY    # Run without max-entropy (standard PPO)/" "$OUTPUT_DIR/$script_name"
     
-    # Replace all "python -m" with "CUDA_VISIBLE_DEVICES=X python -m"
-    sed -i "s/python -m/CUDA_VISIBLE_DEVICES=$gpu_id python -m/g" "$OUTPUT_DIR/$script_name"
+    # Replace network architecture arguments based on policy version
+    if [ "$RUN_STANDARD_VERSION" -eq 1 ] && [ "$RUN_OFL_VERSION" -eq 0 ]; then
+        # Only standard version - replace all --ppo-net-arch with standard architecture
+        sed -i "s/--ppo-net-arch \"[^\"]*\"/--ppo-net-arch \"$STANDARD_NET_ARCH\"/g" "$OUTPUT_DIR/$script_name"
+    elif [ "$RUN_STANDARD_VERSION" -eq 0 ] && [ "$RUN_OFL_VERSION" -eq 1 ]; then
+        # Only OFL version - replace all --ppo-net-arch with OFL architecture
+        sed -i "s/--ppo-net-arch \"[^\"]*\"/--ppo-net-arch \"$OFL_NET_ARCH\"/g" "$OUTPUT_DIR/$script_name"
+    elif [ "$RUN_STANDARD_VERSION" -eq 1 ] && [ "$RUN_OFL_VERSION" -eq 1 ]; then
+        # Both versions - need to be more careful about replacement
+        # First, replace standard version instances (before OFL version lines)
+        sed -i "/--optimized-policy-version standard/,/--ppo-net-arch/s/--ppo-net-arch \"[^\"]*\"/--ppo-net-arch \"$STANDARD_NET_ARCH\"/g" "$OUTPUT_DIR/$script_name"
+        # Then, replace OFL version instances (after OFL version lines)
+        sed -i "/--optimized-policy-version ofl/,/--ppo-net-arch/s/--ppo-net-arch \"[^\"]*\"/--ppo-net-arch \"$OFL_NET_ARCH\"/g" "$OUTPUT_DIR/$script_name"
+    fi
+    
+    # Replace CUDA_VISIBLE_DEVICES based on GPU assignment
+    if [[ "$gpu_assignment" == "-1" ]]; then
+        # No GPU - remove CUDA_VISIBLE_DEVICES entirely
+        sed -i "s/CUDA_VISIBLE_DEVICES=[0-9,]* //g" "$OUTPUT_DIR/$script_name"
+        sed -i "s/python -m/CUDA_VISIBLE_DEVICES= python -m/g" "$OUTPUT_DIR/$script_name"
+    else
+        # Set CUDA_VISIBLE_DEVICES to the assigned GPUs
+        sed -i "s/CUDA_VISIBLE_DEVICES=[0-9,]* //g" "$OUTPUT_DIR/$script_name"
+        sed -i "s/python -m/CUDA_VISIBLE_DEVICES=$gpu_assignment python -m/g" "$OUTPUT_DIR/$script_name"
+    fi
     
     # Update DATE variable to use the selected date/time
     if [ -n "$CUSTOM_DATE" ]; then
@@ -539,14 +625,30 @@ for i in "${!COMBINATIONS[@]}"; do
     fi
     
     # Add header comment to identify the script
-    sed -i "1i# Generated script for GPU $gpu_id, Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
+    if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            sed -i "1i# Generated script for CPU only, Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
+        else
+            sed -i "1i# Generated script for GPUs [$gpu_assignment], Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
+        fi
+    else
+        sed -i "1i# Generated script for GPU $gpu_id, Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
+    fi
     sed -i "2i# Original script: ${BASE_SCRIPT}.sh" "$OUTPUT_DIR/$script_name"
     if [ -n "$CUSTOM_DATE" ]; then
-        sed -i "3i# Generated on: ${CUSTOM_DATE:0:4}-${CUSTOM_DATE:4:2}-${CUSTOM_DATE:6:2} ${CUSTOM_DATE:9:2}:${CUSTOM_DATE:11:2}:${CUSTOM_DATE:13:2}" "$OUTPUT_DIR/$script_name"
+        sed -i "3i# Generated on: $CUSTOM_DATE" "$OUTPUT_DIR/$script_name"
     else
         sed -i "3i# Generated on: $(date)" "$OUTPUT_DIR/$script_name"
     fi
-    sed -i "4i#" "$OUTPUT_DIR/$script_name"
+    # Add network architecture info to script header
+    if [ "$NEED_STANDARD_VERSION" = true ] && [ "$NEED_OFL_VERSION" = true ]; then
+        sed -i "4i# Network Architecture - Standard: $STANDARD_NET_ARCH, OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
+    elif [ "$NEED_STANDARD_VERSION" = true ]; then
+        sed -i "4i# Network Architecture - Standard: $STANDARD_NET_ARCH" "$OUTPUT_DIR/$script_name"
+    elif [ "$NEED_OFL_VERSION" = true ]; then
+        sed -i "4i# Network Architecture - OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
+    fi
+    sed -i "5i#" "$OUTPUT_DIR/$script_name"
 done
 
 # Create a master script to run all generated scripts
@@ -555,26 +657,66 @@ echo "#!/bin/bash" > "$MASTER_SCRIPT"
 echo "" >> "$MASTER_SCRIPT"
 echo "# Master script to run all generated GPU scripts" >> "$MASTER_SCRIPT"
 if [ -n "$CUSTOM_DATE" ]; then
-    echo "# Generated on: ${CUSTOM_DATE:0:4}-${CUSTOM_DATE:4:2}-${CUSTOM_DATE:6:2} ${CUSTOM_DATE:9:2}:${CUSTOM_DATE:11:2}:${CUSTOM_DATE:13:2}" >> "$MASTER_SCRIPT"
+    echo "# Generated on: $CUSTOM_DATE" >> "$MASTER_SCRIPT"
 else
     echo "# Generated on: $(date)" >> "$MASTER_SCRIPT"
 fi
 echo "# Number of scripts: ${#COMBINATIONS[@]}" >> "$MASTER_SCRIPT"
 echo "# Available GPUs: $NUM_GPUS" >> "$MASTER_SCRIPT"
+if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+    echo "# GPU Assignment: Custom" >> "$MASTER_SCRIPT"
+    for i in "${!COMBINATIONS[@]}"; do
+        combo=${COMBINATIONS[$i]}
+        desc=$(get_combination_desc $combo)
+        gpu_assignment="${GPU_ASSIGNMENTS[$i]}"
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            echo "#   Script $((i+1)) (Combination $combo): CPU only" >> "$MASTER_SCRIPT"
+        else
+            echo "#   Script $((i+1)) (Combination $combo): GPUs [$gpu_assignment]" >> "$MASTER_SCRIPT"
+        fi
+    done
+else
+    echo "# GPU Assignment: Round-robin across $NUM_GPUS GPUs" >> "$MASTER_SCRIPT"
+fi
+# Add network architecture info to master script header
+if [ "$NEED_STANDARD_VERSION" = true ] && [ "$NEED_OFL_VERSION" = true ]; then
+    echo "# Network Architecture - Standard: $STANDARD_NET_ARCH, OFL: $OFL_NET_ARCH" >> "$MASTER_SCRIPT"
+elif [ "$NEED_STANDARD_VERSION" = true ]; then
+    echo "# Network Architecture - Standard: $STANDARD_NET_ARCH" >> "$MASTER_SCRIPT"
+elif [ "$NEED_OFL_VERSION" = true ]; then
+    echo "# Network Architecture - OFL: $OFL_NET_ARCH" >> "$MASTER_SCRIPT"
+fi
 echo "" >> "$MASTER_SCRIPT"
 
-# Group scripts by GPU
+# Group scripts by GPU or create individual execution
 declare -A gpu_scripts
+declare -a individual_scripts
+
 for i in "${!COMBINATIONS[@]}"; do
     combo=${COMBINATIONS[$i]}
-    gpu_id=$((i % NUM_GPUS))
     desc=$(get_combination_desc $combo)
-    script_name="${FILE_PREFIX}_gpu${gpu_id}_${desc}.sh"
     
-    if [ -z "${gpu_scripts[$gpu_id]}" ]; then
-        gpu_scripts[$gpu_id]=""
+    if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+        # Custom assignment - each script runs independently
+        gpu_assignment="${GPU_ASSIGNMENTS[$i]}"
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            gpu_id_display="cpu"
+        else
+            IFS=',' read -ra GPUS <<< "$gpu_assignment"
+            gpu_id_display="${GPUS[0]}"
+        fi
+        script_name="${FILE_PREFIX}__gpu${gpu_id_display}_${desc}_${combo}.sh"
+        individual_scripts+=("$script_name")
+    else
+        # Round-robin assignment - group by GPU
+        gpu_id=$((i % NUM_GPUS))
+        script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}_${combo}.sh"
+        
+        if [ -z "${gpu_scripts[$gpu_id]}" ]; then
+            gpu_scripts[$gpu_id]=""
+        fi
+        gpu_scripts[$gpu_id]="${gpu_scripts[$gpu_id]} $script_name"
     fi
-    gpu_scripts[$gpu_id]="${gpu_scripts[$gpu_id]} $script_name"
 done
 
 # Add GPU-specific sections to master script
@@ -599,10 +741,20 @@ echo "    echo \"=== Completed all scripts for GPU \$gpu_id ===\"" >> "$MASTER_S
 echo "}" >> "$MASTER_SCRIPT"
 echo "" >> "$MASTER_SCRIPT"
 
-# Run scripts for each GPU
-for gpu_id in "${!gpu_scripts[@]}"; do
-    echo "run_gpu_scripts $gpu_id ${gpu_scripts[$gpu_id]} &" >> "$MASTER_SCRIPT"
-done
+# Run scripts based on assignment method
+if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+    # Custom assignment - run each script individually
+    echo "echo \"Running ${#individual_scripts[@]} scripts with custom GPU assignments...\"" >> "$MASTER_SCRIPT"
+    for script in "${individual_scripts[@]}"; do
+        echo "echo \"Starting \$script...\"" >> "$MASTER_SCRIPT"
+        echo "bash \"\$script\" &" >> "$MASTER_SCRIPT"
+    done
+else
+    # Round-robin assignment - run scripts grouped by GPU
+    for gpu_id in "${!gpu_scripts[@]}"; do
+        echo "run_gpu_scripts $gpu_id ${gpu_scripts[$gpu_id]} &" >> "$MASTER_SCRIPT"
+    done
+fi
 
 echo "" >> "$MASTER_SCRIPT"
 echo "# Wait for all GPUs to complete" >> "$MASTER_SCRIPT"
@@ -621,7 +773,7 @@ echo "" >> "$LAUNCHER_SCRIPT"
 echo "# Simple launcher for EAGLE RL Multi-GPU Training" >> "$LAUNCHER_SCRIPT"
 echo "# Usage: bash launch.sh" >> "$LAUNCHER_SCRIPT"
 if [ -n "$CUSTOM_DATE" ]; then
-    echo "# Generated on: ${CUSTOM_DATE:0:4}-${CUSTOM_DATE:4:2}-${CUSTOM_DATE:6:2} ${CUSTOM_DATE:9:2}:${CUSTOM_DATE:11:2}:${CUSTOM_DATE:13:2}" >> "$LAUNCHER_SCRIPT"
+    echo "# Generated on: $CUSTOM_DATE" >> "$LAUNCHER_SCRIPT"
 else
     echo "# Generated on: $(date)" >> "$LAUNCHER_SCRIPT"
 fi
@@ -643,27 +795,67 @@ SUMMARY_FILE="$OUTPUT_DIR/script_summary.txt"
 echo "EAGLE RL Multi-GPU Script Generation Summary" > "$SUMMARY_FILE"
 echo "=============================================" >> "$SUMMARY_FILE"
 if [ -n "$CUSTOM_DATE" ]; then
-    echo "Generated on: ${CUSTOM_DATE:0:4}-${CUSTOM_DATE:4:2}-${CUSTOM_DATE:6:2} ${CUSTOM_DATE:9:2}:${CUSTOM_DATE:11:2}:${CUSTOM_DATE:13:2}" >> "$SUMMARY_FILE"
+    echo "Generated on: $CUSTOM_DATE" >> "$SUMMARY_FILE"
 else
     echo "Generated on: $(date)" >> "$SUMMARY_FILE"
 fi
 echo "Base script: ${BASE_SCRIPT}.sh" >> "$SUMMARY_FILE"
 echo "Number of GPUs: $NUM_GPUS" >> "$SUMMARY_FILE"
 echo "Number of scripts: ${#COMBINATIONS[@]}" >> "$SUMMARY_FILE"
+if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+    echo "GPU Assignment Method: Custom" >> "$SUMMARY_FILE"
+else
+    echo "GPU Assignment Method: Round-robin" >> "$SUMMARY_FILE"
+fi
+echo "" >> "$SUMMARY_FILE"
+echo "Network Architecture Configuration:" >> "$SUMMARY_FILE"
+if [ "$NEED_STANDARD_VERSION" = true ]; then
+    echo "  Standard Version: $STANDARD_NET_ARCH" >> "$SUMMARY_FILE"
+fi
+if [ "$NEED_OFL_VERSION" = true ]; then
+    echo "  OFL Version: $OFL_NET_ARCH" >> "$SUMMARY_FILE"
+fi
 echo "" >> "$SUMMARY_FILE"
 echo "Selected combinations:" >> "$SUMMARY_FILE"
 for i in "${!COMBINATIONS[@]}"; do
     combo=${COMBINATIONS[$i]}
-    gpu_id=$((i % NUM_GPUS))
     desc=$(get_combination_desc $combo)
-    script_name="${FILE_PREFIX}_gpu${gpu_id}_${desc}.sh"
-    echo "  Script $((i+1)): $script_name (GPU $gpu_id, $desc)" >> "$SUMMARY_FILE"
+    
+    if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+        gpu_assignment="${GPU_ASSIGNMENTS[$i]}"
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            gpu_id_display="cpu"
+        else
+            IFS=',' read -ra GPUS <<< "$gpu_assignment"
+            gpu_id_display="${GPUS[0]}"
+        fi
+        script_name="${FILE_PREFIX}__gpu${gpu_id_display}_${desc}_${combo}.sh"
+        echo "  Script $((i+1)): $script_name (GPUs: [$gpu_assignment], $desc)" >> "$SUMMARY_FILE"
+    else
+        gpu_id=$((i % NUM_GPUS))
+        script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}_${combo}.sh"
+        echo "  Script $((i+1)): $script_name (GPU $gpu_id, $desc)" >> "$SUMMARY_FILE"
+    fi
 done
 echo "" >> "$SUMMARY_FILE"
-echo "GPU distribution:" >> "$SUMMARY_FILE"
-for gpu_id in "${!gpu_scripts[@]}"; do
-    echo "  GPU $gpu_id: ${gpu_scripts[$gpu_id]}" >> "$SUMMARY_FILE"
-done
+if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+    echo "Custom GPU assignments:" >> "$SUMMARY_FILE"
+    for i in "${!COMBINATIONS[@]}"; do
+        combo=${COMBINATIONS[$i]}
+        desc=$(get_combination_desc $combo)
+        gpu_assignment="${GPU_ASSIGNMENTS[$i]}"
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            echo "  Script $((i+1)) (Combination $combo): CPU only" >> "$SUMMARY_FILE"
+        else
+            echo "  Script $((i+1)) (Combination $combo): GPUs [$gpu_assignment]" >> "$SUMMARY_FILE"
+        fi
+    done
+else
+    echo "GPU distribution (round-robin):" >> "$SUMMARY_FILE"
+    for gpu_id in "${!gpu_scripts[@]}"; do
+        echo "  GPU $gpu_id: ${gpu_scripts[$gpu_id]}" >> "$SUMMARY_FILE"
+    done
+fi
 echo "" >> "$SUMMARY_FILE"
 echo "To run all scripts: bash $MASTER_SCRIPT" >> "$SUMMARY_FILE"
 echo "To run individual scripts: bash <script_name>" >> "$SUMMARY_FILE"
@@ -689,15 +881,57 @@ echo ""
 echo "Scripts created:"
 for i in "${!COMBINATIONS[@]}"; do
     combo=${COMBINATIONS[$i]}
-    gpu_id=$((i % NUM_GPUS))
     desc=$(get_combination_desc $combo)
-    script_name="${FILE_PREFIX}_gpu${gpu_id}_${desc}.sh"
-    echo "  $script_name (GPU $gpu_id, $desc)"
+    
+    if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+        gpu_assignment="${GPU_ASSIGNMENTS[$i]}"
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            gpu_id_display="cpu"
+        else
+            IFS=',' read -ra GPUS <<< "$gpu_assignment"
+            gpu_id_display="${GPUS[0]}"
+        fi
+        script_name="${FILE_PREFIX}__gpu${gpu_id_display}_${desc}_${combo}.sh"
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            echo "  $script_name (CPU only, $desc)"
+        else
+            echo "  $script_name (GPUs: [$gpu_assignment], $desc)"
+        fi
+    else
+        gpu_id=$((i % NUM_GPUS))
+        script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}_${combo}.sh"
+        echo "  $script_name (GPU $gpu_id, $desc)"
+    fi
 done
 echo ""
 echo "Master script: $MASTER_SCRIPT"
 echo "Launcher script: $LAUNCHER_SCRIPT"
 echo "Summary file: $SUMMARY_FILE"
+echo ""
+echo "Network Architecture Configuration:"
+if [ "$NEED_STANDARD_VERSION" = true ]; then
+    echo "  Standard Version: $STANDARD_NET_ARCH"
+fi
+if [ "$NEED_OFL_VERSION" = true ]; then
+    echo "  OFL Version: $OFL_NET_ARCH"
+fi
+echo ""
+echo "GPU Assignment Configuration:"
+if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+    echo "  Method: Custom GPU assignment"
+    for i in "${!COMBINATIONS[@]}"; do
+        combo=${COMBINATIONS[$i]}
+        desc=$(get_combination_desc $combo)
+        gpu_assignment="${GPU_ASSIGNMENTS[$i]}"
+        if [[ "$gpu_assignment" == "-1" ]]; then
+            echo "    Script $((i+1)) (Combination $combo): CPU only"
+        else
+            echo "    Script $((i+1)) (Combination $combo): GPUs [$gpu_assignment]"
+        fi
+    done
+else
+    echo "  Method: Round-robin across $NUM_GPUS GPUs"
+fi
 echo ""
 echo "To run all scripts: bash $MASTER_SCRIPT"
 echo "To run with launcher: bash launch.sh"
@@ -715,7 +949,21 @@ if [[ "$RUN_NOW" =~ ^[Yy]$ ]]; then
     
     echo ""
     echo "Running master script: $MASTER_SCRIPT"
-    echo "This will execute all ${#COMBINATIONS[@]} scripts across $NUM_GPUS GPUs"
+    if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
+        echo "This will execute all ${#COMBINATIONS[@]} scripts with custom GPU assignments"
+        for i in "${!COMBINATIONS[@]}"; do
+            combo=${COMBINATIONS[$i]}
+            desc=$(get_combination_desc $combo)
+            gpu_assignment="${GPU_ASSIGNMENTS[$i]}"
+            if [[ "$gpu_assignment" == "-1" ]]; then
+                echo "  Script $((i+1)) (Combination $combo): CPU only"
+            else
+                echo "  Script $((i+1)) (Combination $combo): GPUs [$gpu_assignment]"
+            fi
+        done
+    else
+        echo "This will execute all ${#COMBINATIONS[@]} scripts across $NUM_GPUS GPUs (round-robin)"
+    fi
     echo "Press Ctrl+C to stop execution"
     echo ""
     
