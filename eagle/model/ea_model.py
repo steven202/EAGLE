@@ -197,7 +197,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=2136,  # Increased from 2136 to accommodate larger sequences
+            max_length=2048,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
             total_tokens=None,
@@ -596,7 +596,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=2136,  # Increased from 2136 to accommodate larger sequences
+            max_length=2048,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
@@ -673,7 +673,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=2136,  # Increased from 2136 to accommodate larger sequences
+            max_length=2048,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
@@ -776,7 +776,7 @@ class EaModel(nn.Module):
             top_p=0.0,
             top_k=0.0,
             max_new_tokens=512,
-            max_length=2136,  # Increased from 2136 to accommodate larger sequences
+            max_length=2048,  # Increased from 2048 to accommodate larger sequences
             log=False,
             is_llama3=False,
 
