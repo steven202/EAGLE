@@ -475,51 +475,100 @@ def get_model_answers(
             torch.cuda.synchronize()
             start_time = time.time()
 
-            output_ids, new_token, idx = model.eagenerate(
-                torch.as_tensor(input_ids).cuda(),
-                temperature=temperature,
-                log=True,
-                total_tokens=args.total_token,
-                depth=args.depth,
-                tree_top_k=args.top_k,
-                max_length=max_length_param,
-            )
-            torch.cuda.synchronize()
-            total_time = time.time() - start_time
-            output_ids = output_ids[0][len(input_ids[0]):]
-            # be consistent with the template's stop_token_ids
-            if conv.stop_token_ids:
-                stop_token_ids_index = [
-                    i
-                    for i, id in enumerate(output_ids)
-                    if id in conv.stop_token_ids
-                ]
-                if len(stop_token_ids_index) > 0:
-                    output_ids = output_ids[: stop_token_ids_index[0]]
-
-            output = tokenizer.decode(
-                output_ids,
-                spaces_between_special_tokens=False,
-            )
-            conv.stop_str = "</s>"
-            if conv.stop_str and output.find(conv.stop_str) > 0:
-                output = output[: output.find(conv.stop_str)]
-            for special_token in tokenizer.special_tokens_map.values():
-                if isinstance(special_token, list):
-                    for special_tok in special_token:
-                        output = output.replace(special_tok, "")
+            try:
+                output_ids, new_token, idx = model.eagenerate(
+                    torch.as_tensor(input_ids).cuda(),
+                    temperature=temperature,
+                    log=True,
+                    total_tokens=args.total_token,
+                    depth=args.depth,
+                    tree_top_k=args.top_k,
+                    max_length=max_length_param,
+                )
+            except RuntimeError as e:
+                if ("selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or 
+                    "start" in str(e) or "KV cache buffer overflow" in str(e) or 
+                    "CUDA out of memory" in str(e) or "out of memory" in str(e)):
+                    print(f"❌ Warmup error with params: tt={args.total_token}, d={args.depth}, k={args.top_k}")
+                    print(f"   Error: {e}")
+                    print(f"   Falling back to ultra-conservative warmup parameters...")
+                    
+                    # Use ultra-safe parameters for warmup that definitely won't overflow
+                    safe_total_tokens = 60
+                    safe_depth = 5
+                    safe_top_k = 10
+                
+                    try:
+                        output_ids, new_token, idx = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            total_tokens=safe_total_tokens,
+                            depth=safe_depth,
+                            tree_top_k=safe_top_k,
+                            max_length=max_length_param,
+                        )
+                    except RuntimeError as e2:
+                        print(f"❌ Even ultra-conservative warmup failed: {e2}")
+                        print("   Skipping warmup - proceeding with standard generation")
+                        # We'll skip warmup if even ultra-conservative parameters fail
+                        # Set dummy values to avoid UnboundLocalError
+                        # Get device from model instead of input_ids (which is a list)
+                        device = next(model.parameters()).device
+                        output_ids = torch.tensor([[tokenizer.eos_token_id]]).to(device)
+                        new_token = torch.tensor(0).to(device)
+                        idx = torch.tensor(0).to(device)
+                        total_time = 0.0
                 else:
-                    output = output.replace(special_token, "")
-            output = output.strip()
+                    raise e  # Re-raise if it's a different error
+            
+            # Only process output_ids if warmup was successful
+            if 'output_ids' in locals() and output_ids is not None:
+                torch.cuda.synchronize()
+                total_time = time.time() - start_time
+                output_ids = output_ids[0][len(input_ids[0]):]
+                # be consistent with the template's stop_token_ids
+                if conv.stop_token_ids:
+                    stop_token_ids_index = [
+                        i
+                        for i, id in enumerate(output_ids)
+                        if id in conv.stop_token_ids
+                    ]
+                    if len(stop_token_ids_index) > 0:
+                        output_ids = output_ids[: stop_token_ids_index[0]]
 
-            if conv.name == "xgen" and output.startswith("Assistant:"):
-                output = output.replace("Assistant:", "", 1).strip()
+                output = tokenizer.decode(
+                    output_ids,
+                    spaces_between_special_tokens=False,
+                )
+                conv.stop_str = "</s>"
+                if conv.stop_str and output.find(conv.stop_str) > 0:
+                    output = output[: output.find(conv.stop_str)]
+                for special_token in tokenizer.special_tokens_map.values():
+                    if isinstance(special_token, list):
+                        for special_tok in special_token:
+                            output = output.replace(special_tok, "")
+                    else:
+                        output = output.replace(special_token, "")
+                output = output.strip()
 
-            turns.append(output)
-            idxs.append(int(idx))
-            new_tokens.append(int(new_token))
-            wall_time.append(total_time)
-            conv.messages[-1][-1] = output
+                if conv.name == "xgen" and output.startswith("Assistant:"):
+                    output = output.replace("Assistant:", "", 1).strip()
+
+                turns.append(output)
+                idxs.append(int(idx))
+                new_tokens.append(int(new_token))
+                wall_time.append(total_time)
+                conv.messages[-1][-1] = output
+            else:
+                # Warmup failed completely, add empty response
+                print("   ⚠️  Warmup failed - adding empty response")
+                turns.append("")
+                idxs.append(0)
+                new_tokens.append(0)
+                wall_time.append(0.0)
+                if len(conv.messages) > 0 and len(conv.messages[-1]) > 1:
+                    conv.messages[-1][-1] = ""
     print('Warmup done')
 
     # questions=questions[6:]
@@ -583,109 +632,165 @@ def get_model_answers(
                 torch.cuda.synchronize()
                 start_time = time.time()
                 
-                # Use RL-predicted parameters or fallback values (matching LLaMA3 RL version)
-                output_ids, new_token, idx = model.eagenerate(
-                    torch.as_tensor(input_ids).cuda(),
-                    temperature=temperature,
-                    log=True,
-                    total_tokens=predicted_total_tokens,
-                    depth=predicted_depth,
-                    tree_top_k=predicted_top_k,
-                    max_length=max_length_param,
-                )
+                # Retry mechanism for KV cache buffer overflow and other errors
+                max_retries = 1 # default is 3, here, we set it to 1 for faster inference
+                retry_count = 0
+                success = False
                 
-                if question_failed:
-                    break  # Break out of the turns loop
-                    
-                torch.cuda.synchronize()
-                total_time = time.time() - start_time
-                output_ids = output_ids[0][len(input_ids[0]):]
-
-                if conv.stop_token_ids:
-                    stop_token_ids_index = [
-                        i
-                        for i, id in enumerate(output_ids)
-                        if id in conv.stop_token_ids
-                    ]
-                    if len(stop_token_ids_index) > 0:
-                        output_ids = output_ids[: stop_token_ids_index[0]]
-
-                output = tokenizer.decode(
-                    output_ids,
-                    spaces_between_special_tokens=False,
-                )
-                if conv.stop_str and output.find(conv.stop_str) > 0:
-                    output = output[: output.find(conv.stop_str)]
-                for special_token in tokenizer.special_tokens_map.values():
-                    if isinstance(special_token, list):
-                        for special_tok in special_token:
-                            output = output.replace(special_tok, "")
-                    else:
-                        output = output.replace(special_token, "")
-                output = output.strip()
-
-                if conv.name == "xgen" and output.startswith("Assistant:"):
-                    output = output.replace("Assistant:", "", 1).strip()
-
-                # Online RL: Update policy with reward from this generation (if training enabled)
-                # DISABLED: Using step-wise RL only - question-level updates are handled in ea_model.py
-                if not getattr(args, 'use_stepwise_rl', False) and online_policy is not None and not args.online_inference_only:
-                    # Convert tensor values to Python scalars
-                    new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
-                    
-                    # Calculate reward for online learning (use appropriate reward function)
-                    online_reward = reward_function(
-                        total_time, new_token_scalar, predicted_total_tokens, 
-                        predicted_depth, predicted_top_k
-                    )
-                    
-                    # DISABLED: This would duplicate step-wise RL updates from ea_model.py
-                    online_policy.update_policy(online_reward, total_time, new_token_scalar)
-                    # DISABLED: Progress logging - step-wise RL handles its own logging
-                    # Print learning progress periodically
-                    if not getattr(args, 'use_stepwise_rl', False) and not args.online_inference_only and online_policy.step_count % 20 == 0:
-                        stats = online_policy.get_performance_stats()
-                        print(f"Online RL Update: Reward={online_reward:.3f}, "
-                              f"Avg Recent Reward={stats.get('avg_reward_recent', 0):.3f}, "
-                              f"Tokens/sec={new_token_scalar/total_time:.1f}")
+                while retry_count < max_retries and not success:
+                    try:
+                        # Use RL-predicted parameters or fallback values (matching LLaMA3 RL version)
+                        output_ids, new_token, idx = model.eagenerate(
+                            torch.as_tensor(input_ids).cuda(),
+                            temperature=temperature,
+                            log=True,
+                            total_tokens=predicted_total_tokens,
+                            depth=predicted_depth,
+                            tree_top_k=predicted_top_k,
+                            max_length=max_length_param,
+                        )
+                        success = True
                         
-                        # Additional wandb logging for progress tracking
-                        if online_policy.use_wandb:
-                            import wandb
-                            wandb.log({
-                                "progress_reward": online_reward,
-                                "progress_tokens_per_sec": new_token_scalar/total_time,
-                                "progress_step": online_policy.step_count
-                            })
+                    except RuntimeError as e:
+                        if ("selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or 
+                            "start" in str(e) or "KV cache buffer overflow" in str(e) or 
+                            "CUDA out of memory" in str(e) or "out of memory" in str(e)):
+                            retry_count += 1
+                            print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k} (attempt {retry_count}/{max_retries})")
+                            print(f"   Error: {e}")
+                            
+                            if retry_count < max_retries:
+                                print(f"   Trying more conservative parameters...")
+                                # Make parameters increasingly conservative with each retry
+                                if "KV cache buffer overflow" in str(e) or "CUDA out of memory" in str(e) or "out of memory" in str(e):
+                                    # For memory-related errors, be very aggressive with reduction
+                                    if retry_count == 1:
+                                        predicted_total_tokens = 60
+                                        predicted_depth = 5
+                                        predicted_top_k = 10
+                                    elif retry_count == 2:
+                                        predicted_total_tokens = 8
+                                        predicted_depth = 2
+                                        predicted_top_k = 2
+                                else:
+                                    # For other errors, use moderate reduction
+                                    if retry_count == 1:
+                                        # First retry: moderate reduction
+                                        predicted_total_tokens = 60
+                                        predicted_depth = 5
+                                        predicted_top_k = 10
+                                    elif retry_count == 2:
+                                        # Second retry: very conservative
+                                        predicted_total_tokens = 16
+                                        predicted_depth = 3
+                                        predicted_top_k = 4
+                                
+                                print(f"   Using safer params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
+                            else:
+                                print(f"   All retries failed. Skipping this question...")
+                                break
+                        else:
+                            # Re-raise non-KV cache related errors
+                            raise e
+                
+                # If all retries failed, skip this entire question
+                if not success:
+                    print(f"⏭️  Skipping question {question_count}/{len(questions)} due to persistent KV cache errors")
+                    question_failed = True
+                    break  # Break out of the turns loop
+                
+                # Only process if generation was successful
+                if success:
+                    torch.cuda.synchronize()
+                    total_time = time.time() - start_time
+                    output_ids = output_ids[0][len(input_ids[0]):]
 
-                # Collect RL training data if requested
-                if args.collect_rl_data:
-                    # Convert tensor values to Python scalars
-                    new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
-                    rl_reward = calculate_real_reward(
-                        total_time, new_token_scalar, predicted_total_tokens, 
-                        predicted_depth, predicted_top_k
+                    if conv.stop_token_ids:
+                        stop_token_ids_index = [
+                            i
+                            for i, id in enumerate(output_ids)
+                            if id in conv.stop_token_ids
+                        ]
+                        if len(stop_token_ids_index) > 0:
+                            output_ids = output_ids[: stop_token_ids_index[0]]
+
+                    output = tokenizer.decode(
+                        output_ids,
+                        spaces_between_special_tokens=False,
                     )
-                    rl_data_entry = {
-                        "question_id": question["question_id"],
-                        "turn": j,
-                        "choice": i,
-                        "context": context,
-                        "total_tokens": predicted_total_tokens,
-                        "depth": predicted_depth,
-                        "top_k": predicted_top_k,
-                        "generation_time": total_time,
-                        "new_tokens": new_token_scalar,
-                        "reward": rl_reward,
-                        "tokens_per_second": new_token_scalar / total_time if total_time > 0 else 0
-                    }
-                    rl_data_entries.append(rl_data_entry)
+                    if conv.stop_str and output.find(conv.stop_str) > 0:
+                        output = output[: output.find(conv.stop_str)]
+                    for special_token in tokenizer.special_tokens_map.values():
+                        if isinstance(special_token, list):
+                            for special_tok in special_token:
+                                output = output.replace(special_tok, "")
+                        else:
+                            output = output.replace(special_token, "")
+                    output = output.strip()
 
-                turns.append(output)
-                idxs.append(int(idx))
-                new_tokens.append(int(new_token))
-                wall_time.append(total_time)
-                conv.messages[-1][-1] = output
+                    if conv.name == "xgen" and output.startswith("Assistant:"):
+                        output = output.replace("Assistant:", "", 1).strip()
+
+                    # Online RL: Update policy with reward from this generation (if training enabled)
+                    # DISABLED: Using step-wise RL only - question-level updates are handled in ea_model.py
+                    if not getattr(args, 'use_stepwise_rl', False) and online_policy is not None and not args.online_inference_only:
+                        # Convert tensor values to Python scalars
+                        new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
+                        
+                        # Calculate reward for online learning (use appropriate reward function)
+                        online_reward = reward_function(
+                            total_time, new_token_scalar, predicted_total_tokens, 
+                            predicted_depth, predicted_top_k
+                        )
+                        
+                        # DISABLED: This would duplicate step-wise RL updates from ea_model.py
+                        online_policy.update_policy(online_reward, total_time, new_token_scalar)
+                        # DISABLED: Progress logging - step-wise RL handles its own logging
+                        # Print learning progress periodically
+                        if not getattr(args, 'use_stepwise_rl', False) and not args.online_inference_only and online_policy.step_count % 20 == 0:
+                            stats = online_policy.get_performance_stats()
+                            print(f"Online RL Update: Reward={online_reward:.3f}, "
+                                  f"Avg Recent Reward={stats.get('avg_reward_recent', 0):.3f}, "
+                                  f"Tokens/sec={new_token_scalar/total_time:.1f}")
+                            
+                            # Additional wandb logging for progress tracking
+                            if online_policy.use_wandb:
+                                import wandb
+                                wandb.log({
+                                    "progress_reward": online_reward,
+                                    "progress_tokens_per_sec": new_token_scalar/total_time,
+                                    "progress_step": online_policy.step_count
+                                })
+
+                    # Collect RL training data if requested
+                    if args.collect_rl_data:
+                        # Convert tensor values to Python scalars
+                        new_token_scalar = int(new_token.cpu()) if hasattr(new_token, 'cpu') else int(new_token)
+                        rl_reward = calculate_real_reward(
+                            total_time, new_token_scalar, predicted_total_tokens, 
+                            predicted_depth, predicted_top_k
+                        )
+                        rl_data_entry = {
+                            "question_id": question["question_id"],
+                            "turn": j,
+                            "choice": i,
+                            "context": context,
+                            "total_tokens": predicted_total_tokens,
+                            "depth": predicted_depth,
+                            "top_k": predicted_top_k,
+                            "generation_time": total_time,
+                            "new_tokens": new_token_scalar,
+                            "reward": rl_reward,
+                            "tokens_per_second": new_token_scalar / total_time if total_time > 0 else 0
+                        }
+                        rl_data_entries.append(rl_data_entry)
+
+                    turns.append(output)
+                    idxs.append(int(idx))
+                    new_tokens.append(int(new_token))
+                    wall_time.append(total_time)
+                    conv.messages[-1][-1] = output
+                # End of if success block
             # torch.cuda.empty_cache()
             if question_failed:
                 break  # Break out of choices loop if any turn failed
