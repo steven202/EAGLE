@@ -1467,9 +1467,19 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             saved_config = None
             
             if os.path.exists(state_path):
-                with open(state_path, 'r') as f:
-                    saved_config = json.load(f)
-                print(f"📋 Found checkpoint state file, checking configuration")
+                try:
+                    with open(state_path, 'r') as f:
+                        content = f.read().strip()
+                        if content:  # Check if file has content
+                            saved_config = json.loads(content)
+                            print(f"📋 Found checkpoint state file, checking configuration")
+                        else:
+                            print(f"⚠️  State file {state_path} is empty, skipping state file loading")
+                            saved_config = None
+                except (json.JSONDecodeError, FileNotFoundError) as e:
+                    print(f"⚠️  Failed to read state file {state_path}: {e}")
+                    print(f"   Continuing without state file configuration")
+                    saved_config = None
             
             # Load model without environment to inspect its configuration
             temp_model_data = PPO.load(checkpoint_path, env=None, device=self.device)
