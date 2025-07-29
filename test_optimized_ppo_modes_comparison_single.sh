@@ -26,9 +26,18 @@ DATE="${DATE}_optimized_ppo"
 # DATE='log/20250727_0412_optimized_ppo'
 # DATE='20250725_0725_optimized_ppo'
 # DATE='20250726_0904_optimized_ppo'
-MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
-BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
+# MODEL CONFIGURATION - Will be replaced by script generator
+MODEL_NAME="LLaMA3.1-8B"  # Will be replaced: LLaMA3.1-8B, Vicuna-13B, etc.
+MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"  # Will be replaced
+BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"  # Will be replaced
+GEN_SCRIPT="gen_ea_answer_llama3chat_rl"  # Will be replaced: gen_ea_answer_llama3chat_rl or gen_ea_answer_vicuna_rl
+BASELINE_SCRIPT="gen_baseline_answer_llama3chat"  # Will be replaced: gen_baseline_answer_llama3chat or gen_baseline_answer_vicuna
+EAGLE3_SCRIPT="gen_ea_answer_llama3chat"  # Will be replaced: gen_ea_answer_llama3chat or gen_ea_answer_vicuna
 QUESTION_END=4000
+
+# NETWORK ARCHITECTURE CONFIGURATION - Will be replaced by script generator
+STANDARD_NET_ARCH="64,64"  # Will be replaced by generator
+OFL_NET_ARCH="64,64"  # Will be replaced by generator
 
 # EXECUTION MODE CONFIGURATION
 # Set these to "true" or "false" to control which modes to run
@@ -160,7 +169,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
             echo "- Training dataset: questions 0-$QUESTION_END for faster training" 
             echo "" 
 
-            PYTHONUNBUFFERED=1 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            PYTHONUNBUFFERED=1 python -m eagle.evaluation.$GEN_SCRIPT \
                 --ea-model-path $MODEL_PATH \
                 --base-model-path $BASE_MODEL_PATH \
                 --model-id optimized_max_entropy_ppo_standard \
@@ -195,7 +204,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --action-cache-enabled \
                 --use-eagle3-features \
                 --hidden-size 4096 \
-                --ppo-net-arch "64,64" \
+                --ppo-net-arch "$STANDARD_NET_ARCH" \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_standard/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
@@ -781,7 +790,15 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 HIDDEN_SIZE_ARG="--hidden-size 384"
             fi
             
-            python -m eagle.evaluation.gen_ea_answer_llama3chat_rl \
+            # Determine network architecture based on policy version
+            NET_ARCH_ARG=""
+            if [[ "$policy_dir" == *"_ofl" ]]; then
+                NET_ARCH_ARG="--ppo-net-arch \"$OFL_NET_ARCH\""
+            else
+                NET_ARCH_ARG="--ppo-net-arch \"$STANDARD_NET_ARCH\""
+            fi
+            
+            python -m eagle.evaluation.$GEN_SCRIPT \
                 --ea-model-path $MODEL_PATH \
                 --base-model-path $BASE_MODEL_PATH \
                 --model-id ${policy_dir}_$benchmark \
@@ -805,6 +822,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --action-cache-enabled \
                 --use-eagle3-features \
                 $HIDDEN_SIZE_ARG \
+                $NET_ARCH_ARG \
                 --total-token 60 \
                 --depth 7 \
                 --top-k 10 \
@@ -826,19 +844,19 @@ echo ""
 
 # Generate baselines for each policy directory
 for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
-    echo "=== Generating LLaMA 3.1 8B Baseline Results for $dir ===" >> log/$DATE/$dir/comparison.txt
+    echo "=== Generating $MODEL_NAME Baseline Results for $dir ===" >> log/$DATE/$dir/comparison.txt
     mkdir -p log/$DATE/$dir/baseline_results
     
     for benchmark in "${BENCHMARKS[@]}"; do
         echo "Generating baseline for $benchmark..." >> log/$DATE/$dir/comparison.txt
         
         # Generate EAGLE3 baseline
-        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" ]; then
-            python -m eagle.evaluation.gen_ea_answer_llama3chat \
+        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl" ]; then
+            python -m eagle.evaluation.$EAGLE3_SCRIPT \
                 --ea-model-path "$MODEL_PATH" \
                 --base-model-path "$BASE_MODEL_PATH" \
                 --bench-name "$benchmark" \
-                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl" \
+                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl" \
                 --temperature 0.0 \
                 --use_eagle3 \
                 2>&1 | tee -a log/$DATE/$dir/baseline_results/baseline_${benchmark}_eagle3.log
@@ -851,12 +869,12 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
         echo "Generating standard baseline for $benchmark..." >> log/$DATE/$dir/comparison.txt
         
         # Generate standard baseline
-        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" ]; then
-            python -m eagle.evaluation.gen_baseline_answer_llama3chat \
+        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl" ]; then
+            python -m eagle.evaluation.$BASELINE_SCRIPT \
                 --ea-model-path "$MODEL_PATH" \
                 --base-model-path "$BASE_MODEL_PATH" \
                 --bench-name "$benchmark" \
-                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl" \
+                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl" \
                 --temperature 0.0 \
                 2>&1 | tee -a log/$DATE/$dir/baseline_results/baseline_${benchmark}_standard.log
         else
@@ -879,8 +897,8 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
         echo "===========================================" >> log/$DATE/$dir/summary.txt
         
         # Define baseline files for this policy directory
-        eagle3_file="log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_eagle3.jsonl"
-        baseline_file="log/$DATE/$dir/baseline_results/${benchmark}_LLaMA3.1-8B_baseline.jsonl"
+        eagle3_file="log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl"
+        baseline_file="log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl"
     
         # Create list of result files for this benchmark
         RESULT_FILES=()

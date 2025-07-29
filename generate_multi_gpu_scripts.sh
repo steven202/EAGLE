@@ -112,6 +112,7 @@ case $MODEL_CHOICE in
         BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
         GEN_SCRIPT="gen_ea_answer_llama3chat_rl"
         BASELINE_SCRIPT="gen_baseline_answer_llama3chat"
+        EAGLE3_SCRIPT="gen_ea_answer_llama3chat"
         ;;
     2)
         MODEL_NAME="Vicuna-13B"
@@ -119,6 +120,7 @@ case $MODEL_CHOICE in
         BASE_MODEL_PATH="lmsys/vicuna-13b-v1.3"
         GEN_SCRIPT="gen_ea_answer_vicuna_rl"
         BASELINE_SCRIPT="gen_baseline_answer_vicuna"
+        EAGLE3_SCRIPT="gen_ea_answer_vicuna"
         ;;
     3)
         MODEL_NAME="LLaMA3.3-70B"
@@ -126,6 +128,7 @@ case $MODEL_CHOICE in
         BASE_MODEL_PATH="meta-llama/Llama-3.3-70B-Instruct"
         GEN_SCRIPT="gen_ea_answer_llama3chat_rl"
         BASELINE_SCRIPT="gen_baseline_answer_llama3chat"
+        EAGLE3_SCRIPT="gen_ea_answer_llama3chat"
         ;;
     *)
         echo "Invalid model choice. Using default LLaMA3.1-8B"
@@ -134,6 +137,7 @@ case $MODEL_CHOICE in
         BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
         GEN_SCRIPT="gen_ea_answer_llama3chat_rl"
         BASELINE_SCRIPT="gen_baseline_answer_llama3chat"
+        EAGLE3_SCRIPT="gen_ea_answer_llama3chat"
         ;;
 esac
 
@@ -939,6 +943,27 @@ for i in "${!COMBINATIONS[@]}"; do
         sed -i "5i# Network Architecture - OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
     fi
     sed -i "6i#" "$OUTPUT_DIR/$script_name"
+    
+    # Substitute model variables in the generated script
+    sed -i "s|MODEL_NAME=\".*\"|MODEL_NAME=\"$MODEL_NAME\"|g" "$OUTPUT_DIR/$script_name"
+    sed -i "s|MODEL_PATH=\".*\"|MODEL_PATH=\"$MODEL_PATH\"|g" "$OUTPUT_DIR/$script_name"
+    sed -i "s|BASE_MODEL_PATH=\".*\"|BASE_MODEL_PATH=\"$BASE_MODEL_PATH\"|g" "$OUTPUT_DIR/$script_name"
+    sed -i "s|GEN_SCRIPT=\".*\"|GEN_SCRIPT=\"$GEN_SCRIPT\"|g" "$OUTPUT_DIR/$script_name"
+    sed -i "s|BASELINE_SCRIPT=\".*\"|BASELINE_SCRIPT=\"$BASELINE_SCRIPT\"|g" "$OUTPUT_DIR/$script_name"
+    sed -i "s|EAGLE3_SCRIPT=\".*\"|EAGLE3_SCRIPT=\"$EAGLE3_SCRIPT\"|g" "$OUTPUT_DIR/$script_name"
+    
+    # Substitute network architecture variables
+    sed -i "s|STANDARD_NET_ARCH=\".*\"|STANDARD_NET_ARCH=\"$STANDARD_NET_ARCH\"|g" "$OUTPUT_DIR/$script_name"
+    sed -i "s|OFL_NET_ARCH=\".*\"|OFL_NET_ARCH=\"$OFL_NET_ARCH\"|g" "$OUTPUT_DIR/$script_name"
+    
+    # Update DATE to include model name for better organization
+    MODEL_SHORT_NAME=$(echo "$MODEL_NAME" | sed 's/[^a-zA-Z0-9]//g' | tr '[:upper:]' '[:lower:]')
+    if [ -n "$CUSTOM_DATE" ]; then
+        sed -i "s|DATE=\".*\"|DATE=\"${CUSTOM_DATE}_${MODEL_SHORT_NAME}\"|g" "$OUTPUT_DIR/$script_name"
+    else
+        current_date=$(date '+%Y%m%d_%H%M%S')
+        sed -i "s|DATE=\$(date.*)|DATE=\"${current_date}_${MODEL_SHORT_NAME}\"|g" "$OUTPUT_DIR/$script_name"
+    fi
 done
 
 # Create a master script to run all generated scripts
