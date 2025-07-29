@@ -6,10 +6,16 @@
 # 2. Action caching to reduce computation frequency (every N steps)
 # 3. NEW: Context-only state representation option (SBERT embeddings directly)
 # 4. NEW: Choice between Standard and OFL policy versions
+# 5. NEW: Configurable network architecture via --ppo-net-arch
 #
 # USAGE:
 # To run Standard version only: Set RUN_STANDARD_VERSION=1, RUN_OFL_VERSION=0
 # To run OFL version only: Set RUN_STANDARD_VERSION=0, RUN_OFL_VERSION=1  
+#
+# NETWORK ARCHITECTURE EXAMPLES:
+# Standard version: --ppo-net-arch "512,256,128"
+# OFL version (same pi/vf): --ppo-net-arch "64,64"
+# OFL version (different pi/vf): --ppo-net-arch "64,64;128,128"
 #
 # Example configurations:
 # - OFL only: RUN_STANDARD_VERSION=0, RUN_OFL_VERSION=1
@@ -192,6 +198,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --action-cache-enabled \
                 --use-eagle3-features \
                 --hidden-size 4096 \
+                --ppo-net-arch "64,64" \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_standard/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_standard/optimized_max_entropy_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
@@ -248,6 +255,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --action-cache-enabled \
                 --use-eagle3-features \
                 --hidden-size 4096 \
+                --ppo-net-arch "64,64" \
                 --checkpoint-dir log/$DATE/optimized_standard_ppo_standard/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_standard_ppo_standard/optimized_standard_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
@@ -310,6 +318,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --action-cache-enabled \
                 --use-eagle3-features \
                 --hidden-size 4096 \
+                --ppo-net-arch "64,64;64,64" \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_standard_ofl/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_standard_ofl/optimized_max_entropy_ppo_policy_sb3.zip \
                 --checkpoint-freq 500 \
@@ -366,6 +375,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --action-cache-enabled \
                 --use-eagle3-features \
                 --hidden-size 4096 \
+                --ppo-net-arch "64,64;64,64" \
                 --checkpoint-dir log/$DATE/optimized_standard_ppo_standard_ofl/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_standard_ppo_standard_ofl/optimized_standard_ppo_policy_sb3.zip \
                 --checkpoint-freq 500 \
@@ -431,6 +441,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --use-eagle3-features \
                 --hidden-size 384 \
                 --use-context-only-state \
+                --ppo-net-arch "64,64" \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_context/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_context/optimized_max_entropy_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
@@ -488,6 +499,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --use-eagle3-features \
                 --hidden-size 384 \
                 --use-context-only-state \
+                --ppo-net-arch "64,64" \
                 --checkpoint-dir log/$DATE/optimized_standard_ppo_context/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_standard_ppo_context/optimized_standard_ppo_policy_sb3.pt \
                 --checkpoint-freq 500 \
@@ -550,6 +562,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --use-eagle3-features \
                 --hidden-size 384 \
                 --use-context-only-state \
+                --ppo-net-arch "64,64;64,64" \
                 --checkpoint-dir log/$DATE/optimized_max_entropy_ppo_context_ofl/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_max_entropy_ppo_context_ofl/optimized_max_entropy_ppo_policy_sb3.zip \
                 --checkpoint-freq 500 \
@@ -607,6 +620,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --use-eagle3-features \
                 --hidden-size 384 \
                 --use-context-only-state \
+                --ppo-net-arch "64,64;64,64" \
                 --checkpoint-dir log/$DATE/optimized_standard_ppo_context_ofl/checkpoints \
                 --online-policy-save-path log/$DATE/optimized_standard_ppo_context_ofl/optimized_standard_ppo_policy_sb3.zip \
                 --checkpoint-freq 500 \

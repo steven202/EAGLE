@@ -62,6 +62,52 @@ except:
     from eagle.evaluation.optimized_online_rl_policy import OptimizedOnlineTreePolicy, calculate_optimized_online_reward
 
 
+def parse_ppo_net_arch_args(net_arch_str, policy_version="standard"):
+    """
+    Parse network architecture string for PPO policies.
+    
+    Args:
+        net_arch_str: String representation of network architecture
+        policy_version: "standard" or "ofl"
+    
+    Returns:
+        For standard version: list of integers [512, 256, 128]
+        For OFL version: dict {"pi": [128, 128], "vf": [128, 128]} or list [128, 128] for both
+    """
+    if not net_arch_str or net_arch_str.strip() == "":
+        if policy_version == "standard":
+            return [64, 64]  # Default for standard version
+        else:
+            return [64, 64]  # Default for OFL version
+    
+    if policy_version == "standard":
+        # Parse comma-separated integers for standard version
+        try:
+            return [int(x.strip()) for x in net_arch_str.split(",")]
+        except ValueError:
+            print(f"Warning: Invalid network architecture '{net_arch_str}' for standard version. Using default [64, 64]")
+            return [64, 64]
+    else:
+        # Parse OFL version format: "pi_layers;vf_layers" or just "layers"
+        if ";" in net_arch_str:
+            # Format: "64,64;128,128"
+            try:
+                pi_str, vf_str = net_arch_str.split(";", 1)
+                pi_layers = [int(x.strip()) for x in pi_str.split(",")]
+                vf_layers = [int(x.strip()) for x in vf_str.split(",")]
+                return {"pi": pi_layers, "vf": vf_layers}
+            except (ValueError, IndexError):
+                print(f"Warning: Invalid network architecture '{net_arch_str}' for OFL version. Using default [64, 64]")
+                return [64, 64]
+        else:
+            # Format: "64,64" (same for both pi and vf)
+            try:
+                layers = [int(x.strip()) for x in net_arch_str.split(",")]
+                return layers
+            except ValueError:
+                print(f"Warning: Invalid network architecture '{net_arch_str}' for OFL version. Using default [64, 64]")
+                return [64, 64]
+
 
 def run_eval(
         base_model_path,
@@ -168,7 +214,7 @@ def get_model_answers(
     tokenizer = model.get_tokenizer()
 
     # Set max_length parameter once to avoid repeated computation
-    max_length_param = 2100 if (args.bench_name == "sum" or "sum" in args.question_file) and args.online_inference_only else 2048
+    max_length_param = 2136 if (args.bench_name == "sum" or "sum" in args.question_file) and args.online_inference_only else 2048
 
     # Initialize RL policy if requested
     rl_policy = None
@@ -214,13 +260,18 @@ def get_model_answers(
             version_description = f" ({policy_version.upper()} version)" if policy_version != "standard" else ""
             print(f"🚀⚡ Using {mode_description}{version_description} with EAGLE-3 features + action caching (every {action_cache_steps} steps)")
             
+            # Parse network architecture based on policy version
+            net_arch = parse_ppo_net_arch_args(getattr(args, 'ppo_net_arch', ''), policy_version)
+            
             # Choose policy implementation based on version
             if policy_version == "ofl":
                 PolicyClass = OptimizedSB3DiscretePPOOnlineTreePolicyOFL
                 print(f"📋 Using OFL version with enhanced features (set_max_timesteps, set_training_mode, enhanced PPO updates)")
+                print(f"📊 Network architecture: {net_arch}")
             else:
                 PolicyClass = CustomPPOOnlineTreePolicy
                 print(f"📋 Using custom PPO implementation (no SB3 dependency)")
+                print(f"📊 Network architecture: {net_arch}")
             
             online_policy = PolicyClass(
                 learning_rate=args.online_lr,
@@ -245,6 +296,8 @@ def get_model_answers(
                 use_eagle3_features=getattr(args, 'use_eagle3_features', True),
                 # NEW: Context-only state representation
                 use_context_only_state=getattr(args, 'use_context_only_state', False),
+                # NEW: Network architecture parameter
+                net_arch=net_arch,
                 use_wandb=(not args.online_inference_only and not args.no_wandb),
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
@@ -1551,6 +1604,13 @@ if __name__ == "__main__":
         type=int,
         default=4096,
         help="Hidden size for EAGLE-3 layer features (typically 4096 for LLaMA models)"
+    )
+
+    parser.add_argument(
+        "--ppo-net-arch",
+        type=str,
+        default="",
+        help="Network architecture for PPO policies. For standard version: comma-separated integers (e.g., '512,256,128'). For OFL version: '64,64' for same pi/vf or '64,64;128,128' for different pi/vf"
     )
 
     parser.add_argument(

@@ -38,7 +38,7 @@ class CustomPolicy(ActorCriticPolicy):
     
     def __init__(self, observation_space, action_space, net_arch=None, **kwargs):
         if net_arch is None:
-            net_arch = [512, 256, 128]  # Enhanced architecture for better performance
+            net_arch = [64, 64]  # Enhanced architecture for better performance
         
         super().__init__(observation_space, action_space, net_arch=net_arch, **kwargs)
         
@@ -331,6 +331,8 @@ class CustomPPOOnlineTreePolicy:
                  use_eagle3_features=True,     # Use EAGLE-3 features instead of SBERT
                  # NEW: Context-only state representation option
                  use_context_only_state=False, # Use SBERT context embeddings directly (384D)
+                 # NEW: Network architecture parameter
+                 net_arch=None,                # Network architecture for policy network
                  use_wandb=True,
                  wandb_project="eagle-custom-ppo",
                  wandb_run_name=None,
@@ -413,10 +415,14 @@ class CustomPPOOnlineTreePolicy:
         # Determine entropy coefficient based on mode
         actual_ent_coef = max_entropy_ent_coef if enable_max_entropy else ent_coef
         
-        # Initialize custom policy
+        # Store network architecture for policy initialization
+        self.net_arch = net_arch if net_arch is not None else [64, 64]
+        
+        # Initialize custom policy with network architecture
         self.policy = CustomPolicy(
             observation_space=self.env.observation_space,
-            action_space=self.env.action_space
+            action_space=self.env.action_space,
+            net_arch=self.net_arch
         )
         
         # Initialize custom PPO model
@@ -455,6 +461,7 @@ class CustomPPOOnlineTreePolicy:
         print(f"CustomPPOOnlineTreePolicy initialized:")
         print(f"  - Action space: {self.env.action_space.n} discrete actions")
         print(f"  - Observation space: {self.env.observation_space.shape}")
+        print(f"  - Network architecture: {self.net_arch}")
         print(f"  - Learning rate: {learning_rate}")
         print(f"  - Custom PPO n_steps: {n_steps}")
         print(f"  - Custom PPO batch_size: {batch_size}")

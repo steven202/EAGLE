@@ -329,6 +329,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                  use_eagle3_features=True,     # Use EAGLE-3 features instead of SBERT
                  # NEW: Context-only state representation option
                  use_context_only_state=False, # Use SBERT context embeddings directly (384D)
+                 # NEW: Network architecture parameter
+                 net_arch=None,                # Network architecture for policy network
                  use_wandb=True,
                  wandb_project="eagle-optimized-sb3-discrete-ppo",
                  wandb_run_name=None,
@@ -414,11 +416,26 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Determine entropy coefficient based on mode
         actual_ent_coef = max_entropy_ent_coef if enable_max_entropy else ent_coef
         
+        # Parse network architecture for OFL version
+        if net_arch is None:
+            net_arch = [64, 64]  # Default for OFL version
+        
+        # Convert to SB3 format if needed
+        if isinstance(net_arch, dict):
+            # Format: {"pi": [64, 64], "vf": [128, 128]}
+            policy_kwargs = dict(net_arch=[net_arch])
+        else:
+            # Format: [128, 128] - same for both pi and vf
+            policy_kwargs = dict(net_arch=[{"pi": net_arch, "vf": net_arch}])
+        
+        # Store network architecture for logging
+        self.net_arch = net_arch
+        
         # Initialize SB3 PPO model
         self.model = PPO(
             "MlpPolicy", #CustomPolicy,
             self.env,
-            policy_kwargs=dict(net_arch=[{"pi": [128, 128], "vf": [128, 128]}]),
+            policy_kwargs=policy_kwargs,
             learning_rate=learning_rate,
             n_steps=n_steps,
             batch_size=batch_size,
@@ -479,6 +496,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         print(f"OptimizedSB3DiscretePPOOnlineTreePolicy initialized:")
         print(f"  - Action space: {self.env.action_space.n} discrete actions")
         print(f"  - Observation space: {self.env.observation_space.shape}")
+        print(f"  - Network architecture: {self.net_arch}")
         print(f"  - Learning rate: {learning_rate}")
         print(f"  - PPO n_steps: {n_steps}")
         print(f"  - PPO batch_size: {batch_size}")
