@@ -992,7 +992,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 # Set the model's rollout buffer manually and trigger learning
                 
                 # Manual learning step using collected experiences
-                obs_tensor = torch.FloatTensor(observations).to(self.device)
+                obs_tensor = torch.FloatTensor(observations).to(self.device).requires_grad_(True)
                 actions_tensor = torch.LongTensor(actions).to(self.device)
                 rewards_tensor = torch.FloatTensor(rewards).to(self.device)
                 
@@ -1019,6 +1019,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         try:
             # Switch to train mode (this affects batch norm / dropout)
             self.model.policy.set_training_mode(True)
+            
+            # Ensure all policy parameters require gradients
+            for param in self.model.policy.parameters():
+                if not param.requires_grad:
+                    param.requires_grad_(True)
             
             # CRITICAL FIX: Update optimizer learning rate manually (avoiding logger dependency)
             self._update_learning_rate_manual()
@@ -1079,6 +1084,10 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     batch_returns = returns[batch_indices]
                     batch_old_values = old_values[batch_indices]
                     
+                    # Ensure batch observations require gradients
+                    if not batch_obs.requires_grad:
+                        batch_obs = batch_obs.requires_grad_(True)
+                    
                     # Get current policy outputs for this batch
                     batch_values, batch_log_probs, batch_entropy = self.model.policy.evaluate_actions(batch_obs, batch_actions)
                     batch_values = batch_values.flatten()
@@ -1135,6 +1144,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     
                     # Total loss
                     loss = policy_loss + self.model.ent_coef * entropy_loss + self.model.vf_coef * value_loss
+                    
+                    # Safety check: ensure loss requires gradients
+                    if not loss.requires_grad:
+                        print(f"Warning: Loss tensor does not require gradients, skipping backward pass")
+                        continue
                     
                     # Calculate approximate form of reverse KL Divergence for early stopping
                     with torch.no_grad():
