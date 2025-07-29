@@ -1482,7 +1482,17 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     saved_config = None
             
             # Load model without environment to inspect its configuration
-            temp_model_data = PPO.load(checkpoint_path, env=None, device=self.device)
+            try:
+                # First, verify the zip file is valid
+                import zipfile
+                with zipfile.ZipFile(checkpoint_path, 'r') as test_zip:
+                    test_zip.testzip()  # This will raise an exception if the zip is corrupted
+                
+                temp_model_data = PPO.load(checkpoint_path, env=None, device=self.device)
+            except (zipfile.BadZipFile, ValueError, Exception) as e:
+                print(f"❌ Failed to load checkpoint {checkpoint_path}: {e}")
+                print(f"   Checkpoint file may be corrupted. Skipping checkpoint loading.")
+                return False
             
             # Get observation space from the saved model
             saved_obs_space = temp_model_data.observation_space
@@ -1527,7 +1537,12 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     print(f"   ✅ Reinitialized environment: context_only={use_context_only}, hidden_size={hidden_size}")
             
             # Now load the model with the correct environment
-            self.model = PPO.load(checkpoint_path, env=self.env, device=self.device)
+            try:
+                self.model = PPO.load(checkpoint_path, env=self.env, device=self.device)
+            except (zipfile.BadZipFile, ValueError, Exception) as e:
+                print(f"❌ Failed to load model with environment {checkpoint_path}: {e}")
+                print(f"   Checkpoint file may be corrupted. Skipping checkpoint loading.")
+                return False
             
             # Load additional state
             if saved_config:
@@ -1572,7 +1587,26 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         # Sort by modification time
         checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)), reverse=True)
-        return os.path.join(self.checkpoint_dir, checkpoints[0])
+        
+        # Find the first valid checkpoint
+        for checkpoint in checkpoints:
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint)
+            if self._is_valid_checkpoint(checkpoint_path):
+                return checkpoint_path
+            else:
+                print(f"⚠️  Skipping corrupted checkpoint: {checkpoint}")
+        
+        return None
+    
+    def _is_valid_checkpoint(self, checkpoint_path):
+        """Check if a checkpoint file is valid"""
+        try:
+            import zipfile
+            with zipfile.ZipFile(checkpoint_path, 'r') as test_zip:
+                test_zip.testzip()  # This will raise an exception if the zip is corrupted
+            return True
+        except:
+            return False
     
     def _cleanup_old_checkpoints(self):
         """Remove old checkpoints, keeping only the most recent ones"""
