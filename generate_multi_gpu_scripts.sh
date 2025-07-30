@@ -1048,32 +1048,32 @@ for i in "${!COMBINATIONS[@]}"; do
         sed -i "/^DATE=.*_optimized_ppo/c\DATE=\"${TODAY_DATE}_optimized_ppo\"" "$OUTPUT_DIR/$script_name"
     fi
     
-    # Add header comment to identify the script
+    # Store header information to add at the end later
+    HEADER_COMMENT=""
     if [ "$GPU_ASSIGNMENT_METHOD" -eq 2 ]; then
         if [[ "$gpu_assignment" == "-1" ]]; then
-            sed -i "1i# Generated script for CPU only, Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
+            HEADER_COMMENT="# Generated script for CPU only, Combination $combo ($desc)"
         else
-            sed -i "1i# Generated script for GPUs [$gpu_assignment], Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
+            HEADER_COMMENT="# Generated script for GPUs [$gpu_assignment], Combination $combo ($desc)"
         fi
     else
-        sed -i "1i# Generated script for GPU $gpu_id, Combination $combo ($desc)" "$OUTPUT_DIR/$script_name"
+        HEADER_COMMENT="# Generated script for GPU $gpu_id, Combination $combo ($desc)"
     fi
-    sed -i "2i# Original script: ${BASE_SCRIPT}.sh" "$OUTPUT_DIR/$script_name"
-    sed -i "3i# Model: $MODEL_NAME ($MODEL_PATH)" "$OUTPUT_DIR/$script_name"
+    HEADER_COMMENT="$HEADER_COMMENT\n# Original script: ${BASE_SCRIPT}.sh"
+    HEADER_COMMENT="$HEADER_COMMENT\n# Model: $MODEL_NAME ($MODEL_PATH)"
     if [ -n "$CUSTOM_DATE" ]; then
-        sed -i "4i# Generated on: $CUSTOM_DATE" "$OUTPUT_DIR/$script_name"
+        HEADER_COMMENT="$HEADER_COMMENT\n# Generated on: $CUSTOM_DATE"
     else
-        sed -i "4i# Generated on: $(date)" "$OUTPUT_DIR/$script_name"
+        HEADER_COMMENT="$HEADER_COMMENT\n# Generated on: $(date)"
     fi
-    # Add network architecture info to script header
+    # Add network architecture info to header
     if [ "$NEED_STANDARD_VERSION" = true ] && [ "$NEED_OFL_VERSION" = true ]; then
-        sed -i "5i# Network Architecture - Standard: $STANDARD_NET_ARCH, OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
+        HEADER_COMMENT="$HEADER_COMMENT\n# Network Architecture - Standard: $STANDARD_NET_ARCH, OFL: $OFL_NET_ARCH"
     elif [ "$NEED_STANDARD_VERSION" = true ]; then
-        sed -i "5i# Network Architecture - Standard: $STANDARD_NET_ARCH" "$OUTPUT_DIR/$script_name"
+        HEADER_COMMENT="$HEADER_COMMENT\n# Network Architecture - Standard: $STANDARD_NET_ARCH"
     elif [ "$NEED_OFL_VERSION" = true ]; then
-        sed -i "5i# Network Architecture - OFL: $OFL_NET_ARCH" "$OUTPUT_DIR/$script_name"
+        HEADER_COMMENT="$HEADER_COMMENT\n# Network Architecture - OFL: $OFL_NET_ARCH"
     fi
-    sed -i "6i#" "$OUTPUT_DIR/$script_name"
     
     # Substitute model variables in the generated script
     sed -i "s|MODEL_NAME=\".*\"|MODEL_NAME=\"$MODEL_NAME\"|g" "$OUTPUT_DIR/$script_name"
@@ -1104,6 +1104,10 @@ for i in "${!COMBINATIONS[@]}"; do
             sed -i "s|DATE=\$(date.*)|DATE=\"${current_date}_optimized_ppo\"|g" "$OUTPUT_DIR/$script_name"
         fi
     fi
+    
+    # Add header comments at the end of the script
+    echo "" >> "$OUTPUT_DIR/$script_name"
+    echo -e "$HEADER_COMMENT" >> "$OUTPUT_DIR/$script_name"
 done
 
 # Create a master script to run all generated scripts
