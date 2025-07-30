@@ -768,7 +768,7 @@ fi
 echo "✅ Found ${#POLICIES_TO_EVALUATE[@]} trained policies. Starting evaluation..." 
 echo "" 
 
-# Evaluate all policies on all benchmarks
+# Unified evaluation and baseline generation for all policies and benchmarks
 for j in "${!POLICIES_TO_EVALUATE[@]}"; do
     policy_dir="${POLICIES_TO_EVALUATE[$j]}"
     policy_label="${POLICY_LABELS[$j]}"
@@ -777,16 +777,57 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
         benchmark="${BENCHMARKS[$i]}"
         benchmark_name="${BENCHMARK_NAMES[$i]}"
         
-        echo "=== Evaluating $benchmark_name with $policy_label ===" 
+        echo "=== Processing $benchmark_name with $policy_label ===" 
 
-        if [ ! -f log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl ]; then
-            # Determine if this policy uses context-only mode
+        # Check completeness of all three files for this benchmark
+        local our_method_file="log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
+        local eagle3_file="log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl"
+        local baseline_file="log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl"
+        
+        # Check each file and store exit codes
+        check_file_completeness "$our_method_file" "$benchmark"
+        local our_method_status=$?
+        check_file_completeness "$eagle3_file" "$benchmark"
+        local eagle3_status=$?
+        check_file_completeness "$baseline_file" "$benchmark"
+        local baseline_status=$?
+        
+        # Convert exit codes to readable status for logging
+        local our_method_status_text=""
+        local eagle3_status_text=""
+        local baseline_status_text=""
+        
+        case $our_method_status in
+            0) our_method_status_text="complete" ;;
+            1) our_method_status_text="missing" ;;
+            2) our_method_status_text="incomplete" ;;
+        esac
+        
+        case $eagle3_status in
+            0) eagle3_status_text="complete" ;;
+            1) eagle3_status_text="missing" ;;
+            2) eagle3_status_text="incomplete" ;;
+        esac
+        
+        case $baseline_status in
+            0) baseline_status_text="complete" ;;
+            1) baseline_status_text="missing" ;;
+            2) baseline_status_text="incomplete" ;;
+        esac
+        
+        echo "Status for $benchmark: Our method: $our_method_status_text, EAGLE3: $eagle3_status_text, Baseline: $baseline_status_text"
+        
+        # If any of the three files is missing or incomplete, delete all and regenerate together
+        if [ $our_method_status -ne 0 ] || [ $eagle3_status -ne 0 ] || [ $baseline_status -ne 0 ]; then
+            echo "One or more files incomplete/missing for $benchmark. Deleting all and regenerating together..."
+            delete_benchmark_files "$policy_dir" "$benchmark"
+            
+            # Determine policy-specific arguments
             CONTEXT_ARGS=""
             if [[ "$policy_dir" == *"_context" ]]; then
                 CONTEXT_ARGS="--use-context-only-state"
             fi
             
-            # Determine if this policy uses max-entropy mode
             ENTROPY_ARGS=""
             if [[ "$policy_dir" == *"max_entropy"* ]]; then
                 ENTROPY_ARGS="--enable-max-entropy --inference-temperature 1.5 --max-entropy-inference"
@@ -794,19 +835,16 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 ENTROPY_ARGS="--disable-max-entropy"
             fi
             
-            # Determine policy version based on directory name
             POLICY_VERSION_ARG="standard"
             if [[ "$policy_dir" == *"_ofl" ]]; then
                 POLICY_VERSION_ARG="ofl"
             fi
             
-            # Determine hidden-size based on context-only mode
             HIDDEN_SIZE_ARG="--hidden-size 4096"
             if [[ "$policy_dir" == *"_context" ]]; then
                 HIDDEN_SIZE_ARG="--hidden-size 384"
             fi
             
-            # Determine network architecture based on policy version
             NET_ARCH_ARG=""
             if [[ "$policy_dir" == *"_ofl" ]]; then
                 NET_ARCH_ARG="--ppo-net-arch \"$OFL_NET_ARCH\""
@@ -814,6 +852,10 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 NET_ARCH_ARG="--ppo-net-arch \"$STANDARD_NET_ARCH\""
             fi
             
+            # Regenerate all three files together
+            
+            # 1. Regenerate our method results
+            echo "Regenerating our method results for $benchmark..."
             python -m eagle.evaluation.$GEN_SCRIPT \
                 --ea-model-path $MODEL_PATH \
                 --base-model-path $BASE_MODEL_PATH \
@@ -844,8 +886,30 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --top-k 10 \
                 --use-stepwise-rl \
                 --use-eagle3 2>&1 | tee log/$DATE/$policy_dir/evaluation/${benchmark}_evaluation.log
+            
+            # 2. Regenerate EAGLE3 baseline
+            echo "Regenerating EAGLE3 baseline for $benchmark..."
+            python -m eagle.evaluation.$EAGLE3_SCRIPT \
+                --ea-model-path "$MODEL_PATH" \
+                --base-model-path "$BASE_MODEL_PATH" \
+                --bench-name "$benchmark" \
+                --answer-file "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl" \
+                --temperature 0.0 \
+                --use_eagle3 \
+                2>&1 | tee -a log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_eagle3.log
+            
+            # 3. Regenerate standard baseline
+            echo "Regenerating standard baseline for $benchmark..."
+            python -m eagle.evaluation.$BASELINE_SCRIPT \
+                --ea-model-path "$MODEL_PATH" \
+                --base-model-path "$BASE_MODEL_PATH" \
+                --bench-name "$benchmark" \
+                --answer-file "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl" \
+                --temperature 0.0 \
+                2>&1 | tee -a log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_standard.log
+                
         else
-            echo "Results already exist for $policy_label on $benchmark_name" 
+            echo "All files complete for $benchmark with $policy_label" 
         fi
     done
 done
@@ -858,45 +922,9 @@ echo ""
 
 # Note: summary.txt files are already created fresh above
 
-# Generate baselines for each policy directory
+# Create baseline results directories for all policy directories
 for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
-    echo "=== Generating $MODEL_NAME Baseline Results for $dir ===" >> log/$DATE/$dir/comparison.txt
     mkdir -p log/$DATE/$dir/baseline_results
-    
-    for benchmark in "${BENCHMARKS[@]}"; do
-        echo "Generating baseline for $benchmark..." >> log/$DATE/$dir/comparison.txt
-        
-        # Generate EAGLE3 baseline
-        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl" ]; then
-            python -m eagle.evaluation.$EAGLE3_SCRIPT \
-                --ea-model-path "$MODEL_PATH" \
-                --base-model-path "$BASE_MODEL_PATH" \
-                --bench-name "$benchmark" \
-                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl" \
-                --temperature 0.0 \
-                --use_eagle3 \
-                2>&1 | tee -a log/$DATE/$dir/baseline_results/baseline_${benchmark}_eagle3.log
-        else
-            echo "EAGLE3 baseline for $benchmark already exists" >> log/$DATE/$dir/comparison.txt
-        fi
-    done
-    
-    for benchmark in "${BENCHMARKS[@]}"; do
-        echo "Generating standard baseline for $benchmark..." >> log/$DATE/$dir/comparison.txt
-        
-        # Generate standard baseline
-        if [ ! -f "log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl" ]; then
-            python -m eagle.evaluation.$BASELINE_SCRIPT \
-                --ea-model-path "$MODEL_PATH" \
-                --base-model-path "$BASE_MODEL_PATH" \
-                --bench-name "$benchmark" \
-                --answer-file "log/$DATE/$dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl" \
-                --temperature 0.0 \
-                2>&1 | tee -a log/$DATE/$dir/baseline_results/baseline_${benchmark}_standard.log
-        else
-            echo "Standard baseline for $benchmark already exists" >> log/$DATE/$dir/comparison.txt
-        fi
-    done
 done
 
 # Analyze results for each benchmark with comprehensive comparisons - per policy directory
@@ -1088,6 +1116,49 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
     fi
     echo "" 
 done
+
+# Function to check if a file is complete by comparing line count with question file
+# Returns: 0 = complete, 1 = missing, 2 = incomplete
+check_file_completeness() {
+    local answer_file="$1"
+    local benchmark="$2"
+    
+    # Get expected line count from question file using awk (more reliable than wc -l)
+    local question_file="eagle/data/$benchmark/question.jsonl"
+    local expected_lines=$(awk 'END {print NR}' "$question_file")
+    
+    # Check if answer file exists
+    if [ ! -f "$answer_file" ]; then
+        return 1  # Missing
+    fi
+    
+    local actual_lines=$(awk 'END {print NR}' "$answer_file")
+    
+    # Compare line counts
+    if [ "$actual_lines" -eq "$expected_lines" ]; then
+        return 0  # Complete
+    else
+        return 2  # Incomplete
+    fi
+}
+
+# Function to delete files for a specific benchmark and policy directory
+delete_benchmark_files() {
+    local policy_dir="$1"
+    local benchmark="$2"
+    
+    echo "Deleting incomplete/missing files for $benchmark in $policy_dir..."
+    
+    # Delete our method results
+    rm -f "log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
+    rm -f "log/$DATE/$policy_dir/evaluation/${benchmark}_evaluation.log"
+    
+    # Delete baseline results
+    rm -f "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl"
+    rm -f "log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_eagle3.log"
+    rm -f "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl"
+    rm -f "log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_standard.log"
+}
 
 # Create performance summary for each policy directory
 for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
