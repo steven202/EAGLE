@@ -151,6 +151,43 @@ echo ""
 # Create model short name for filenames and directories
 MODEL_SHORT_NAME=$(echo "$MODEL_NAME" | sed 's/[^a-zA-Z0-9]//g' | tr '[:upper:]' '[:lower:]')
 
+# Model name inclusion option
+echo ""
+echo "=== Model Name Inclusion ==="
+echo "Do you want to include the model name in generated file and folder names?"
+echo "1. Yes - Include model name (e.g., test_op__vicuna13b_multi_gpu_20250729_184423/) [default]"
+echo "2. No - Use legacy naming (e.g., test_op__multi_gpu_20250729_184423/)"
+echo ""
+
+INCLUDE_MODEL_NAME=""
+if [ $# -gt 0 ]; then
+    # Non-interactive mode - use new naming with model name by default
+    INCLUDE_MODEL_NAME=1
+    echo "Non-interactive mode: Using new naming with model name"
+else
+    # Interactive mode - ask user
+    read -p "Choose naming style (1/2, default: 1): " INCLUDE_MODEL_NAME
+    if [ -z "$INCLUDE_MODEL_NAME" ]; then
+        INCLUDE_MODEL_NAME=1
+        echo "Using default: Include model name in generated names"
+    fi
+fi
+
+case $INCLUDE_MODEL_NAME in
+    1)
+        echo "Will include model name ($MODEL_SHORT_NAME) in generated names"
+        USE_MODEL_IN_NAMES=true
+        ;;
+    2)
+        echo "Using legacy naming without model name"
+        USE_MODEL_IN_NAMES=false
+        ;;
+    *)
+        echo "Invalid choice. Using default: Include model name in generated names"
+        USE_MODEL_IN_NAMES=true
+        ;;
+esac
+
 # Create a shorter prefix for generated files (first 15 characters)
 if [ ${#BASE_SCRIPT} -gt 7 ]; then
     FILE_PREFIX="${BASE_SCRIPT:0:7}"
@@ -572,13 +609,21 @@ if [ "$OVERWRITE_MODE" == true ]; then
     echo ""
     echo "Looking for existing generated folders..."
     
-    # Find all existing multi-gpu folders for this model
-    EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu* 2>/dev/null | sort -r))
+    # Find all existing multi-gpu folders for this model or all folders
+    if [ "$USE_MODEL_IN_NAMES" = true ]; then
+        EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu* 2>/dev/null | sort -r))
+    else
+        EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__multi_gpu* 2>/dev/null | sort -r))
+    fi
     
     if [ ${#EXISTING_FOLDERS[@]} -eq 0 ]; then
         echo "No existing generated folders found. Using current date/time instead."
         CUSTOM_DATE=$(date '+%Y%m%d_%H%M%S')
-        OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}"
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}"
+        else
+            OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}"
+        fi
         echo "Using current date/time: $CUSTOM_DATE"
         echo "Folder name: $OUTPUT_DIR"
     else
@@ -587,25 +632,43 @@ if [ "$OVERWRITE_MODE" == true ]; then
         echo "Found existing folder: $MOST_RECENT_FOLDER"
         
         # Extract date/time from folder name
-        if [[ "$MOST_RECENT_FOLDER" =~ ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_(.+)$ ]]; then
-            EXTRACTED_DATE="${BASH_REMATCH[1]}"
-            CUSTOM_DATE="$EXTRACTED_DATE"
-            OUTPUT_DIR="$MOST_RECENT_FOLDER"
-            echo "Using existing date/time: $CUSTOM_DATE"
-            echo "Folder name: $OUTPUT_DIR"
-            echo "This will overwrite existing scripts in this folder."
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            if [[ "$MOST_RECENT_FOLDER" =~ ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_(.+)$ ]]; then
+                EXTRACTED_DATE="${BASH_REMATCH[1]}"
+                CUSTOM_DATE="$EXTRACTED_DATE"
+                OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                echo "Using existing date/time: $CUSTOM_DATE"
+                echo "Folder name: $OUTPUT_DIR"
+            else
+                # Simple folder without date/time
+                CUSTOM_DATE=""
+                OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                echo "Using existing simple folder: $OUTPUT_DIR"
+            fi
         else
-            # Simple folder without date/time
-            CUSTOM_DATE=""
-            OUTPUT_DIR="$MOST_RECENT_FOLDER"
-            echo "Using existing simple folder: $OUTPUT_DIR"
-            echo "This will overwrite existing scripts in this folder."
+            if [[ "$MOST_RECENT_FOLDER" =~ ${FILE_PREFIX}__multi_gpu_(.+)$ ]]; then
+                EXTRACTED_DATE="${BASH_REMATCH[1]}"
+                CUSTOM_DATE="$EXTRACTED_DATE"
+                OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                echo "Using existing date/time: $CUSTOM_DATE"
+                echo "Folder name: $OUTPUT_DIR"
+            else
+                # Simple folder without date/time
+                CUSTOM_DATE=""
+                OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                echo "Using existing simple folder: $OUTPUT_DIR"
+            fi
         fi
+        echo "This will overwrite existing scripts in this folder."
     fi
 elif [ -n "$CUSTOM_DATETIME_ARG" ]; then
     # Use command-line specified date/time
     CUSTOM_DATE="$CUSTOM_DATETIME_ARG"
-    OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATETIME_ARG}"
+    if [ "$USE_MODEL_IN_NAMES" = true ]; then
+        OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATETIME_ARG}"
+    else
+        OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATETIME_ARG}"
+    fi
     echo "Using command-line specified date/time: $CUSTOM_DATETIME_ARG"
     echo "Folder name: $OUTPUT_DIR"
 else
@@ -630,11 +693,19 @@ read -p "Choose option (1/2/3/4/5/6, default: 1): " DATE_OPTION
         read -p "Custom date/time: " CUSTOM_DATETIME
         
         CUSTOM_DATE="$CUSTOM_DATETIME"
-        OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATETIME}"
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATETIME}"
+        else
+            OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATETIME}"
+        fi
         echo "Using custom date/time: $CUSTOM_DATETIME"
         echo "Folder name: $OUTPUT_DIR"
     elif [[ "$DATE_OPTION" == "3" ]]; then
-        OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu"
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu"
+        else
+            OUTPUT_DIR="${FILE_PREFIX}__multi_gpu"
+        fi
         CUSTOM_DATE=""
         echo "Using simple folder name: $OUTPUT_DIR"
     elif [[ "$DATE_OPTION" == "4" ]]; then
@@ -642,13 +713,21 @@ read -p "Choose option (1/2/3/4/5/6, default: 1): " DATE_OPTION
         echo ""
         echo "Looking for existing generated folders..."
         
-        # Find all existing multi-gpu folders for this model
-        EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu* 2>/dev/null | sort -r))
+        # Find all existing multi-gpu folders for this model or all folders
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu* 2>/dev/null | sort -r))
+        else
+            EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__multi_gpu* 2>/dev/null | sort -r))
+        fi
         
         if [ ${#EXISTING_FOLDERS[@]} -eq 0 ]; then
             echo "No existing generated folders found. Using current date/time instead."
             CUSTOM_DATE=$(date '+%Y%m%d_%H%M%S')
-            OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}"
+            if [ "$USE_MODEL_IN_NAMES" = true ]; then
+                OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}"
+            else
+                OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}"
+            fi
             echo "Using current date/time: $CUSTOM_DATE"
             echo "Folder name: $OUTPUT_DIR"
         else
@@ -657,20 +736,34 @@ read -p "Choose option (1/2/3/4/5/6, default: 1): " DATE_OPTION
             echo "Found existing folder: $MOST_RECENT_FOLDER"
             
             # Extract date/time from folder name
-            if [[ "$MOST_RECENT_FOLDER" =~ ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_(.+)$ ]]; then
-                EXTRACTED_DATE="${BASH_REMATCH[1]}"
-                CUSTOM_DATE="$EXTRACTED_DATE"
-                OUTPUT_DIR="$MOST_RECENT_FOLDER"
-                echo "Using existing date/time: $CUSTOM_DATE"
-                echo "Folder name: $OUTPUT_DIR"
-                echo "This will overwrite existing scripts in this folder."
+            if [ "$USE_MODEL_IN_NAMES" = true ]; then
+                if [[ "$MOST_RECENT_FOLDER" =~ ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_(.+)$ ]]; then
+                    EXTRACTED_DATE="${BASH_REMATCH[1]}"
+                    CUSTOM_DATE="$EXTRACTED_DATE"
+                    OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                    echo "Using existing date/time: $CUSTOM_DATE"
+                    echo "Folder name: $OUTPUT_DIR"
+                else
+                    # Simple folder without date/time
+                    CUSTOM_DATE=""
+                    OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                    echo "Using existing simple folder: $OUTPUT_DIR"
+                fi
             else
-                # Simple folder without date/time
-                CUSTOM_DATE=""
-                OUTPUT_DIR="$MOST_RECENT_FOLDER"
-                echo "Using existing simple folder: $OUTPUT_DIR"
-                echo "This will overwrite existing scripts in this folder."
+                if [[ "$MOST_RECENT_FOLDER" =~ ${FILE_PREFIX}__multi_gpu_(.+)$ ]]; then
+                    EXTRACTED_DATE="${BASH_REMATCH[1]}"
+                    CUSTOM_DATE="$EXTRACTED_DATE"
+                    OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                    echo "Using existing date/time: $CUSTOM_DATE"
+                    echo "Folder name: $OUTPUT_DIR"
+                else
+                    # Simple folder without date/time
+                    CUSTOM_DATE=""
+                    OUTPUT_DIR="$MOST_RECENT_FOLDER"
+                    echo "Using existing simple folder: $OUTPUT_DIR"
+                fi
             fi
+            echo "This will overwrite existing scripts in this folder."
             
             # Ask for confirmation (default: y since user already chose to overwrite)
             read -p "Do you want to overwrite scripts in $OUTPUT_DIR? (y/n, default: y): " CONFIRM_OVERWRITE
@@ -697,8 +790,12 @@ read -p "Choose option (1/2/3/4/5/6, default: 1): " DATE_OPTION
             echo "Deleted existing scripts in current directory."
         fi
         
-        # Delete existing multi-gpu folders for this model
-        EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu* 2>/dev/null))
+        # Delete existing multi-gpu folders for this model or all folders
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu* 2>/dev/null))
+        else
+            EXISTING_FOLDERS=($(ls -d ${FILE_PREFIX}__multi_gpu* 2>/dev/null))
+        fi
         if [ ${#EXISTING_FOLDERS[@]} -gt 0 ]; then
             echo "Found ${#EXISTING_FOLDERS[@]} existing multi-gpu folders:"
             for folder in "${EXISTING_FOLDERS[@]}"; do
@@ -718,7 +815,11 @@ read -p "Choose option (1/2/3/4/5/6, default: 1): " DATE_OPTION
         
         # Use current date/time for new generation
         CUSTOM_DATE=$(date '+%Y%m%d_%H%M%S')
-        OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}"
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}"
+        else
+            OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}"
+        fi
         echo "Using current date/time: $CUSTOM_DATE"
         echo "Folder name: $OUTPUT_DIR"
         echo "Starting fresh with clean environment."
@@ -741,13 +842,21 @@ read -p "Choose option (1/2/3/4/5/6, default: 1): " DATE_OPTION
         fi
         
         CUSTOM_DATE="$CUSTOM_FOLDER_NAME"
-        OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_FOLDER_NAME}"
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_FOLDER_NAME}"
+        else
+            OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_FOLDER_NAME}"
+        fi
         echo "Using custom folder name: $CUSTOM_FOLDER_NAME"
         echo "Folder name: $OUTPUT_DIR"
     else
         # Default: use current date/time
         CUSTOM_DATE=$(date '+%Y%m%d_%H%M%S')
-        OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}"
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}"
+        else
+            OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}"
+        fi
         echo "Using current date/time: $CUSTOM_DATE"
         echo "Folder name: $OUTPUT_DIR"
     fi
@@ -801,9 +910,17 @@ if [ -d "$OUTPUT_DIR" ]; then
             # Generate a new timestamp to avoid conflict
             if [ -n "$CUSTOM_DATE" ]; then
                 # Add a suffix to the custom date to avoid conflict
-                OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}_$(date +%H%M%S)"
+                if [ "$USE_MODEL_IN_NAMES" = true ]; then
+                    OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_${CUSTOM_DATE}_$(date +%H%M%S)"
+                else
+                    OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_${CUSTOM_DATE}_$(date +%H%M%S)"
+                fi
             else
-                OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_$(date +%H%M%S)"
+                if [ "$USE_MODEL_IN_NAMES" = true ]; then
+                    OUTPUT_DIR="${FILE_PREFIX}__${MODEL_SHORT_NAME}_multi_gpu_$(date +%H%M%S)"
+                else
+                    OUTPUT_DIR="${FILE_PREFIX}__multi_gpu_$(date +%H%M%S)"
+                fi
             fi
             echo "Using new directory name: $OUTPUT_DIR"
         fi
@@ -847,13 +964,21 @@ for i in "${!COMBINATIONS[@]}"; do
             # Replace commas with underscores for filename compatibility
             gpu_id_display=$(echo "$gpu_assignment" | tr ',' '_')
         fi
-        script_name="${FILE_PREFIX}__${MODEL_SHORT_NAME}_gpu${gpu_id_display}_${desc}_${combo}.sh"
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            script_name="${FILE_PREFIX}__${MODEL_SHORT_NAME}_gpu${gpu_id_display}_${desc}_${combo}.sh"
+        else
+            script_name="${FILE_PREFIX}__gpu${gpu_id_display}_${desc}_${combo}.sh"
+        fi
         echo "Generating script $((i+1))/${#COMBINATIONS[@]}: $script_name (GPUs: [$gpu_assignment], $desc, $MODEL_NAME)"
     else
         # Round-robin assignment
         gpu_id=$((i % NUM_GPUS))
         gpu_assignment="$gpu_id"
-        script_name="${FILE_PREFIX}__${MODEL_SHORT_NAME}_gpu${gpu_id}_${desc}_${combo}.sh"
+        if [ "$USE_MODEL_IN_NAMES" = true ]; then
+            script_name="${FILE_PREFIX}__${MODEL_SHORT_NAME}_gpu${gpu_id}_${desc}_${combo}.sh"
+        else
+            script_name="${FILE_PREFIX}__gpu${gpu_id}_${desc}_${combo}.sh"
+        fi
         echo "Generating script $((i+1))/${#COMBINATIONS[@]}: $script_name (GPU $gpu_id, $desc, $MODEL_NAME)"
     fi
     
@@ -962,13 +1087,22 @@ for i in "${!COMBINATIONS[@]}"; do
     sed -i "s|STANDARD_NET_ARCH=\".*\"|STANDARD_NET_ARCH=\"$STANDARD_NET_ARCH\"|g" "$OUTPUT_DIR/$script_name"
     sed -i "s|OFL_NET_ARCH=\".*\"|OFL_NET_ARCH=\"$OFL_NET_ARCH\"|g" "$OUTPUT_DIR/$script_name"
     
-    # Update DATE to include model name for better organization
-    MODEL_SHORT_NAME=$(echo "$MODEL_NAME" | sed 's/[^a-zA-Z0-9]//g' | tr '[:upper:]' '[:lower:]')
-    if [ -n "$CUSTOM_DATE" ]; then
-        sed -i "s|DATE=\".*\"|DATE=\"${CUSTOM_DATE}_${MODEL_SHORT_NAME}\"|g" "$OUTPUT_DIR/$script_name"
+    # Update DATE to include model name for better organization (if enabled)
+    if [ "$USE_MODEL_IN_NAMES" = true ]; then
+        if [ -n "$CUSTOM_DATE" ]; then
+            sed -i "s|DATE=\".*\"|DATE=\"${CUSTOM_DATE}_${MODEL_SHORT_NAME}\"|g" "$OUTPUT_DIR/$script_name"
+        else
+            current_date=$(date '+%Y%m%d_%H%M%S')
+            sed -i "s|DATE=\$(date.*)|DATE=\"${current_date}_${MODEL_SHORT_NAME}\"|g" "$OUTPUT_DIR/$script_name"
+        fi
     else
-        current_date=$(date '+%Y%m%d_%H%M%S')
-        sed -i "s|DATE=\$(date.*)|DATE=\"${current_date}_${MODEL_SHORT_NAME}\"|g" "$OUTPUT_DIR/$script_name"
+        # Use legacy DATE format without model name
+        if [ -n "$CUSTOM_DATE" ]; then
+            sed -i "s|DATE=\".*\"|DATE=\"${CUSTOM_DATE}\"|g" "$OUTPUT_DIR/$script_name"
+        else
+            current_date=$(date '+%Y%m%d_%H%M%S')
+            sed -i "s|DATE=\$(date.*)|DATE=\"${current_date}\"|g" "$OUTPUT_DIR/$script_name"
+        fi
     fi
 done
 
