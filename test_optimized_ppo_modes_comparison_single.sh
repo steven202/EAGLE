@@ -780,22 +780,22 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
         echo "=== Processing $benchmark_name with $policy_label ===" 
 
         # Check completeness of all three files for this benchmark
-        local our_method_file="log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
-        local eagle3_file="log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl"
-        local baseline_file="log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl"
+        our_method_file="log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
+        eagle3_file="log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl"
+        baseline_file="log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl"
         
         # Check each file and store exit codes
         check_file_completeness "$our_method_file" "$benchmark"
-        local our_method_status=$?
+        our_method_status=$?
         check_file_completeness "$eagle3_file" "$benchmark"
-        local eagle3_status=$?
+        eagle3_status=$?
         check_file_completeness "$baseline_file" "$benchmark"
-        local baseline_status=$?
+        baseline_status=$?
         
         # Convert exit codes to readable status for logging
-        local our_method_status_text=""
-        local eagle3_status_text=""
-        local baseline_status_text=""
+        our_method_status_text=""
+        eagle3_status_text=""
+        baseline_status_text=""
         
         case $our_method_status in
             0) our_method_status_text="complete" ;;
@@ -1142,7 +1142,6 @@ check_file_completeness() {
     fi
 }
 
-# Function to delete files for a specific benchmark and policy directory
 delete_benchmark_files() {
     local policy_dir="$1"
     local benchmark="$2"
@@ -1180,3 +1179,4 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
 
     echo "Check log/$DATE/$dir/summary.txt for detailed results." 
 done
+
