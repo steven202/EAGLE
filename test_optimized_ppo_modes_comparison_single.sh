@@ -80,6 +80,49 @@ BENCHMARK_NAMES=("MT-Bench" "HumanEval" "GSM8K" "Alpaca" "CNN/DailyMail" "Natura
 # # BENCHMARKS=("gsm8k")
 # # BENCHMARKS=("gsm8k")
 
+# Function to check if a file is complete by comparing line count with question file
+# Returns: 0 = complete, 1 = missing, 2 = incomplete
+check_file_completeness() {
+    local answer_file="$1"
+    local benchmark="$2"
+    
+    # Get expected line count from question file using awk (more reliable than wc -l)
+    local question_file="eagle/data/$benchmark/question.jsonl"
+    local expected_lines=$(awk 'END {print NR}' "$question_file")
+    
+    # Check if answer file exists
+    if [ ! -f "$answer_file" ]; then
+        return 1  # Missing
+    fi
+    
+    local actual_lines=$(awk 'END {print NR}' "$answer_file")
+    
+    # Compare line counts
+    if [ "$actual_lines" -eq "$expected_lines" ]; then
+        return 0  # Complete
+    else
+        return 2  # Incomplete
+    fi
+}
+
+# Function to delete files for a specific benchmark and policy directory
+delete_benchmark_files() {
+    local policy_dir="$1"
+    local benchmark="$2"
+    
+    echo "Deleting incomplete/missing files for $benchmark in $policy_dir..."
+    
+    # Delete our method results
+    rm -f "log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
+    rm -f "log/$DATE/$policy_dir/evaluation/${benchmark}_evaluation.log"
+    
+    # Delete baseline results
+    rm -f "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl"
+    rm -f "log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_eagle3.log"
+    rm -f "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl"
+    rm -f "log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_standard.log"
+}
+
 # Create log directory - dynamic based on execution mode
 DIRECTORIES_TO_CREATE=()
 
@@ -1117,48 +1160,6 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
     echo "" 
 done
 
-# Function to check if a file is complete by comparing line count with question file
-# Returns: 0 = complete, 1 = missing, 2 = incomplete
-check_file_completeness() {
-    local answer_file="$1"
-    local benchmark="$2"
-    
-    # Get expected line count from question file using awk (more reliable than wc -l)
-    local question_file="eagle/data/$benchmark/question.jsonl"
-    local expected_lines=$(awk 'END {print NR}' "$question_file")
-    
-    # Check if answer file exists
-    if [ ! -f "$answer_file" ]; then
-        return 1  # Missing
-    fi
-    
-    local actual_lines=$(awk 'END {print NR}' "$answer_file")
-    
-    # Compare line counts
-    if [ "$actual_lines" -eq "$expected_lines" ]; then
-        return 0  # Complete
-    else
-        return 2  # Incomplete
-    fi
-}
-
-delete_benchmark_files() {
-    local policy_dir="$1"
-    local benchmark="$2"
-    
-    echo "Deleting incomplete/missing files for $benchmark in $policy_dir..."
-    
-    # Delete our method results
-    rm -f "log/$DATE/$policy_dir/evaluation/${benchmark}_results.jsonl"
-    rm -f "log/$DATE/$policy_dir/evaluation/${benchmark}_evaluation.log"
-    
-    # Delete baseline results
-    rm -f "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_eagle3.jsonl"
-    rm -f "log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_eagle3.log"
-    rm -f "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl"
-    rm -f "log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_standard.log"
-}
-
 # Create performance summary for each policy directory
 for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
     echo "Performance Summary Report" >> log/$DATE/$dir/summary.txt
@@ -1179,4 +1180,3 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
 
     echo "Check log/$DATE/$dir/summary.txt for detailed results." 
 done
-
