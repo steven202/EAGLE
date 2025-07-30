@@ -1096,12 +1096,12 @@ for i in "${!COMBINATIONS[@]}"; do
             sed -i "s|DATE=\$(date.*)|DATE=\"${current_date}_${MODEL_SHORT_NAME}\"|g" "$OUTPUT_DIR/$script_name"
         fi
     else
-        # Use legacy DATE format without model name
+        # Use legacy DATE format with "_optimized_ppo" suffix
         if [ -n "$CUSTOM_DATE" ]; then
-            sed -i "s|DATE=\".*\"|DATE=\"${CUSTOM_DATE}\"|g" "$OUTPUT_DIR/$script_name"
+            sed -i "s|DATE=\".*\"|DATE=\"${CUSTOM_DATE}_optimized_ppo\"|g" "$OUTPUT_DIR/$script_name"
         else
             current_date=$(date '+%Y%m%d_%H%M%S')
-            sed -i "s|DATE=\$(date.*)|DATE=\"${current_date}\"|g" "$OUTPUT_DIR/$script_name"
+            sed -i "s|DATE=\$(date.*)|DATE=\"${current_date}_optimized_ppo\"|g" "$OUTPUT_DIR/$script_name"
         fi
     fi
 done
