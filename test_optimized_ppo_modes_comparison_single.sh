@@ -229,7 +229,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_ppo_standard/training.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/optimized_max_entropy_ppo_standard/training.log
         fi
 
         # Phase 2b: Standard PPO (Standard) - if enabled
@@ -286,7 +286,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_ppo_standard/training.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/optimized_standard_ppo_standard/training.log
         fi
     fi
 
@@ -349,7 +349,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_ppo_standard_ofl/training.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/optimized_max_entropy_ppo_standard_ofl/training.log
         fi
 
         # Phase 2b: Standard PPO (Standard) - if enabled
@@ -406,7 +406,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_ppo_standard_ofl/training.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/optimized_standard_ppo_standard_ofl/training.log
         fi
     fi
 fi
@@ -472,7 +472,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_ppo_context/training.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/optimized_max_entropy_ppo_context/training.log
         fi
 
         # Phase 1b: Standard PPO (Context-Only) - if enabled  
@@ -530,7 +530,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_ppo_context/training.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/optimized_standard_ppo_context/training.log
         fi
     fi
 
@@ -593,7 +593,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/optimized_max_entropy_ppo_context_ofl/training.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/optimized_max_entropy_ppo_context_ofl/training.log
         fi
 
         # Phase 1b: Standard PPO (Context-Only) - if enabled  
@@ -651,7 +651,7 @@ if [ "$RUN_CONTEXT_ONLY" -eq 1 ]; then
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/optimized_standard_ppo_context_ofl/training.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/optimized_standard_ppo_context_ofl/training.log
         fi
     fi
 fi
@@ -928,7 +928,7 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --depth 7 \
                 --top-k 10 \
                 --use-stepwise-rl \
-                --use-eagle3 2>&1 | tee log/$DATE/$policy_dir/evaluation/${benchmark}_evaluation.log
+                --use-eagle3 2>&1 | tee -a log/$DATE/$policy_dir/evaluation/${benchmark}_evaluation.log
             
             # 2. Regenerate EAGLE3 baseline
             echo "Regenerating EAGLE3 baseline for $benchmark..."
