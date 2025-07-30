@@ -68,6 +68,9 @@ def parse_ppo_net_arch_args(net_arch_str, policy_version="standard"):
         else:
             return [64, 64]  # Default for OFL version
     
+    # Clean the input string - remove quotes and extra whitespace
+    net_arch_str = net_arch_str.strip().strip('"').strip("'")
+    
     if policy_version == "standard":
         # Parse comma-separated integers for standard version
         try:
@@ -195,7 +198,7 @@ def get_model_answers(
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
         # load_in_8bit=True,
-        # load_in_4bit=True,
+        load_in_4bit=True,
         device_map="auto",
         use_eagle3=args.use_eagle3,
     )
