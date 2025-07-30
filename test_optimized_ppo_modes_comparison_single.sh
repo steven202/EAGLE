@@ -10,7 +10,6 @@
 #SBATCH --output=outputs/cus_128_%A_%a.log
 #SBATCH --mail-user=cwang33@wm.edu
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --reservation=cwang33
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 # source ~/anaconda3/etc/profile.d/conda.sh
