@@ -40,6 +40,8 @@ class CustomPolicy(ActorCriticPolicy):
         if net_arch is None:
             net_arch = [64, 64]  # Enhanced architecture for better performance
         
+        print(f"🔧 CustomPolicy.__init__ called with net_arch: {net_arch}")
+        
         super().__init__(observation_space, action_space, net_arch=net_arch, **kwargs)
         
         # Add additional layers for better feature extraction
@@ -417,6 +419,9 @@ class CustomPPOOnlineTreePolicy:
         
         # Store network architecture for policy initialization
         self.net_arch = net_arch if net_arch is not None else [64, 64]
+        
+        print(f"🏗️  CustomPPOOnlineTreePolicy.__init__ - received net_arch: {net_arch}")
+        print(f"🏗️  CustomPPOOnlineTreePolicy.__init__ - using self.net_arch: {self.net_arch}")
         
         # Initialize custom policy with network architecture
         self.policy = CustomPolicy(

@@ -250,7 +250,12 @@ def get_model_answers(
             print(f"🚀⚡ Using {mode_description}{version_description} with EAGLE-3 features + action caching (every {action_cache_steps} steps)")
             
             # Parse network architecture based on policy version
-            net_arch = parse_ppo_net_arch_args(getattr(args, 'ppo_net_arch', ''), policy_version)
+            ppo_net_arch_raw = getattr(args, 'ppo_net_arch', '')
+            print(f"🔧 Raw ppo_net_arch argument: '{ppo_net_arch_raw}'")
+            print(f"🔧 Policy version: '{policy_version}'")
+            
+            net_arch = parse_ppo_net_arch_args(ppo_net_arch_raw, policy_version)
+            print(f"🔧 Parsed net_arch: {net_arch}")
             
             # Choose policy implementation based on version
             if policy_version == "ofl":

@@ -1467,32 +1467,12 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
             saved_config = None
             
             if os.path.exists(state_path):
-                try:
-                    with open(state_path, 'r') as f:
-                        content = f.read().strip()
-                        if content:  # Check if file has content
-                            saved_config = json.loads(content)
-                            print(f"📋 Found checkpoint state file, checking configuration")
-                        else:
-                            print(f"⚠️  State file {state_path} is empty, skipping state file loading")
-                            saved_config = None
-                except (json.JSONDecodeError, FileNotFoundError) as e:
-                    print(f"⚠️  Failed to read state file {state_path}: {e}")
-                    print(f"   Continuing without state file configuration")
-                    saved_config = None
+                with open(state_path, 'r') as f:
+                    saved_config = json.load(f)
+                print(f"📋 Found checkpoint state file, checking configuration")
             
             # Load model without environment to inspect its configuration
-            try:
-                # First, verify the zip file is valid
-                import zipfile
-                with zipfile.ZipFile(checkpoint_path, 'r') as test_zip:
-                    test_zip.testzip()  # This will raise an exception if the zip is corrupted
-                
-                temp_model_data = PPO.load(checkpoint_path, env=None, device=self.device)
-            except (zipfile.BadZipFile, ValueError, Exception) as e:
-                print(f"❌ Failed to load checkpoint {checkpoint_path}: {e}")
-                print(f"   Checkpoint file may be corrupted. Skipping checkpoint loading.")
-                return False
+            temp_model_data = PPO.load(checkpoint_path, env=None, device=self.device)
             
             # Get observation space from the saved model
             saved_obs_space = temp_model_data.observation_space
@@ -1537,12 +1517,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     print(f"   ✅ Reinitialized environment: context_only={use_context_only}, hidden_size={hidden_size}")
             
             # Now load the model with the correct environment
-            try:
-                self.model = PPO.load(checkpoint_path, env=self.env, device=self.device)
-            except (zipfile.BadZipFile, ValueError, Exception) as e:
-                print(f"❌ Failed to load model with environment {checkpoint_path}: {e}")
-                print(f"   Checkpoint file may be corrupted. Skipping checkpoint loading.")
-                return False
+            self.model = PPO.load(checkpoint_path, env=self.env, device=self.device)
             
             # Load additional state
             if saved_config:
@@ -1587,26 +1562,7 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         
         # Sort by modification time
         checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)), reverse=True)
-        
-        # Find the first valid checkpoint
-        for checkpoint in checkpoints:
-            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint)
-            if self._is_valid_checkpoint(checkpoint_path):
-                return checkpoint_path
-            else:
-                print(f"⚠️  Skipping corrupted checkpoint: {checkpoint}")
-        
-        return None
-    
-    def _is_valid_checkpoint(self, checkpoint_path):
-        """Check if a checkpoint file is valid"""
-        try:
-            import zipfile
-            with zipfile.ZipFile(checkpoint_path, 'r') as test_zip:
-                test_zip.testzip()  # This will raise an exception if the zip is corrupted
-            return True
-        except:
-            return False
+        return os.path.join(self.checkpoint_dir, checkpoints[0])
     
     def _cleanup_old_checkpoints(self):
         """Remove old checkpoints, keeping only the most recent ones"""
