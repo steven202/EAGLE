@@ -198,7 +198,7 @@ def get_model_answers(
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
         # load_in_8bit=True,
-        load_in_4bit=True,
+        # load_in_4bit=True,
         device_map="auto",
         use_eagle3=args.use_eagle3,
     )
