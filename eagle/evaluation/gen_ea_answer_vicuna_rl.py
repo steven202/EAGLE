@@ -62,6 +62,8 @@ def parse_ppo_net_arch_args(net_arch_str, policy_version="standard"):
         For standard version: list of integers [512, 256, 128]
         For OFL version: dict {"pi": [128, 128], "vf": [128, 128]} or list [128, 128] for both
     """
+    # Clean the input string - remove quotes and extra whitespace
+    net_arch_str = net_arch_str.strip().strip('"').strip("'")
     if not net_arch_str or net_arch_str.strip() == "":
         if policy_version == "standard":
             return [64, 64]  # Default for standard version
