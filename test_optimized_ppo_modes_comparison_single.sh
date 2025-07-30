@@ -10,7 +10,7 @@
 #SBATCH --output=outputs/cus_128_%A_%a.log
 #SBATCH --mail-user=cwang33@wm.edu
 #SBATCH --mail-type=BEGIN,END,FAIL
-
+#SBATCH --reservation=cwang33
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 # source ~/anaconda3/etc/profile.d/conda.sh
 eval "$(conda shell.bash hook)"
@@ -950,6 +950,76 @@ for j in "${!POLICIES_TO_EVALUATE[@]}"; do
                 --answer-file "log/$DATE/$policy_dir/baseline_results/${benchmark}_${MODEL_NAME}_baseline.jsonl" \
                 --temperature 0.0 \
                 2>&1 | tee -a log/$DATE/$policy_dir/baseline_results/baseline_${benchmark}_standard.log
+            
+            # Re-check completeness after regeneration
+            echo "Re-checking completeness after regeneration..."
+            
+            # Re-check our method file
+            if [ ! -f "$our_method_file" ]; then
+                our_method_status_after=1  # Missing
+            else
+                actual_lines=$(awk 'END {print NR}' "$our_method_file")
+                if [ "$actual_lines" -eq "$expected_lines" ]; then
+                    our_method_status_after=0  # Complete
+                else
+                    our_method_status_after=2  # Incomplete
+                fi
+            fi
+            
+            # Re-check eagle3 file
+            if [ ! -f "$eagle3_file" ]; then
+                eagle3_status_after=1  # Missing
+            else
+                actual_lines=$(awk 'END {print NR}' "$eagle3_file")
+                if [ "$actual_lines" -eq "$expected_lines" ]; then
+                    eagle3_status_after=0  # Complete
+                else
+                    eagle3_status_after=2  # Incomplete
+                fi
+            fi
+            
+            # Re-check baseline file
+            if [ ! -f "$baseline_file" ]; then
+                baseline_status_after=1  # Missing
+            else
+                actual_lines=$(awk 'END {print NR}' "$baseline_file")
+                if [ "$actual_lines" -eq "$expected_lines" ]; then
+                    baseline_status_after=0  # Complete
+                else
+                    baseline_status_after=2  # Incomplete
+                fi
+            fi
+            
+            # Convert status codes to text for final report
+            case $our_method_status_after in
+                0) our_method_status_after_text="✅ complete" ;;
+                1) our_method_status_after_text="❌ missing" ;;
+                2) our_method_status_after_text="⚠️ incomplete" ;;
+            esac
+            
+            case $eagle3_status_after in
+                0) eagle3_status_after_text="✅ complete" ;;
+                1) eagle3_status_after_text="❌ missing" ;;
+                2) eagle3_status_after_text="⚠️ incomplete" ;;
+            esac
+            
+            case $baseline_status_after in
+                0) baseline_status_after_text="✅ complete" ;;
+                1) baseline_status_after_text="❌ missing" ;;
+                2) baseline_status_after_text="⚠️ incomplete" ;;
+            esac
+            
+            echo "Post-regeneration status for $benchmark:"
+            echo "  Our method: $our_method_status_after_text (expected: $expected_lines lines)"
+            echo "  EAGLE3: $eagle3_status_after_text (expected: $expected_lines lines)"
+            echo "  Baseline: $baseline_status_after_text (expected: $expected_lines lines)"
+            
+            # Report any remaining issues
+            if [ $our_method_status_after -ne 0 ] || [ $eagle3_status_after -ne 0 ] || [ $baseline_status_after -ne 0 ]; then
+                echo "⚠️ Warning: Some files still incomplete after regeneration for $benchmark"
+            else
+                echo "✅ All files successfully regenerated and verified complete for $benchmark"
+            fi
                 
         else
             echo "All files complete for $benchmark with $policy_label" 
