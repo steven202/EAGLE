@@ -20,6 +20,10 @@ zpython    # Enhanced question handling for online RL training vs inference
 import argparse
 import json
 import os
+import wandb
+import signal
+import subprocess
+import threading
 script_dir = os.path.dirname(__file__)
 parent_dir = os.path.dirname(script_dir)
 # os.environ["CUDA_VISIBLE_DEVICES"] = "7"
@@ -60,6 +64,73 @@ except:
     from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy import CustomPPOOnlineTreePolicy, calculate_custom_ppo_reward
     from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy_ofl import OptimizedSB3DiscretePPOOnlineTreePolicy as OptimizedSB3DiscretePPOOnlineTreePolicyOFL
     from eagle.evaluation.optimized_online_rl_policy import OptimizedOnlineTreePolicy, calculate_optimized_online_reward
+
+
+def detect_actual_gpu_usage():
+    """
+    Detect if multiple GPUs are actually being used by checking:
+    1. CUDA_VISIBLE_DEVICES environment variable
+    2. Available GPU count via torch.cuda
+    3. Ray distributed setup
+    """
+    import torch
+    
+    # Check CUDA_VISIBLE_DEVICES
+    cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', '')
+    if cuda_visible:
+        visible_gpus = [x.strip() for x in cuda_visible.split(',') if x.strip()]
+        if len(visible_gpus) > 1:
+            print(f"🔍 Detected multi-GPU via CUDA_VISIBLE_DEVICES: {visible_gpus}")
+            return True
+    
+    # Check torch.cuda device count
+    if torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+        if gpu_count > 1:
+            print(f"🔍 Detected {gpu_count} available GPUs via torch.cuda")
+            return True
+    
+    # Check if Ray is being used (indication of distributed setup)
+    try:
+        import ray
+        if ray.is_initialized():
+            print(f"🔍 Detected Ray distributed setup (likely multi-GPU)")
+            return True
+    except ImportError:
+        pass
+    
+    print(f"🔍 Single GPU or CPU setup detected")
+    return False
+
+
+def wandb_login_with_timeout(api_key, timeout=10):
+    """
+    Attempt wandb login with timeout to avoid hanging on DNS issues.
+    """
+    
+    def login_worker(result_container):
+        try:
+            wandb.login(key=api_key)
+            result_container['success'] = True
+        except Exception as e:
+            result_container['error'] = str(e)
+    
+    result = {'success': False, 'error': None}
+    thread = threading.Thread(target=login_worker, args=(result,))
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout)
+    
+    if thread.is_alive():
+        # Thread is still running, login timed out
+        print(f"⏱️  wandb login timed out after {timeout}s (likely DNS/network issue)")
+        return False
+    
+    if result['success']:
+        return True
+    else:
+        print(f"❌ wandb login failed: {result.get('error', 'Unknown error')}")
+        return False
 
 
 def parse_ppo_net_arch_args(net_arch_str, policy_version="standard"):
@@ -229,24 +300,56 @@ def get_model_answers(
         # Setup checkpoint directory
         checkpoint_dir = args.checkpoint_dir if hasattr(args, 'checkpoint_dir') and args.checkpoint_dir else "checkpoints"
         
-        # Setup wandb authentication if needed
-        if not args.online_inference_only and not args.no_wandb:
-            try:
-                import wandb
-                # Use environment variable for API key (set WANDB_API_KEY in your environment)
-                wandb_api_key = os.environ.get('WANDB_API_KEY')
-                if wandb_api_key:
-                    wandb.login(key=wandb_api_key)
-                    print("✅ wandb authentication successful")
-                else:
-                    print("⚠️  WANDB_API_KEY environment variable not set")
-                    print("   Set it with: export WANDB_API_KEY=your_api_key")
-                    print("   Continuing without wandb logging...")
-            except Exception as e:
-                print(f"⚠️  wandb authentication failed: {e}")
-                print("   Continuing without wandb logging...")
+        # Detect if running on multiple GPUs to avoid wandb connectivity issues
+        multi_gpu_detected = detect_actual_gpu_usage()
         
-        wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if not args.online_inference_only else None
+        # Setup wandb authentication if needed (with timeout protection)
+        use_wandb = not args.online_inference_only and not args.no_wandb
+        wandb_login_successful = False
+        
+        if use_wandb:
+            # Legacy override: force disable wandb on multi-GPU if explicitly requested
+            if multi_gpu_detected and getattr(args, 'force_disable_wandb_multi_gpu', False):
+                print("🔧 Multi-GPU setup detected: wandb disabled via --force-disable-wandb-multi-gpu")
+                print("   Note: You can now use wandb with timeout on multi-GPU setups by omitting this flag")
+                use_wandb = False
+            else:
+                try:
+                    
+                    # Check if wandb is already disabled via environment
+                    wandb_mode = os.environ.get('WANDB_MODE', '').lower()
+                    if wandb_mode in ['disabled', 'offline']:
+                        print(f"🔧 wandb is disabled via WANDB_MODE={wandb_mode}")
+                        use_wandb = False
+                    else:
+                        # Use environment variable for API key (set WANDB_API_KEY in your environment)
+                        wandb_api_key = os.environ.get('WANDB_API_KEY')
+                        if wandb_api_key:
+                            # Always attempt wandb login with timeout, regardless of multi-GPU setup
+                            timeout_seconds = getattr(args, 'wandb_timeout', 10)
+                            gpu_info = f" (Multi-GPU: {multi_gpu_detected})" if multi_gpu_detected else ""
+                            print(f"🔗 Attempting wandb authentication{gpu_info} (with {timeout_seconds}s timeout)...")
+                            if wandb_login_with_timeout(wandb_api_key, timeout=timeout_seconds):
+                                print("✅ wandb authentication successful")
+                                wandb_login_successful = True
+                            else:
+                                print("⚠️  wandb authentication timed out or failed")
+                                if multi_gpu_detected:
+                                    print("   This is common on multi-GPU setups with network restrictions")
+                                print("   Continuing without wandb logging...")
+                                use_wandb = False
+                        else:
+                            print("⚠️  WANDB_API_KEY environment variable not set")
+                            print("   Set it with: export WANDB_API_KEY=your_api_key")
+                            print("   Or disable with: export WANDB_MODE=disabled")
+                            print("   Continuing without wandb logging...")
+                            use_wandb = False
+                except Exception as e:
+                    print(f"⚠️  wandb setup failed: {e}")
+                    print("   Continuing without wandb logging...")
+                    use_wandb = False
+        
+        wandb_run_name = f"eagle-online-{args.model_id}-{int(time.time())}" if use_wandb else None
         
         # Choose between PPO, continuous, and discrete action space
         if getattr(args, 'use_optimized_sb3_discrete_ppo', False):
@@ -299,7 +402,7 @@ def get_model_answers(
                 use_context_only_state=getattr(args, 'use_context_only_state', False),
                 # NEW: Network architecture parameter
                 net_arch=net_arch,
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                use_wandb=use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
                 checkpoint_dir=checkpoint_dir,
@@ -327,7 +430,7 @@ def get_model_answers(
                 use_eagle3_features=getattr(args, 'use_eagle3_features', True),
                 # NEW: Context-only state representation
                 use_context_only_state=getattr(args, 'use_context_only_state', False),
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                use_wandb=use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
                 checkpoint_dir=checkpoint_dir,
@@ -359,7 +462,7 @@ def get_model_answers(
                 max_entropy_ent_coef=getattr(args, 'max_entropy_ent_coef', 0.1),
                 inference_temperature=getattr(args, 'inference_temperature', 1.5),
                 max_entropy_inference=max_entropy_inference_enabled,
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                use_wandb=use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
                 checkpoint_dir=checkpoint_dir,
@@ -378,7 +481,7 @@ def get_model_answers(
                 gae_lambda=getattr(args, 'ppo_gae_lambda', 0.95),
                 vf_coef=getattr(args, 'ppo_vf_coef', 0.5),
                 max_grad_norm=getattr(args, 'max_grad_norm', 0.5),
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                use_wandb=use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
                 checkpoint_dir=checkpoint_dir,
@@ -398,7 +501,7 @@ def get_model_answers(
                 clip_range=getattr(args, 'ppo_clip_range', 0.2),
                 vf_coef=getattr(args, 'ppo_vf_coef', 0.5),
                 max_grad_norm=getattr(args, 'max_grad_norm', 0.5),
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                use_wandb=use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
                 checkpoint_dir=checkpoint_dir,
@@ -414,7 +517,7 @@ def get_model_answers(
                 epsilon_end=args.online_epsilon_end,
                 memory_size=args.online_memory_size,
                 batch_size=args.online_batch_size,
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                use_wandb=use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
                 checkpoint_dir=checkpoint_dir,
@@ -430,7 +533,7 @@ def get_model_answers(
                 epsilon_end=args.online_epsilon_end,
                 memory_size=args.online_memory_size,
                 batch_size=args.online_batch_size,
-                use_wandb=(not args.online_inference_only and not args.no_wandb),
+                use_wandb=use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_run_name=wandb_run_name,
                 checkpoint_dir=checkpoint_dir,
@@ -1057,7 +1160,6 @@ def get_model_answers(
                         
                         # Additional wandb logging for progress tracking
                         if online_policy.use_wandb:
-                            import wandb
                             wandb.log({
                                 "progress_reward": online_reward,
                                 "progress_tokens_per_sec": new_token_scalar/total_time,
@@ -1147,7 +1249,6 @@ def get_model_answers(
                 print(f"Parameter combinations explored: {param_count}")
                 # Final wandb summary
                 if online_policy.use_wandb:
-                    import wandb
                     summary_data = {
                         "final_avg_reward": final_stats.get('avg_reward_recent', 0),
                         "total_episodes": final_stats.get('total_episodes', 0),
@@ -1388,6 +1489,17 @@ if __name__ == "__main__":
         "--no-wandb",
         action="store_true",
         help="Disable wandb logging even during training"
+    )
+    parser.add_argument(
+        "--force-disable-wandb-multi-gpu",
+        action="store_true",
+        help="[DEPRECATED] Force disable wandb on multi-GPU setups. Now wandb is attempted with timeout on all setups."
+    )
+    parser.add_argument(
+        "--wandb-timeout",
+        type=int,
+        default=10,
+        help="Timeout in seconds for wandb authentication (default: 10s). Prevents hanging on DNS/network issues."
     )
     
     # Resume and checkpoint arguments
