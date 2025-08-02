@@ -251,9 +251,32 @@ class OptimizedEagleParameterEnv(gym.Env):
             except ImportError:
                 raise ImportError("sentence-transformers is required for context-only state. Install with: pip install sentence-transformers")
         
-        # Encode context directly to 384D
-        with torch.no_grad() if hasattr(self, '_sbert_model') else contextlib.nullcontext():
-            sbert_embedding = self._sbert_model.encode(context)  # Shape: (384,)
+        # Encode context directly to 384D - WITH OVERHEAD MEASUREMENT
+        try:
+            from eagle.evaluation.gen_ea_answer_llama3chat_rl_measure import overhead_profiler
+        except ImportError:
+            # Fallback: create a dummy profiler if import fails
+            class DummyProfiler:
+                def time_component(self, name):
+                    return DummyContext()
+            
+            class DummyContext:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    pass
+            
+            overhead_profiler = DummyProfiler()
+        
+        with overhead_profiler.time_component("SentenceBERT_Text_to_Embedding"):
+            with torch.no_grad() if hasattr(self, '_sbert_model') else contextlib.nullcontext():
+                # Debug: Print that SBERT encoding is happening
+                if not hasattr(self, '_sbert_debug_count'):
+                    self._sbert_debug_count = 0
+                self._sbert_debug_count += 1
+                if self._sbert_debug_count <= 3:  # Only print first few times to avoid spam
+                    print(f"🧠 SBERT encoding #{self._sbert_debug_count}: Processing context of length {len(context)}")
+                sbert_embedding = self._sbert_model.encode(context)  # Shape: (384,)
         
         return sbert_embedding.astype(np.float32)
     
@@ -619,7 +642,14 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     if not hasattr(self, '_sbert_model'):
                         self._sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
                     
-                    sbert_embedding = self._sbert_model.encode(context)  # Shape: (384,)
+                    with overhead_profiler.time_component("SentenceBERT_Fallback_Encoding"):
+                        # Debug: Print that fallback SBERT encoding is happening
+                        if not hasattr(self, '_fallback_debug_count'):
+                            self._fallback_debug_count = 0
+                        self._fallback_debug_count += 1
+                        if self._fallback_debug_count <= 3:  # Only print first few times
+                            print(f"🔄 SBERT fallback encoding #{self._fallback_debug_count}: Processing context of length {len(context)}")
+                        sbert_embedding = self._sbert_model.encode(context)  # Shape: (384,)
                     
                     # SOLUTION: Intelligent feature mapping instead of zero-padding
                     # Use learned projection to maintain feature density
@@ -672,28 +702,46 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                     return 96, 8, 20  # Default parameters if no context or hidden states
         self.env.current_context = context if context else ""
         
+        # Import overhead profiler for timing measurements
+        try:
+            from eagle.evaluation.gen_ea_answer_llama3chat_rl_measure import overhead_profiler
+        except ImportError:
+            class DummyProfiler:
+                def time_component(self, name):
+                    return self
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    pass
+            overhead_profiler = DummyProfiler()
+        
         # Choose prediction strategy based on mode and phase
         if self.enable_max_entropy and self.max_entropy_inference and not training_mode:
             # MAX-ENTROPY INFERENCE: Use temperature-based sampling for diversity
             if self.inference_temperature != 1.0:
                 try:
-                    action = self._sample_with_temperature(state, self.inference_temperature)
+                    with overhead_profiler.time_component("RL_Policy_Prediction_OFL_Max_Entropy_Temperature"):
+                        action = self._sample_with_temperature(state, self.inference_temperature)
                     exploration_mode = "MAX-ENTROPY"
                 except Exception as e:
                     print(f"⚠️  Temperature sampling failed: {e}")
                     print("   Using enhanced stochastic sampling instead")
-                    action = self._enhanced_stochastic_sampling(state)
+                    with overhead_profiler.time_component("RL_Policy_Prediction_OFL_Enhanced_Stochastic"):
+                        action = self._enhanced_stochastic_sampling(state)
                     exploration_mode = "ENHANCED-STOCHASTIC"
             else:
-                action, _ = self.model.predict(state, deterministic=False) 
+                with overhead_profiler.time_component("RL_Policy_Prediction_OFL_Max_Entropy_Stochastic"):
+                    action, _ = self.model.predict(state, deterministic=False) 
                 exploration_mode = "STOCHASTIC"
         elif training_mode:
             # TRAINING MODE: Always use stochastic for both modes (exploration)
-            action, _ = self.model.predict(state, deterministic=False)
+            with overhead_profiler.time_component("RL_Policy_Prediction_OFL_Training"):
+                action, _ = self.model.predict(state, deterministic=False)
             exploration_mode = "EXPLORE"
         else:
             # STANDARD INFERENCE: Use deterministic prediction
-            action, _ = self.model.predict(state, deterministic=True)
+            with overhead_profiler.time_component("RL_Policy_Prediction_OFL_Deterministic"):
+                action, _ = self.model.predict(state, deterministic=True)
             exploration_mode = "DETERMINISTIC"
         
         # Convert to actual parameters

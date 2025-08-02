@@ -441,7 +441,7 @@ class CustomPPO:
     
     def load(self, path: str):
         """Load the model"""
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         self.policy.load_state_dict(checkpoint['policy_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.num_timesteps = checkpoint['num_timesteps']

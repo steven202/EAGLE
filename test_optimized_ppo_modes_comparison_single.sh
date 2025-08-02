@@ -1088,6 +1088,9 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
                     --ea-file "$policy_file" \
                     --baseline-file "$eagle3_file" \
                     --tokenizer-path "$BASE_MODEL_PATH" \
+                    --statistical-testing \
+                    --eagle-name "$policy_label" \
+                    --baseline-name "EAGLE3 Baseline" \
                     2>&1 | tee -a log/$DATE/$dir/summary.txt
                 
                 echo "" >> log/$DATE/$dir/summary.txt
@@ -1096,6 +1099,9 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
                     --ea-file "$policy_file" \
                     --baseline-file "$baseline_file" \
                     --tokenizer-path "$BASE_MODEL_PATH" \
+                    --statistical-testing \
+                    --eagle-name "$policy_label" \
+                    --baseline-name "Standard LLaMA Baseline" \
                     2>&1 | tee -a log/$DATE/$dir/summary.txt
                 echo "" >> log/$DATE/$dir/summary.txt
             done
@@ -1106,6 +1112,9 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
                 --ea-file "$eagle3_file" \
                 --baseline-file "$baseline_file" \
                 --tokenizer-path "$BASE_MODEL_PATH" \
+                --statistical-testing \
+                --eagle-name "EAGLE3 Baseline" \
+                --baseline-name "Standard LLaMA Baseline" \
                 2>&1 | tee -a log/$DATE/$dir/summary.txt
             
             # Compare policies against each other if we have multiple
@@ -1125,6 +1134,9 @@ for dir in "${DIRECTORIES_TO_CREATE[@]}"; do
                                 --ea-file "$policy1_file" \
                                 --baseline-file "$policy2_file" \
                                 --tokenizer-path "$BASE_MODEL_PATH" \
+                                --statistical-testing \
+                                --eagle-name "$policy1_label" \
+                                --baseline-name "$policy2_label" \
                                 2>&1 | tee -a log/$DATE/$dir/summary.txt
                             echo "" >> log/$DATE/$dir/summary.txt
                         fi

@@ -9,6 +9,23 @@ from transformers import AutoTokenizer
 import os
 from transformers import PreTrainedModel, PretrainedConfig, AutoConfig
 
+# Import profiler for overhead measurement
+try:
+    from eagle.evaluation.gen_ea_answer_llama3chat_rl_measure import overhead_profiler
+except ImportError:
+    # Fallback: create a dummy profiler if import fails
+    class DummyProfiler:
+        def time_component(self, name):
+            return DummyContext()
+    
+    class DummyContext:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    
+    overhead_profiler = DummyProfiler()
+
 from .modeling_llama_kv import LlamaForCausalLM as KVLlamaForCausalLM
 from .modeling_mixtral_kv import MixtralForCausalLM as KVMixtralForCausalLM
 #from .modeling_qwen2_kv import LlamaForCausalLM as KVQwen2ForCausalLM
@@ -383,16 +400,18 @@ class EaModel(nn.Module):
                     current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
                     current_state = current_text
                     
-                    # For optimized policies, pass EAGLE-3 hidden states if available
+                    # For optimized policies, pass EAGLE-3 hidden states if available - WITH OVERHEAD MEASUREMENT
                     if is_optimized_policy and 'hidden_state' in locals():
-                        step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                            context=current_state, hidden_states=hidden_state, training_mode=training_mode
-                        )
+                        with overhead_profiler.time_component("RL_Policy_Stepwise_Optimized_Training"):
+                            step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                                context=current_state, hidden_states=hidden_state, training_mode=training_mode
+                            )
                     else:
-                        # Traditional policy interface
-                        step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                            current_state, training_mode=training_mode
-                        )
+                        # Traditional policy interface - WITH OVERHEAD MEASUREMENT
+                        with overhead_profiler.time_component("RL_Policy_Stepwise_Traditional_Training"):
+                            step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                                current_state, training_mode=training_mode
+                            )
                     
                     # Store step info for training
                     if True: # training_mode:
@@ -411,16 +430,18 @@ class EaModel(nn.Module):
                         current_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
                         current_state = current_text
                         
-                        # For optimized policies, pass EAGLE-3 hidden states if available
+                        # For optimized policies, pass EAGLE-3 hidden states if available - WITH OVERHEAD MEASUREMENT
                         if is_optimized_policy and 'hidden_state' in locals():
-                            step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                                context=current_state, hidden_states=hidden_state, training_mode=training_mode
-                            )
+                            with overhead_profiler.time_component("RL_Policy_Stepwise_Optimized_Inference"):
+                                step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                                    context=current_state, hidden_states=hidden_state, training_mode=training_mode
+                                )
                         else:
-                            # Traditional policy interface
-                            step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
-                                current_state, training_mode=training_mode
-                            )
+                            # Traditional policy interface - WITH OVERHEAD MEASUREMENT
+                            with overhead_profiler.time_component("RL_Policy_Stepwise_Traditional_Inference"):
+                                step_total_tokens, step_depth, step_top_k = rl_policy.predict_parameters(
+                                    current_state, training_mode=training_mode
+                                )
                         
                         # Store step info for training
                         if True: # training_mode:
@@ -466,15 +487,16 @@ class EaModel(nn.Module):
             # Model inference parts: disable gradients for efficiency
             with torch.no_grad():
                 draft_tokens = draft_tokens.to(input_ids.device)
-                # Target model forward, get logits
-                logits, hidden_state_new, outputs = tree_decoding(
-                    self,
-                    draft_tokens,
-                    past_key_values,
-                    tree_position_ids,
-                    input_ids,
-                    retrieve_indices,
-                )
+                # Target model forward, get logits - WITH OVERHEAD MEASUREMENT
+                with overhead_profiler.time_component("Target_Model_Forward"):
+                    logits, hidden_state_new, outputs = tree_decoding(
+                        self,
+                        draft_tokens,
+                        past_key_values,
+                        tree_position_ids,
+                        input_ids,
+                        retrieve_indices,
+                    )
                 # retrieve_indices=tree_buffers["retrieve_indices"]
                 # logits = logits[0, retrieve_indices]
                 draft_tokens = torch.cat((draft_tokens, padding), dim=1)
@@ -508,23 +530,24 @@ class EaModel(nn.Module):
                         raise e
                         print(f"  Warning: RL policy update failed at step {idx}: {e}")
             
-            # Adjusting the input sequence, draft model forward
+            # Adjusting the input sequence, draft model forward - WITH OVERHEAD MEASUREMENT  
             with torch.no_grad():
-                input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
-                    input_ids,
-                    candidates,
-                    best_candidate,
-                    accept_length,
-                    retrieve_indices,
-                    logits_processor,
-                    new_token,
-                    past_key_values_data,
-                    current_length_data,
-                    self,
-                    hidden_state_new,
-                    sample_p,
-                    return_hidden_states=use_stepwise_rl  # Return hidden states for RL policies
-                )
+                with overhead_profiler.time_component("Draft_Model_Forward"):
+                    input_ids, draft_tokens, retrieve_indices, tree_mask, tree_position_ids, new_token, hidden_state, sample_token = update_inference_inputs(
+                        input_ids,
+                        candidates,
+                        best_candidate,
+                        accept_length,
+                        retrieve_indices,
+                        logits_processor,
+                        new_token,
+                        past_key_values_data,
+                        current_length_data,
+                        self,
+                        hidden_state_new,
+                        sample_p,
+                        return_hidden_states=use_stepwise_rl  # Return hidden states for RL policies
+                    )
 
             if is_llama3:
                 if stop_token_id in input_ids[0, input_len:].tolist():
