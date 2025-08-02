@@ -278,7 +278,7 @@ def get_model_answers(
         top_k=args.top_k,
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
-        # load_in_8bit=True,
+        load_in_4bit=True,
         device_map="auto",
         use_eagle3=args.use_eagle3,
     )
@@ -679,7 +679,7 @@ def get_model_answers(
                     # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                         # context=full_context, hidden_states=None, training_mode=False  # No exploration during warmup
                     # )
-                    predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
+                    predicted_total_tokens, predicted_depth, predicted_top_k = (60, 5, 10)
                 else:
                     # Traditional Online RL: predict parameters (inference mode during warmup)
                     predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
@@ -741,7 +741,9 @@ def get_model_answers(
             except RuntimeError as e:
                 if ("selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or 
                     "start" in str(e) or "KV cache buffer overflow" in str(e) or 
-                    "CUDA out of memory" in str(e) or "out of memory" in str(e)):
+                    "CUDA out of memory" in str(e) or "out of memory" in str(e) or
+                    "CUDA error" in str(e) or "device-side assert" in str(e) or 
+                    "srcIndex < srcSelectDimSize" in str(e)):
                     print(f"❌ Warmup error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k}")
                     print(f"   Error: {e}")
                     print(f"   Falling back to ultra-conservative warmup parameters...")
@@ -926,14 +928,14 @@ def get_model_answers(
                             # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                                 # context=full_context, hidden_states=None, training_mode=False
                             # )
-                            predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
+                            predicted_total_tokens, predicted_depth, predicted_top_k = (60, 5, 10)
                             # print(f"Optimized Online RL inference params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                         else:
                             # Training mode: enable exploration and learning
                             # predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
                                 # context=full_context, hidden_states=None, training_mode=True
                             # )
-                            predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
+                            predicted_total_tokens, predicted_depth, predicted_top_k = (60, 5, 10)
                             print(f"Optimized Online RL training params: total_tokens={predicted_total_tokens}, depth={predicted_depth}, top_k={predicted_top_k}")
                     else:
                         # Traditional Online RL: predict parameters with appropriate training mode
@@ -1058,7 +1060,9 @@ def get_model_answers(
                         # raise e
                         if ("selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or 
                             "start" in str(e) or "KV cache buffer overflow" in str(e) or 
-                            "CUDA out of memory" in str(e) or "out of memory" in str(e)):
+                            "CUDA out of memory" in str(e) or "out of memory" in str(e) or
+                            "CUDA error" in str(e) or "device-side assert" in str(e) or 
+                            "srcIndex < srcSelectDimSize" in str(e)):
                             retry_count += 1
                             print(f"❌ Runtime error with params: tt={predicted_total_tokens}, d={predicted_depth}, k={predicted_top_k} (attempt {retry_count}/{max_retries})")
                             print(f"   Error: {e}")
@@ -1852,7 +1856,12 @@ if __name__ == "__main__":
             print("   Data collection enabled for future RL training")
         if getattr(args, 'use_stepwise_rl', False):
             print("⚠️  Warning: Step-wise RL ignored in fixed parameter mode (requires online RL)")
-
+    if torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+    args.num_gpus_total = args.num_gpus_total if args.num_gpus_total != 1 else gpu_count
+    args.num_gpus_per_model = args.num_gpus_per_model if args.num_gpus_per_model != 1 else gpu_count
+    if args.num_gpus_total < args.num_gpus_per_model:
+        args.num_gpus_per_model = args.num_gpus_total
     args.model_id = args.model_id + "-temperature-" + str(args.temperature)
     if args.num_gpus_total // args.num_gpus_per_model > 1:
         import ray

@@ -10,7 +10,7 @@
 #SBATCH --output=outputs/cus_128_%A_%a.log
 #SBATCH --mail-user=cwang33@wm.edu
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --reservation=cwang33
+
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 # source ~/anaconda3/etc/profile.d/conda.sh
 eval "$(conda shell.bash hook)"
@@ -53,7 +53,7 @@ QUESTION_END=4000
 
 # NETWORK ARCHITECTURE CONFIGURATION - Will be replaced by script generator
 STANDARD_NET_ARCH="64,64"  # Will be replaced by generator
-OFL_NET_ARCH="64,64"  # Will be replaced by generator
+OFL_NET_ARCH="64,64;64,64"  # Will be replaced by generator
 
 # EXECUTION MODE CONFIGURATION
 # Set these to "true" or "false" to control which modes to run
