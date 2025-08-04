@@ -15,7 +15,7 @@ mkdir -p "$TEST_DIR"
 
 MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=1  # Small number for quick analysis
+QUESTION_END=80  # Small number for quick analysis
 NET_ARCH="128,128"
 
 # Test different cache step sizes
