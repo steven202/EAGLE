@@ -16,42 +16,22 @@ Usage:
         --output-dir statistical_analysis_results
         
 Example:
-    # For model LLaMA-3.1-8B-Instruct
+    # Generate analysis for LLaMA 3.1-8B
     python -m eagle.evaluation.comprehensive_statistical_analysis2 \
-        --results-dir /path/to/evaluation/results \
-        --tokenizer-path meta-llama/Llama-3.1-8B-Instruct \
-        --output-dir /path/to/output
-    # For model Vicuna-13B-v1.3
+        --results-dir stats_test_data/results_llama3.1-8B/20250729_184423_ofl128_llama318b \
+        --tokenizer-path meta-llama/Llama-3.1-8B-Instruct
+    # Generate analysis for Vicuna 13B
     python -m eagle.evaluation.comprehensive_statistical_analysis2 \
-        --results-dir /path/to/evaluation/results \
-        --tokenizer-path lmsys/vicuna-13b-v1.3 \
-        --output-dir /path/to/output \
-    # For model LLaMA-3.3-70B-Instruct
+        --results-dir stats_test_data/results_vicuna-13b/20250730_160223_ofl128_vicuna13b \
+        --tokenizer-path lmsys/vicuna-13b-v1.5
+    or (the above is used in the paper):
     python -m eagle.evaluation.comprehensive_statistical_analysis2 \
-        --results-dir /path/to/evaluation/results \
-        --tokenizer-path meta-llama/Llama-3.3-70B-Instruct \
-        --output-dir /path/to/output
-python -m eagle.evaluation.comprehensive_statistical_analysis2 \
-    --results-dir log/20250726_0941_optimized_ppo \
-    --tokenizer-path meta-llama/Llama-3.1-8B-Instruct \
-    --output-dir log/20250804_tmp
-python -m eagle.evaluation.comprehensive_statistical_analysis2 \
-    --results-dir stats_test_data/results_llama3.1-8B/20250729_184423_ofl128_llama318b \
-    --tokenizer-path meta-llama/Llama-3.1-8B-Instruct \
-    --output-dir log/20250804_llama3.1-8B_analysis
-python -m eagle.evaluation.comprehensive_statistical_analysis2 \
-    --results-dir stats_test_data/results_vicuna-13b/20250730_160223_ofl128_vicuna13b \
-    --tokenizer-path lmsys/vicuna-13b-v1.5 \
-    --output-dir log/20250804_vicuna13b_analysis
-or (the above is used in the paper):
-python -m eagle.evaluation.comprehensive_statistical_analysis2 \
-    --results-dir stats_test_data/results_vicuna-13b/20250730_160223_ofl128_vicuna13b \
-    --tokenizer-path lmsys/vicuna-13b-v1.3 \
-    --output-dir log/20250804_vicuna13b_analysis
-python -m eagle.evaluation.comprehensive_statistical_analysis2 \
-    --results-dir stats_test_data/results_llama3.3_70b/20250731_052920_ofl128_llama3370b \
-    --tokenizer-path meta-llama/Llama-3.3-70B-Instruct \
-    --output-dir log/20250804_llama3.3-70B_analysis
+        --results-dir stats_test_data/results_vicuna-13b/20250730_160223_ofl128_vicuna13b \
+        --tokenizer-path lmsys/vicuna-13b-v1.3
+    # Generate analysis for LLaMA 3.3-70B
+    python -m eagle.evaluation.comprehensive_statistical_analysis2 \
+        --results-dir stats_test_data/results_llama3.3_70b/20250731_052920_ofl128_llama3370b \
+        --tokenizer-path meta-llama/Llama-3.3-70B-Instruct
 """
 
 import json
