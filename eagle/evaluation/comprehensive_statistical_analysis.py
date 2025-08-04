@@ -10,26 +10,26 @@ and methods, including:
 - Concise reporting of p-values per method pair
 
 Usage:
-    python -m eagle.evaluation.comprehensive_statistical_analysis2 \
+    python -m eagle.evaluation.comprehensive_statistical_analysis \
         --results-dir log/20250727_0412_optimized_ppo \
         --tokenizer-path meta-llama/Llama-3.1-8B-Instruct \
         --output-dir statistical_analysis_results
         
 Example:
     # Generate analysis for LLaMA 3.1-8B
-    python -m eagle.evaluation.comprehensive_statistical_analysis2 \
+    python -m eagle.evaluation.comprehensive_statistical_analysis \
         --results-dir stats_test_data/results_llama3.1-8B/20250729_184423_ofl128_llama318b \
         --tokenizer-path meta-llama/Llama-3.1-8B-Instruct
     # Generate analysis for Vicuna 13B
-    python -m eagle.evaluation.comprehensive_statistical_analysis2 \
+    python -m eagle.evaluation.comprehensive_statistical_analysis \
         --results-dir stats_test_data/results_vicuna-13b/20250730_160223_ofl128_vicuna13b \
         --tokenizer-path lmsys/vicuna-13b-v1.5
     or (the above is used in the paper):
-    python -m eagle.evaluation.comprehensive_statistical_analysis2 \
+    python -m eagle.evaluation.comprehensive_statistical_analysis \
         --results-dir stats_test_data/results_vicuna-13b/20250730_160223_ofl128_vicuna13b \
         --tokenizer-path lmsys/vicuna-13b-v1.3
     # Generate analysis for LLaMA 3.3-70B
-    python -m eagle.evaluation.comprehensive_statistical_analysis2 \
+    python -m eagle.evaluation.comprehensive_statistical_analysis \
         --results-dir stats_test_data/results_llama3.3_70b/20250731_052920_ofl128_llama3370b \
         --tokenizer-path meta-llama/Llama-3.3-70B-Instruct
 """
