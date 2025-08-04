@@ -15,7 +15,7 @@ mkdir -p "$TEST_DIR"
 
 MODEL_PATH="yuhuili/EAGLE3-LLaMA3.1-Instruct-8B"
 BASE_MODEL_PATH="meta-llama/Llama-3.1-8B-Instruct"
-QUESTION_END=80  # Small number for quick analysis
+QUESTION_END=1  # Small number for quick analysis
 NET_ARCH="128,128"
 
 # Test different cache step sizes
@@ -167,189 +167,86 @@ cat > "$PLOT_SCRIPT" << 'EOF'
 #!/usr/bin/env python3
 
 import pandas as pd
-import matplotlib.pyplot as plt
 import numpy as np
-import sys
+import matplotlib.pyplot as plt
 import os
+import sys
 
 def generate_tradeoff_chart(csv_file):
-    """Generate trade-off bar chart with dual y-axes"""
-    
-    # Read the data
-    try:
-        df = pd.read_csv(csv_file)
-        print(f"📊 Loaded data from {csv_file}")
-        print(f"   Rows: {len(df)}, Columns: {len(df.columns)}")
-        print("\nData preview:")
-        print(df)
-        print()
-    except Exception as e:
-        print(f"❌ Error reading CSV file: {e}")
-        return
-    
-    if len(df) == 0:
-        print("❌ No data found in CSV file")
-        return
-    
-    # Set up the plot with dual y-axes
-    fig, ax1 = plt.subplots(figsize=(14, 8))
-    ax2 = ax1.twinx()
-    
-    # X-axis: Cache Steps
-    x = np.arange(len(df))
-    width = 0.35
-    
-    # Left Y-axis: Performance (Tokens per Second)
-    bars1 = ax1.bar(x - width/2, df['Tokens_Per_Second'], width, 
-                    label='Tokens per Second', color='steelblue', alpha=0.8)
-    
-    # Right Y-axis: Overhead (Total Overhead in ms)
-    bars2 = ax2.bar(x + width/2, df['Total_Overhead_ms'], width,
-                    label='Total Overhead (ms)', color='orangered', alpha=0.8)
-    
-    # Customize axes
-    ax1.set_xlabel('RL Policy Call Frequency (Action Cache Steps)', fontsize=12, fontweight='bold')
-    ax1.set_ylabel('Performance (Tokens/Second)', color='steelblue', fontsize=12, fontweight='bold')
-    ax2.set_ylabel('Overhead Time (milliseconds)', color='orangered', fontsize=12, fontweight='bold')
-    
-    # Set x-axis labels
-    ax1.set_xticks(x)
-    ax1.set_xticklabels([f"{int(steps)}\n({desc})" for steps, desc in 
-                        zip(df['Cache_Steps'], df['Description'])], 
-                       rotation=0, ha='center')
-    
-    # Color the y-axis labels
-    ax1.tick_params(axis='y', labelcolor='steelblue')
-    ax2.tick_params(axis='y', labelcolor='orangered')
-    
-    # Add value labels on bars
-    for i, bar in enumerate(bars1):
-        height = bar.get_height()
-        ax1.annotate(f'{height:.1f}', xy=(bar.get_x() + bar.get_width()/2, height),
-                    xytext=(0, 3), textcoords="offset points", ha='center', va='bottom',
-                    color='steelblue', fontweight='bold', fontsize=9)
-    
-    for i, bar in enumerate(bars2):
-        height = bar.get_height()
-        ax2.annotate(f'{height:.1f}', xy=(bar.get_x() + bar.get_width()/2, height),
-                    xytext=(0, 3), textcoords="offset points", ha='center', va='bottom',
-                    color='orangered', fontweight='bold', fontsize=9)
-    
-    # Add legends
-    ax1.legend(loc='upper left')
-    ax2.legend(loc='upper right')
-    
-    # Title
-    plt.title('EAGLE RL Policy Call Frequency vs Performance Trade-off\n'
-              'Cache Steps: Lower = More RL Calls, Higher = Fewer RL Calls', 
-              fontsize=14, fontweight='bold', pad=20)
-    
-    # Grid for better readability
-    ax1.grid(True, alpha=0.3)
-    
-    # Add subplot for detailed breakdown
-    fig.subplots_adjust(bottom=0.2)
-    
-    # Add detailed breakdown table
-    table_data = []
-    for _, row in df.iterrows():
-        table_data.append([
-            f"{int(row['Cache_Steps'])}",
-            f"{row['RL_Policy_Calls']:.0f}",
-            f"{row['RL_Policy_Avg_ms']:.2f}",
-            f"{row['SentenceBERT_Calls']:.0f}",
-            f"{row['SentenceBERT_Avg_ms']:.2f}",
-            f"{row['Tokens_Per_Second']:.1f}"
-        ])
-    
-    # Create table
-    table = plt.table(cellText=table_data,
-                     colLabels=['Cache\nSteps', 'RL Policy\nCalls', 'RL Avg\n(ms)', 
-                               'SBERT\nCalls', 'SBERT Avg\n(ms)', 'Performance\n(tok/s)'],
-                     cellLoc='center',
-                     loc='bottom',
-                     bbox=[0.1, -0.25, 0.8, 0.15])
-    
-    table.auto_set_font_size(False)
-    table.set_fontsize(9)
-    table.scale(1, 1.5)
-    
-    # Style the table
-    for i in range(len(df) + 1):  # +1 for header
-        for j in range(6):
-            cell = table[(i, j)]
-            if i == 0:  # Header
-                cell.set_facecolor('#40466e')
-                cell.set_text_props(weight='bold', color='white')
-            else:  # Data rows
-                if i % 2 == 0:
-                    cell.set_facecolor('#f1f1f2')
-                else:
-                    cell.set_facecolor('white')
-    
-    plt.tight_layout()
-    
-    # Save the chart
     output_dir = os.path.dirname(csv_file)
-    chart_path = os.path.join(output_dir, 'tradeoff_chart.png')
-    plt.savefig(chart_path, dpi=300, bbox_inches='tight')
-    print(f"📈 Trade-off chart saved to: {chart_path}")
-    
-    # Show the plot
-    plt.show()
-    
-    # Generate summary analysis
-    print("\n" + "="*60)
-    print("📊 TRADE-OFF ANALYSIS SUMMARY")
-    print("="*60)
-    
-    if len(df) > 1:
-        # Find optimal configuration
-        # Normalize performance and overhead for comparison
-        perf_normalized = (df['Tokens_Per_Second'] - df['Tokens_Per_Second'].min()) / (df['Tokens_Per_Second'].max() - df['Tokens_Per_Second'].min() + 1e-8)
-        overhead_normalized = (df['Total_Overhead_ms'] - df['Total_Overhead_ms'].min()) / (df['Total_Overhead_ms'].max() - df['Total_Overhead_ms'].min() + 1e-8)
-        
-        # Trade-off score: high performance, low overhead
-        df['tradeoff_score'] = perf_normalized - overhead_normalized
-        optimal_idx = df['tradeoff_score'].idxmax()
-        
-        print(f"🎯 OPTIMAL CONFIGURATION:")
-        print(f"   Cache Steps: {int(df.loc[optimal_idx, 'Cache_Steps'])}")
-        print(f"   Description: {df.loc[optimal_idx, 'Description']}")
-        print(f"   Performance: {df.loc[optimal_idx, 'Tokens_Per_Second']:.1f} tokens/sec")
-        print(f"   Total Overhead: {df.loc[optimal_idx, 'Total_Overhead_ms']:.1f} ms")
-        print(f"   RL Policy Calls: {df.loc[optimal_idx, 'RL_Policy_Calls']:.0f}")
-        print()
-        
-        # Performance analysis
-        max_perf_idx = df['Tokens_Per_Second'].idxmax()
-        min_overhead_idx = df['Total_Overhead_ms'].idxmin()
-        
-        print(f"🚀 HIGHEST PERFORMANCE:")
-        print(f"   Cache Steps: {int(df.loc[max_perf_idx, 'Cache_Steps'])}")
-        print(f"   Performance: {df.loc[max_perf_idx, 'Tokens_Per_Second']:.1f} tokens/sec")
-        print(f"   Overhead: {df.loc[max_perf_idx, 'Total_Overhead_ms']:.1f} ms")
-        print()
-        
-        print(f"⚡ LOWEST OVERHEAD:")
-        print(f"   Cache Steps: {int(df.loc[min_overhead_idx, 'Cache_Steps'])}")
-        print(f"   Overhead: {df.loc[min_overhead_idx, 'Total_Overhead_ms']:.1f} ms")
-        print(f"   Performance: {df.loc[min_overhead_idx, 'Tokens_Per_Second']:.1f} tokens/sec")
-        print()
-        
-        # Cache efficiency analysis
-        print(f"📈 CACHE EFFICIENCY INSIGHTS:")
-        for _, row in df.iterrows():
-            cache_steps = int(row['Cache_Steps'])
-            rl_calls = row['RL_Policy_Calls']
-            total_questions = row['Total_Questions']
-            
-            # Estimate total inference steps (approximate)
-            estimated_steps = total_questions * 50  # ~50 steps per question
-            cache_efficiency = (estimated_steps - rl_calls) / estimated_steps * 100 if estimated_steps > 0 else 0
-            
-            print(f"   Cache {cache_steps}: {cache_efficiency:.1f}% cache hits, {rl_calls:.0f} RL calls")
 
+    # Load results data
+    df = pd.read_csv(csv_file)
+
+    x = np.arange(len(df))
+    bar_width = 0.35
+
+    color1 = 'tab:blue'
+    color2 = 'tab:green'
+
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    bars1 = ax1.bar(
+        x - bar_width/2,
+        df['LLM_Inference_Time_s'],
+        width=bar_width,
+        color=color1,
+        alpha=0.7,
+        label='Inference Time (s)'
+    )
+
+    # Bold, larger font for axis labels
+    label_font = {'fontweight': 'bold', 'fontsize': 18}
+    tick_font = {'fontweight': 'bold', 'fontsize': 14}
+
+    ax1.set_xlabel('Cache Interval Length', **label_font)
+    ax1.set_ylabel('Inference Time (s)', color=color1, **label_font)
+    ax1.tick_params(axis='y', labelcolor=color1, labelsize=14, width=2)
+    ax1.tick_params(axis='x', labelsize=14, width=2)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(df['Cache_Steps'], fontweight='bold', fontsize=14)
+    # Auto-scale y-axis with some padding
+    y_min = df['LLM_Inference_Time_s'].min() * 0.95
+    y_max = df['LLM_Inference_Time_s'].max() * 1.05
+    ax1.set_ylim(y_min, y_max)
+
+    # Make x and y axis lines bold
+    ax1.spines['left'].set_linewidth(2.5)
+    ax1.spines['bottom'].set_linewidth(2.5)
+
+    ax2 = ax1.twinx()
+    bars2 = ax2.bar(
+        x + bar_width/2,
+        df['Tokens_Per_Second'],
+        width=bar_width,
+        color=color2,
+        alpha=0.6,
+        label='Generation Speed\n(Tokens/s)'
+    )
+    ax2.set_ylabel('Generation Speed (Tokens/s)', color=color2, **label_font)
+    ax2.tick_params(axis='y', labelcolor=color2, labelsize=14, width=2)
+    ax2.spines['right'].set_linewidth(2.5)
+    # Auto-scale second y-axis with some padding
+    y2_min = df['Tokens_Per_Second'].min() * 0.95
+    y2_max = df['Tokens_Per_Second'].max() * 1.05
+    ax2.set_ylim(y2_min, y2_max)
+
+    # Title and caption
+    fig.suptitle(
+        'Cache Interval Length vs Inference Time (s) and Generation Speed (Tokens/s)',
+        fontsize=16, fontweight='bold', y=0.97
+    )
+
+    handles = [bars1, bars2]
+    labels = [h.get_label() for h in handles]
+    ax1.legend(handles, labels, loc='upper left', fontsize=14)
+
+    fig.tight_layout(rect=[0, 0.04, 1, 0.96])
+    output_file = os.path.join(output_dir, 'tradeoff_dualbar.pdf')
+    plt.savefig(output_file, bbox_inches='tight')
+    print(f"✅ Chart saved to: {output_file}")
+    # plt.show()
+    
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python generate_tradeoff_chart.py <csv_file>")
@@ -360,7 +257,15 @@ if __name__ == "__main__":
         print(f"❌ CSV file not found: {csv_file}")
         sys.exit(1)
     
-    generate_tradeoff_chart(csv_file)
+    print(f"📊 Loading data from: {csv_file}")
+    try:
+        generate_tradeoff_chart(csv_file)
+        print("🎉 Chart generation completed successfully!")
+    except Exception as e:
+        print(f"❌ Error generating chart: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 EOF
 
 echo "=== Generating Trade-off Visualization ==="
@@ -372,7 +277,7 @@ echo "=== Trade-off Analysis Complete ==="
 echo ""
 echo "📁 Results directory: $TEST_DIR"
 echo "📊 Data file: $RESULTS_FILE"
-echo "📈 Chart: $TEST_DIR/tradeoff_chart.png"
+echo "📈 Chart: $TEST_DIR/tradeoff_dualbar.pdf"
 echo "🐍 Plot script: $PLOT_SCRIPT"
 echo ""
 echo "To regenerate the chart:"
