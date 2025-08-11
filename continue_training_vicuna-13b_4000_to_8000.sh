@@ -173,7 +173,7 @@ if [ "$RUN_STANDARD" -eq 1 ]; then
                 --max-entropy-ent-coef 0.1 \
                 --inference-temperature 1.5 \
                 --max-entropy-inference \
-                --action-cache-steps 10 \
+                --action-cache-steps 5 \
                 --action-cache-enabled \
                 --use-eagle3-features \
                 --hidden-size 4096 \
