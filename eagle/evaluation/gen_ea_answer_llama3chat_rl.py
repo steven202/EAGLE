@@ -957,12 +957,18 @@ def get_model_answers(
     question_count = 0
     step_count = 0
     
+    # NEW: Training time measurement (excluding validation evaluation time)
+    training_start_time = time.time()
+    total_training_time = 0.0
+    validation_start_time = None
+    
     # NEW: Prepare validation questions (fixed subset from start of training data)
     validation_questions = None
     if args.eval_checkpoint_freq and args.validation_questions and online_policy is not None and not args.online_inference_only:
         # Take first N questions as validation set (consistent subset from training data)
         validation_questions = questions[:args.validation_questions]
         print(f"🔍 Prepared validation set: {len(validation_questions)} questions from start of training data")
+        print(f"⏱️  Training time measurement started (excluding validation evaluation time)")
     
     for question in tqdm(questions, desc="Processing questions"):
         
@@ -979,14 +985,30 @@ def get_model_answers(
             if (args.eval_checkpoint_freq and validation_questions and 
                 step_count > 0 and step_count % args.eval_checkpoint_freq == 0):
                 print(f"🔍 Performing validation evaluation and checkpoint saving at step {step_count}")
+                
+                # Pause training timer before validation (exclude validation time from training time)
+                validation_start_time = time.time()
+                total_training_time += validation_start_time - training_start_time
+                
                 run_validation_evaluation(model, tokenizer, validation_questions, online_policy, args, step_count)
                 # Force checkpoint save at this step
                 online_policy.save_checkpoint(f"step_{step_count}")
+                
+                # Resume training timer after validation
+                training_start_time = time.time()
+                validation_end_time = training_start_time
+                validation_duration = validation_end_time - validation_start_time
+                print(f"⏱️  Validation completed in {validation_duration:.2f}s (excluded from training time)")
+                print(f"⏱️  Pure training time so far: {total_training_time:.2f}s")
             
             # Progress update with checkpoint info
             if question_count % 10 == 0:
+                # Calculate current training time (excluding validation)
+                current_time = time.time()
+                current_training_time = total_training_time + (current_time - training_start_time)
+                
                 progress_msg = (f"📊 Progress: {question_count}/{len(questions)} questions, "
-                               f"Step: {step_count}")
+                               f"Step: {step_count}, Training Time: {current_training_time:.1f}s")
                 
                 # Add policy-specific metrics
                 if 'epsilon' in resume_info:
@@ -1346,6 +1368,13 @@ def get_model_answers(
                 print(f"Most used parameters: {final_stats.get('most_used_params', [])}")
         else:
             # Training mode: save updated policy with enhanced statistics
+            
+            # Calculate final training time (excluding validation)
+            final_training_time = total_training_time + (time.time() - training_start_time)
+            training_hours = int(final_training_time // 3600)
+            training_minutes = int((final_training_time % 3600) // 60)
+            training_seconds = final_training_time % 60
+            
             save_path = args.online_policy_save_path or "online_tree_policy_trained.pth"
             online_policy.save(save_path)
             online_policy.save_checkpoint()
@@ -1356,6 +1385,7 @@ def get_model_answers(
             print(f"Questions processed: {len(questions)} (repeated & shuffled for training)")
             print(f"Total episodes: {final_stats.get('total_episodes', 0)}")
             print(f"Final average reward: {final_stats.get('avg_reward_recent', 0):.4f}")
+            print(f"⏱️  Pure training time: {training_hours:02d}h {training_minutes:02d}m {training_seconds:05.2f}s ({final_training_time:.1f}s total)")
             print(f"Most used parameters: {final_stats.get('most_used_params', [])}")
             print(f"Policy saved to: {save_path}")
             
@@ -1370,6 +1400,8 @@ def get_model_answers(
                         "total_episodes": final_stats.get('total_episodes', 0),
                         "parameter_combinations_used": param_count,
                         "questions_processed": len(questions),
+                        "training_time_seconds": final_training_time,
+                        "training_time_hours": final_training_time / 3600.0,
                     }
                     
                     # Add policy-specific metrics
