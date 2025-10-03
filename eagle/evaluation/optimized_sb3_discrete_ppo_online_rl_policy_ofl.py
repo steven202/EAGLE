@@ -1653,7 +1653,8 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         """Get information for resuming training"""
         return {
             "questions_processed": self.questions_processed,
-            "training_seed": self.training_seed
+            "training_seed": self.training_seed,
+            "step_count": self.step_count  # Add step count for progress tracking
         }
     
     def increment_questions_processed(self, count=1):

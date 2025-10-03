@@ -255,6 +255,103 @@ def run_eval(
         ray.get(ans_handles)
 
 
+def run_validation_evaluation(model, tokenizer, validation_questions, online_policy, args, step_count):
+    """
+    Run validation evaluation on a fixed subset of training data
+    """
+    print(f"🔍 Starting validation evaluation at step {step_count} with {len(validation_questions)} questions")
+    
+    validation_results = []
+    total_tokens = 0
+    total_time = 0
+    
+    for i, question in enumerate(validation_questions):
+        try:
+            # Set up the conversation
+            messages = [
+                {"role": "system",
+                 "content": "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe."},
+            ]
+            
+            for turn in question["turns"]:
+                messages.append({"role": "user", "content": turn})
+                
+                # Apply chat template
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                input_ids = tokenizer([prompt], add_special_tokens=False).input_ids
+                
+                # Get parameters from policy (inference mode for validation)
+                full_context = " ".join([msg["content"] for msg in messages])
+                
+                if hasattr(online_policy, 'use_eagle3_features') and online_policy.use_eagle3_features:
+                    # Optimized policy - use fixed parameters for validation
+                    predicted_total_tokens, predicted_depth, predicted_top_k = (96, 8, 20)
+                else:
+                    # Traditional policy
+                    predicted_total_tokens, predicted_depth, predicted_top_k = online_policy.predict_parameters(
+                        full_context, training_mode=False
+                    )
+                
+                # Generate with predicted parameters
+                start_time = time.time()
+                
+                output_ids, new_token, idx = model.ea_generate(
+                    input_ids,
+                    temperature=0.0,
+                    max_new_tokens=args.max_new_token,
+                    max_length_param=2048,
+                    total_token=predicted_total_tokens,
+                    depth=predicted_depth,
+                    top_k=predicted_top_k,
+                    tree_choices=args.tree_choices,
+                )
+                
+                wall_time = time.time() - start_time
+                
+                # Decode output
+                output = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+                messages.append({"role": "assistant", "content": output})
+                
+                # Accumulate metrics
+                total_tokens += new_token
+                total_time += wall_time
+                
+        except Exception as e:
+            print(f"⚠️  Validation question {i+1} failed: {e}")
+            continue
+    
+    # Calculate and log validation metrics
+    if total_time > 0:
+        tokens_per_second = total_tokens / total_time
+        avg_time_per_question = total_time / len(validation_questions)
+        
+        print(f"📊 Validation Results at Step {step_count}:")
+        print(f"   Total tokens: {total_tokens}")
+        print(f"   Total time: {total_time:.2f}s")
+        print(f"   Tokens/second: {tokens_per_second:.2f}")
+        print(f"   Avg time/question: {avg_time_per_question:.2f}s")
+        
+        # Log to wandb if available
+        if hasattr(online_policy, 'use_wandb') and online_policy.use_wandb:
+            try:
+                import wandb
+                wandb.log({
+                    "validation/step": step_count,
+                    "validation/tokens_per_second": tokens_per_second,
+                    "validation/total_tokens": total_tokens,
+                    "validation/total_time": total_time,
+                    "validation/avg_time_per_question": avg_time_per_question,
+                })
+            except Exception as e:
+                print(f"⚠️  Failed to log to wandb: {e}")
+    
+    print(f"✅ Validation evaluation completed at step {step_count}")
+
+
 def get_model_answers(
         base_model_path,
         ea_model_path,
@@ -858,6 +955,15 @@ def get_model_answers(
 
     # questions=questions[6:]
     question_count = 0
+    step_count = 0
+    
+    # NEW: Prepare validation questions (fixed subset from start of training data)
+    validation_questions = None
+    if args.eval_checkpoint_freq and args.validation_questions and online_policy is not None and not args.online_inference_only:
+        # Take first N questions as validation set (consistent subset from training data)
+        validation_questions = questions[:args.validation_questions]
+        print(f"🔍 Prepared validation set: {len(validation_questions)} questions from start of training data")
+    
     for question in tqdm(questions, desc="Processing questions"):
         
         # Track question processing for online RL resume mechanism (count even skipped questions)
@@ -865,10 +971,20 @@ def get_model_answers(
         if online_policy is not None and not args.online_inference_only:
             online_policy.increment_questions_processed()
             
+            # Get current step count from policy
+            resume_info = online_policy.get_resume_info()
+            step_count = resume_info.get('step_count', 0)
+            
+            # NEW: Perform validation evaluation and checkpoint saving if it's time
+            if (args.eval_checkpoint_freq and validation_questions and 
+                step_count > 0 and step_count % args.eval_checkpoint_freq == 0):
+                print(f"🔍 Performing validation evaluation and checkpoint saving at step {step_count}")
+                run_validation_evaluation(model, tokenizer, validation_questions, online_policy, args, step_count)
+                # Force checkpoint save at this step
+                online_policy.save_checkpoint(f"step_{step_count}")
+            
             # Progress update with checkpoint info
             if question_count % 10 == 0:
-                resume_info = online_policy.get_resume_info()
-                step_count = resume_info.get('step_count', 0)
                 progress_msg = (f"📊 Progress: {question_count}/{len(questions)} questions, "
                                f"Step: {step_count}")
                 
@@ -1537,6 +1653,19 @@ if __name__ == "__main__":
         "--no-resume",
         action="store_true",
         help="Disable automatic resume and start fresh training"
+    )
+    # NEW: Training step control arguments
+    parser.add_argument(
+        "--eval-checkpoint-freq",
+        type=int,
+        default=500,
+        help="Perform validation evaluation and save checkpoint every N training steps"
+    )
+    parser.add_argument(
+        "--validation-questions",
+        type=int,
+        default=80,
+        help="Number of questions to use for validation evaluation (subset from start of training data)"
     )
     parser.add_argument(
         "--continuous-action-space",
