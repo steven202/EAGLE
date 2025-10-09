@@ -13,6 +13,7 @@ from accelerate.utils import set_seed
 set_seed(0)
 
 import time
+import numpy as np
 
 import shortuuid
 from fastchat.llm_judge.common import load_questions
@@ -116,6 +117,11 @@ def get_model_answers(
     )
 
     tokenizer = model.get_tokenizer()
+    
+    # Global acceptance metrics tracking
+    global_acceptance_lengths = []
+    global_acceptance_rates = []
+    total_questions_processed = 0
 
     if temperature > 1e-5:
         logits_processor = prepare_logits_processor(temperature=temperature)
@@ -159,12 +165,24 @@ def get_model_answers(
             torch.cuda.synchronize()
             start_time = time.time()
 
-            output_ids, new_token, idx = model.eagenerate(
+            result = model.eagenerate(
                 torch.as_tensor(input_ids).cuda(),
                 temperature=temperature,
                 log=True,
                 is_llama3=True,
             )
+            
+            # Handle different return value counts for backward compatibility
+            if len(result) == 3:
+                output_ids, new_token, idx = result
+                accept_lengths, avg_accept_length, accept_rate = [], 0, 0
+            elif len(result) == 6:
+                output_ids, new_token, idx, accept_lengths, avg_accept_length, accept_rate = result
+            elif len(result) == 8:
+                output_ids, new_token, idx, step_rewards, num_steps, accept_lengths, avg_accept_length, accept_rate = result
+            else:
+                raise ValueError(f"Unexpected number of return values from eagenerate: {len(result)}")
+            
             torch.cuda.synchronize()
             total_time = time.time() - start_time
             output_ids = output_ids[0][len(input_ids[0]):]
@@ -224,6 +242,8 @@ def get_model_answers(
             idxs = []
             new_tokens = []
             wall_time = []
+            acceptance_lengths = []
+            acceptance_rates = []
             for j in range(len(question["turns"])):
                 qs = question["turns"][j]
                 messages.append({
@@ -241,12 +261,24 @@ def get_model_answers(
                 torch.cuda.synchronize()
                 start_time = time.time()
 
-                output_ids, new_token, idx = model.eagenerate(
+                result = model.eagenerate(
                     torch.as_tensor(input_ids).cuda(),
                     temperature=temperature,
                     log=True,
                     is_llama3=True,
                 )
+                
+                # Handle different return value counts for backward compatibility
+                if len(result) == 3:
+                    output_ids, new_token, idx = result
+                    accept_lengths, avg_accept_length, accept_rate = [], 0, 0
+                elif len(result) == 6:
+                    output_ids, new_token, idx, accept_lengths, avg_accept_length, accept_rate = result
+                elif len(result) == 8:
+                    output_ids, new_token, idx, step_rewards, num_steps, accept_lengths, avg_accept_length, accept_rate = result
+                else:
+                    raise ValueError(f"Unexpected number of return values from eagenerate: {len(result)}")
+                
                 torch.cuda.synchronize()
                 total_time = time.time() - start_time
                 output_ids = output_ids[0][len(input_ids[0]):]
@@ -284,12 +316,64 @@ def get_model_answers(
                 idxs.append(int(idx))
                 new_tokens.append(int(new_token))
                 wall_time.append(total_time)
+                
+                # Track acceptance metrics (convert to JSON-serializable format)
+                if 'accept_lengths' in locals() and accept_lengths:
+                    acceptance_lengths.append([int(al.cpu()) if hasattr(al, 'cpu') else int(al) for al in accept_lengths])
+                else:
+                    acceptance_lengths.append([])
+                
+                if 'accept_rate' in locals():
+                    # Convert tensor to Python float
+                    if hasattr(accept_rate, 'cpu'):
+                        acceptance_rates.append(float(accept_rate.cpu()))
+                    else:
+                        acceptance_rates.append(float(accept_rate))
+                else:
+                    acceptance_rates.append(0.0)
+                
                 messages.append({
                     "role": "assistant",
                     "content": output
                 })
             # torch.cuda.empty_cache()
-            choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time})
+            
+            # Calculate average acceptance length and rate for this choice (convert to Python types)
+            avg_acceptance_length = sum(len(al) for al in acceptance_lengths) / len(acceptance_lengths) if acceptance_lengths else 0
+            overall_acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if acceptance_rates else 0
+            
+            # Calculate standard deviation for acceptance metrics
+            acceptance_length_values = [len(al) for al in acceptance_lengths] if acceptance_lengths else []
+            std_acceptance_length = float(np.std(acceptance_length_values)) if len(acceptance_length_values) > 1 else 0.0
+            std_acceptance_rate = float(np.std(acceptance_rates)) if len(acceptance_rates) > 1 else 0.0
+            
+            # Ensure Python float conversion
+            avg_acceptance_length = float(avg_acceptance_length)
+            overall_acceptance_rate = float(overall_acceptance_rate)
+            
+            choices.append({
+                "index": i, 
+                "turns": turns, 
+                "idxs": idxs, 
+                "new_tokens": new_tokens, 
+                "wall_time": wall_time,
+                "acceptance_lengths": acceptance_lengths,
+                "acceptance_rates": acceptance_rates,
+                "avg_acceptance_length": avg_acceptance_length,
+                "std_acceptance_length": std_acceptance_length,
+                "overall_acceptance_rate": overall_acceptance_rate,
+                "std_acceptance_rate": std_acceptance_rate
+            })
+        
+        # Update global acceptance tracking
+        total_questions_processed += 1
+        if choices and len(choices) > 0:
+            # Use the first choice for global tracking
+            first_choice = choices[0]
+            if 'overall_acceptance_rate' in first_choice and first_choice['overall_acceptance_rate'] > 0:
+                global_acceptance_rates.append(first_choice['overall_acceptance_rate'])
+            if 'avg_acceptance_length' in first_choice and first_choice['avg_acceptance_length'] > 0:
+                global_acceptance_lengths.append(first_choice['avg_acceptance_length'])
 
         # Dump answers
         os.makedirs(os.path.dirname(answer_file), exist_ok=True)
@@ -302,6 +386,25 @@ def get_model_answers(
                 "tstamp": time.time(),
             }
             fout.write(json.dumps(ans_json) + "\n")
+
+    # Print final acceptance metrics summary
+    if global_acceptance_rates or global_acceptance_lengths:
+        print(f"\n=== Acceptance Metrics Summary ===")
+        if global_acceptance_rates:
+            avg_acceptance_rate = sum(global_acceptance_rates) / len(global_acceptance_rates)
+            std_acceptance_rate = np.std(global_acceptance_rates) if len(global_acceptance_rates) > 1 else 0.0
+            min_acceptance_rate = min(global_acceptance_rates)
+            max_acceptance_rate = max(global_acceptance_rates)
+            print(f"Average acceptance rate: {avg_acceptance_rate:.4f} ± {std_acceptance_rate:.4f}")
+            print(f"Acceptance rate range: {min_acceptance_rate:.4f} - {max_acceptance_rate:.4f}")
+        if global_acceptance_lengths:
+            avg_acceptance_length = sum(global_acceptance_lengths) / len(global_acceptance_lengths)
+            std_acceptance_length = np.std(global_acceptance_lengths) if len(global_acceptance_lengths) > 1 else 0.0
+            min_acceptance_length = min(global_acceptance_lengths)
+            max_acceptance_length = max(global_acceptance_lengths)
+            print(f"Average acceptance length: {avg_acceptance_length:.2f} ± {std_acceptance_length:.2f} tokens")
+            print(f"Acceptance length range: {min_acceptance_length:.2f} - {max_acceptance_length:.2f} tokens")
+        print(f"Total questions with acceptance data: {len(global_acceptance_rates)}")
 
 
 def reorg_answer_file(answer_file):

@@ -13,6 +13,7 @@ from accelerate.utils import set_seed
 set_seed(0)
 
 import time
+import numpy as np
 
 import shortuuid
 from fastchat.llm_judge.common import load_questions
@@ -115,6 +116,11 @@ def get_model_answers(
     )
 
     tokenizer = model.get_tokenizer()
+    
+    # Global acceptance metrics tracking (baseline generation has no acceptance)
+    global_acceptance_lengths = []
+    global_acceptance_rates = []
+    total_questions_processed = 0
 
     if temperature > 1e-5:
         logits_processor = prepare_logits_processor(temperature=temperature)
@@ -223,6 +229,8 @@ def get_model_answers(
             idxs = []
             new_tokens = []
             wall_time = []
+            acceptance_lengths = []  # Empty for baseline (no speculative decoding)
+            acceptance_rates = []    # Empty for baseline (no speculative decoding)
             for j in range(len(question["turns"])):
                 qs = question["turns"][j]
                 messages.append({
@@ -283,12 +291,41 @@ def get_model_answers(
                 idxs.append(int(idx))
                 new_tokens.append(int(new_token))
                 wall_time.append(total_time)
+                
+                # Track acceptance metrics (baseline has no speculative decoding, so values are empty/zero)
+                acceptance_lengths.append([])  # No acceptance lengths for baseline
+                acceptance_rates.append(0.0)   # No acceptance rate for baseline
+                
                 messages.append({
                     "role": "assistant",
                     "content": output
                 })
             # torch.cuda.empty_cache()
-            choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time})
+            
+            # Calculate acceptance metrics for consistency (all zeros for baseline)
+            avg_acceptance_length = 0.0  # No speculative decoding in baseline
+            overall_acceptance_rate = 0.0  # No speculative decoding in baseline
+            std_acceptance_length = 0.0   # No speculative decoding in baseline
+            std_acceptance_rate = 0.0     # No speculative decoding in baseline
+            
+            choices.append({
+                "index": i, 
+                "turns": turns, 
+                "idxs": idxs, 
+                "new_tokens": new_tokens, 
+                "wall_time": wall_time,
+                "acceptance_lengths": acceptance_lengths,
+                "acceptance_rates": acceptance_rates,
+                "avg_acceptance_length": avg_acceptance_length,
+                "std_acceptance_length": std_acceptance_length,
+                "overall_acceptance_rate": overall_acceptance_rate,
+                "std_acceptance_rate": std_acceptance_rate
+            })
+        
+        # Update global acceptance tracking (baseline has no acceptance data)
+        total_questions_processed += 1
+        # Note: For baseline, we don't add to global_acceptance_rates/lengths 
+        # because they are always zero (no speculative decoding)
 
         # Dump answers
         os.makedirs(os.path.dirname(answer_file), exist_ok=True)
@@ -301,6 +338,13 @@ def get_model_answers(
                 "tstamp": time.time(),
             }
             fout.write(json.dumps(ans_json) + "\n")
+
+    # Print final acceptance metrics summary (baseline generation has no acceptance)
+    print(f"\n=== Acceptance Metrics Summary (Baseline) ===")
+    print(f"Baseline generation uses standard autoregressive decoding with no speculative acceptance.")
+    print(f"Average acceptance rate: 0.0000 ± 0.0000 (N/A for baseline)")
+    print(f"Average acceptance length: 0.00 ± 0.00 tokens (N/A for baseline)")
+    print(f"Total questions processed: {total_questions_processed}")
 
 
 def reorg_answer_file(answer_file):

@@ -226,6 +226,11 @@ class EaModel(nn.Module):
         unique_actions = {}  # action_tuple -> first_step_number
         generation_speeds = []  # Store generation speed for each step
         
+        # Track acceptance metrics
+        acceptance_lengths_per_step = []  # Store acceptance length for each step
+        total_draft_tokens = 0  # Total number of draft tokens proposed
+        total_accepted_tokens = 0  # Total number of accepted tokens
+        
         # Temporarily update parameters if provided (fallback values for non-RL mode)
         if total_tokens is not None:
             self.ea_layer.total_tokens = total_tokens - 1  # Adjust as in line 163
@@ -484,6 +489,13 @@ class EaModel(nn.Module):
                     logits, candidates, logits_processor
                 )
                 # print(accept_length)
+                
+                # Track acceptance metrics
+                acceptance_lengths_per_step.append(accept_length)
+                # For acceptance rate calculation: number of proposed tokens vs accepted
+                num_candidates = candidates.shape[0] if len(candidates.shape) > 1 else 1
+                total_draft_tokens += num_candidates
+                total_accepted_tokens += accept_length + 1  # +1 for the accepted token
             
             # Calculate step reward for RL training
             step_end_time = time.time()
@@ -568,6 +580,10 @@ class EaModel(nn.Module):
         self.ea_layer.depth = original_depth
         self.ea_layer.top_k = original_top_k
         
+        # Calculate aggregate acceptance metrics
+        avg_acceptance_length = sum(acceptance_lengths_per_step) / len(acceptance_lengths_per_step) if acceptance_lengths_per_step else 0
+        acceptance_rate = total_accepted_tokens / total_draft_tokens if total_draft_tokens > 0 else 0
+        
         # Return step-wise RL information if used
         if use_stepwise_rl and step_rewards_callback and training_mode:
             step_rewards_callback({
@@ -584,9 +600,9 @@ class EaModel(nn.Module):
                 return input_ids
         else:
             if use_stepwise_rl:
-                return input_ids, new_token, idx, step_rewards, len(step_rewards)
+                return input_ids, new_token, idx, step_rewards, len(step_rewards), acceptance_lengths_per_step, avg_acceptance_length, acceptance_rate
             else:
-                return input_ids, new_token, idx
+                return input_ids, new_token, idx, acceptance_lengths_per_step, avg_acceptance_length, acceptance_rate
 
     @torch.no_grad()
     def naivegenerate(

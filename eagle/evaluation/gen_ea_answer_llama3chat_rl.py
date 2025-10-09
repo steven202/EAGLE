@@ -23,6 +23,7 @@ import os
 import wandb
 import signal
 import subprocess
+import numpy as np
 import threading
 script_dir = os.path.dirname(__file__)
 parent_dir = os.path.dirname(script_dir)
@@ -292,6 +293,11 @@ def get_model_answers(
     rl_policy = None
     online_policy = None
     rl_data_entries = []
+    
+    # Global acceptance metrics tracking
+    global_acceptance_lengths = []
+    global_acceptance_rates = []
+    total_questions_processed = 0
     
     if args.use_online_rl:
         # Initialize online RL policy for real-time learning with resume support
@@ -719,16 +725,23 @@ def get_model_answers(
                             training_mode=False,  # No training during warmup
                             max_length=max_length_param,
                         )
+                        print("length of result:", len(result))
                         # Handle variable return values from step-wise RL
-                        if len(result) == 5:  # Step-wise RL with log=True
+                        if len(result) == 8:  # Step-wise RL with log=True and acceptance metrics
+                            output_ids, new_token, idx, step_rewards, step_count, accept_lengths, avg_accept_length, accept_rate = result
+                            print(f"Warmup with step-wise RL completed: {new_token} tokens, {step_count} steps, acceptance rate: {accept_rate:.3f}")
+                        elif len(result) == 5:  # Step-wise RL with log=True (backward compatibility)
                             output_ids, new_token, idx, step_rewards, step_count = result
                             print(f"Warmup with step-wise RL completed: {new_token} tokens, {step_count} steps")
-                        else:  # Fallback to traditional
-                            output_ids, new_token, idx = result
+                        elif len(result) == 6:  # Traditional mode with acceptance metrics
+                            output_ids, new_token, idx, accept_lengths, avg_accept_length, accept_rate = result
+                            print(f"Warmup completed: {new_token} tokens generated, acceptance rate: {accept_rate:.3f}")
+                        else:  # Fallback to traditional (backward compatibility)
+                            output_ids, new_token, idx = result[:3]
                             print(f"Warmup completed: {new_token} tokens generated")
                     else:
                         # Traditional mode: fixed parameters for entire generation
-                        output_ids, new_token, idx = model.eagenerate(
+                        result = model.eagenerate(
                             torch.as_tensor(input_ids).cuda(),
                             temperature=temperature,
                             log=True,
@@ -738,6 +751,11 @@ def get_model_answers(
                             tree_top_k=predicted_top_k,
                             max_length=max_length_param,
                         )
+                        # Handle traditional mode return values
+                        if len(result) == 6:  # Traditional mode with acceptance metrics
+                            output_ids, new_token, idx, accept_lengths, avg_accept_length, accept_rate = result
+                        else:  # Backward compatibility
+                            output_ids, new_token, idx = result[:3]
             except RuntimeError as e:
                 if ("selected index k out of range" in str(e) or "exceeds dimension size" in str(e) or 
                     "start" in str(e) or "KV cache buffer overflow" in str(e) or 
@@ -772,10 +790,10 @@ def get_model_answers(
                                     output_ids, new_token, idx, step_rewards, step_count = result
                                     print(f"Fallback warmup with step-wise RL: {new_token} tokens, {step_count} steps")
                                 else:  # Fallback to traditional
-                                    output_ids, new_token, idx = result
+                                    output_ids, new_token, idx = result[:3]
                             else:
                                 # Traditional fallback mode  
-                                output_ids, new_token, idx = model.eagenerate(
+                                result = model.eagenerate(
                                     torch.as_tensor(input_ids).cuda(),
                                     temperature=temperature,
                                     log=True,
@@ -785,6 +803,11 @@ def get_model_answers(
                                     tree_top_k=safe_top_k,
                                     max_length=max_length_param,
                                 )
+                                # Handle traditional fallback return values
+                                if len(result) == 6:  # Traditional mode with acceptance metrics
+                                    output_ids, new_token, idx, accept_lengths, avg_accept_length, accept_rate = result
+                                else:  # Backward compatibility
+                                    output_ids, new_token, idx = result[:3]
                     except RuntimeError as e2:
                         print(f"❌ Even ultra-conservative warmup failed: {e2}")
                         print("   Skipping warmup - proceeding with standard generation")
@@ -880,6 +903,12 @@ def get_model_answers(
                     # PPO-based policies
                     progress_msg += f", PPO Updates: {resume_info['ppo_updates']}"
                 
+                # Add acceptance metrics if available
+                if global_acceptance_rates:
+                    recent_acceptance_rates = global_acceptance_rates[-10:]  # Last 10 questions
+                    avg_recent_acceptance_rate = sum(recent_acceptance_rates) / len(recent_acceptance_rates)
+                    progress_msg += f", Avg Acceptance Rate: {avg_recent_acceptance_rate:.3f}"
+                
                 print(progress_msg)
                 
                 if online_policy.should_save_checkpoint():
@@ -898,6 +927,8 @@ def get_model_answers(
             idxs = []
             new_tokens = []
             wall_time = []
+            acceptance_lengths = []  # Track acceptance lengths for each turn
+            acceptance_rates = []    # Track acceptance rates for each turn
             
             for j in range(len(question["turns"])):
                 qs = question["turns"][j]
@@ -993,19 +1024,28 @@ def get_model_answers(
                                     max_length=max_length_param,
                                 )
                                 # Handle variable return values from step-wise RL
-                                if len(result) == 5:  # Step-wise RL with log=True
+                                if len(result) == 8:  # Step-wise RL with log=True and acceptance metrics
+                                    output_ids, new_token, idx, step_rewards, step_count, accept_lengths, avg_accept_length, accept_rate = result
+                                    if training_mode:
+                                        print(f"Step-wise RL training: {new_token} tokens, {step_count} steps, avg reward: {sum(step_rewards)/len(step_rewards):.2f}, acceptance rate: {accept_rate:.3f}")
+                                    else:
+                                        # print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps, acceptance rate: {accept_rate:.3f}")
+                                        pass
+                                elif len(result) == 5:  # Step-wise RL with log=True (backward compatibility)
                                     output_ids, new_token, idx, step_rewards, step_count = result
+                                    accept_lengths, avg_accept_length, accept_rate = [], 0, 0  # Default values
                                     if training_mode:
                                         print(f"Step-wise RL training: {new_token} tokens, {step_count} steps, avg reward: {sum(step_rewards)/len(step_rewards):.2f}")
                                     else:
                                         # print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
                                         pass
                                 else:  # Fallback to traditional
-                                    output_ids, new_token, idx = result
+                                    output_ids, new_token, idx = result[:3]
+                                    accept_lengths, avg_accept_length, accept_rate = [], 0, 0  # Default values
                                     print(f"Step-wise RL (fallback): {new_token} tokens, {idx+1} steps")
                             else:
                                 # Traditional mode: fixed parameters for entire generation
-                                output_ids, new_token, idx = model.eagenerate(
+                                result = model.eagenerate(
                                     torch.as_tensor(input_ids).cuda(),
                                     temperature=temperature,
                                     log=True,
@@ -1015,6 +1055,12 @@ def get_model_answers(
                                     tree_top_k=predicted_top_k,
                                     max_length=max_length_param,
                                 )
+                                # Handle traditional mode return values
+                                if len(result) == 6:  # Traditional mode with acceptance metrics
+                                    output_ids, new_token, idx, accept_lengths, avg_accept_length, accept_rate = result
+                                else:  # Backward compatibility
+                                    output_ids, new_token, idx = result[:3]
+                                    accept_lengths, avg_accept_length, accept_rate = [], 0, 0
                         else:
                             # Inference mode: use torch.no_grad() for memory efficiency
                             with torch.no_grad():
@@ -1033,16 +1079,22 @@ def get_model_answers(
                                         max_length=max_length_param,
                                     )
                                     # Handle variable return values from step-wise RL
-                                    if len(result) == 5:  # Step-wise RL with log=True
+                                    if len(result) == 8:  # Step-wise RL with log=True and acceptance metrics
+                                        output_ids, new_token, idx, step_rewards, step_count, accept_lengths, avg_accept_length, accept_rate = result
+                                        # print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps, acceptance rate: {accept_rate:.3f}")
+                                        pass
+                                    elif len(result) == 5:  # Step-wise RL with log=True (backward compatibility)
                                         output_ids, new_token, idx, step_rewards, step_count = result
+                                        accept_lengths, avg_accept_length, accept_rate = [], 0, 0  # Default values
                                         # print(f"Step-wise RL inference: {new_token} tokens, {step_count} steps")
                                         pass
                                     else:  # Fallback to traditional
-                                        output_ids, new_token, idx = result
+                                        output_ids, new_token, idx = result[:3]
+                                        accept_lengths, avg_accept_length, accept_rate = [], 0, 0  # Default values
                                         print(f"Step-wise RL (fallback): {new_token} tokens, {idx+1} steps")
                                 else:
                                     # Traditional mode: fixed parameters for entire generation
-                                    output_ids, new_token, idx = model.eagenerate(
+                                    result = model.eagenerate(
                                         torch.as_tensor(input_ids).cuda(),
                                         temperature=temperature,
                                         log=True,
@@ -1052,6 +1104,12 @@ def get_model_answers(
                                         tree_top_k=predicted_top_k,
                                         max_length=max_length_param,
                                     )
+                                    # Handle traditional mode return values
+                                    if len(result) == 6:  # Traditional mode with acceptance metrics
+                                        output_ids, new_token, idx, accept_lengths, avg_accept_length, accept_rate = result
+                                    else:  # Backward compatibility
+                                        output_ids, new_token, idx = result[:3]
+                                        accept_lengths, avg_accept_length, accept_rate = [], 0, 0
                         success = True
                         
                     except RuntimeError as e:
@@ -1185,7 +1243,11 @@ def get_model_answers(
                         "generation_time": total_time,
                         "new_tokens": new_token_scalar,
                         "reward": rl_reward,
-                        "tokens_per_second": new_token_scalar / total_time if total_time > 0 else 0
+                        "tokens_per_second": new_token_scalar / total_time if total_time > 0 else 0,
+                        # Add acceptance metrics (convert tensors to Python types)
+                        "acceptance_lengths": [int(al.cpu()) if hasattr(al, 'cpu') else int(al) for al in accept_lengths] if 'accept_lengths' in locals() and accept_lengths else [],
+                        "avg_acceptance_length": float(avg_accept_length.cpu()) if 'avg_accept_length' in locals() and hasattr(avg_accept_length, 'cpu') else float(avg_accept_length) if 'avg_accept_length' in locals() else 0.0,
+                        "acceptance_rate": float(accept_rate.cpu()) if 'accept_rate' in locals() and hasattr(accept_rate, 'cpu') else float(accept_rate) if 'accept_rate' in locals() else 0.0
                     }
                     rl_data_entries.append(rl_data_entry)
 
@@ -1193,6 +1255,32 @@ def get_model_answers(
                 idxs.append(int(idx))
                 new_tokens.append(int(new_token))
                 wall_time.append(total_time)
+                
+                # Store acceptance metrics (convert tensors to Python types)
+                if 'accept_lengths' in locals():
+                    # Convert tensor lists to Python lists
+                    accept_lengths_python = []
+                    if isinstance(accept_lengths, list):
+                        for al in accept_lengths:
+                            if hasattr(al, 'cpu'):
+                                accept_lengths_python.append(int(al.cpu()))
+                            else:
+                                accept_lengths_python.append(int(al))
+                    else:
+                        accept_lengths_python = []
+                    acceptance_lengths.append(accept_lengths_python)
+                else:
+                    acceptance_lengths.append([])
+                
+                if 'accept_rate' in locals():
+                    # Convert tensor to Python float
+                    if hasattr(accept_rate, 'cpu'):
+                        acceptance_rates.append(float(accept_rate.cpu()))
+                    else:
+                        acceptance_rates.append(float(accept_rate))
+                else:
+                    acceptance_rates.append(0.0)
+                
                 messages.append({
                     "role": "assistant",
                     "content": output
@@ -1200,10 +1288,46 @@ def get_model_answers(
             # torch.cuda.empty_cache()
             if question_failed:
                 break  # Break out of choices loop if any turn failed
-            choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time})
+            
+            # Calculate average acceptance length and rate for this choice (convert to Python types)
+            avg_acceptance_length = sum(len(al) for al in acceptance_lengths) / len(acceptance_lengths) if acceptance_lengths else 0
+            overall_acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if acceptance_rates else 0
+            
+            # Calculate standard deviation for acceptance metrics
+            acceptance_length_values = [len(al) for al in acceptance_lengths] if acceptance_lengths else []
+            std_acceptance_length = float(np.std(acceptance_length_values)) if len(acceptance_length_values) > 1 else 0.0
+            std_acceptance_rate = float(np.std(acceptance_rates)) if len(acceptance_rates) > 1 else 0.0
+            
+            # Ensure Python float conversion
+            avg_acceptance_length = float(avg_acceptance_length)
+            overall_acceptance_rate = float(overall_acceptance_rate)
+            
+            choices.append({
+                "index": i, 
+                "turns": turns, 
+                "idxs": idxs, 
+                "new_tokens": new_tokens, 
+                "wall_time": wall_time,
+                "acceptance_lengths": acceptance_lengths,
+                "acceptance_rates": acceptance_rates,
+                "avg_acceptance_length": avg_acceptance_length,
+                "std_acceptance_length": std_acceptance_length,
+                "overall_acceptance_rate": overall_acceptance_rate,
+                "std_acceptance_rate": std_acceptance_rate
+            })
 
         # Only save answer if question was successfully processed
         if not question_failed:
+            # Update global acceptance tracking
+            total_questions_processed += 1
+            if choices and len(choices) > 0:
+                # Use the first choice for global tracking
+                first_choice = choices[0]
+                if 'overall_acceptance_rate' in first_choice and first_choice['overall_acceptance_rate'] > 0:
+                    global_acceptance_rates.append(first_choice['overall_acceptance_rate'])
+                if 'avg_acceptance_length' in first_choice and first_choice['avg_acceptance_length'] > 0:
+                    global_acceptance_lengths.append(first_choice['avg_acceptance_length'])
+            
             # Dump answers
             os.makedirs(os.path.dirname(answer_file), exist_ok=True)
             with open(os.path.expanduser(answer_file), "a") as fout:
@@ -1256,6 +1380,16 @@ def get_model_answers(
                         "questions_processed": len(questions),
                     }
                     
+                    # Add acceptance metrics to wandb summary
+                    if global_acceptance_rates:
+                        summary_data["avg_acceptance_rate"] = sum(global_acceptance_rates) / len(global_acceptance_rates)
+                        summary_data["min_acceptance_rate"] = min(global_acceptance_rates)
+                        summary_data["max_acceptance_rate"] = max(global_acceptance_rates)
+                    if global_acceptance_lengths:
+                        summary_data["avg_acceptance_length"] = sum(global_acceptance_lengths) / len(global_acceptance_lengths)
+                        summary_data["min_acceptance_length"] = min(global_acceptance_lengths)
+                        summary_data["max_acceptance_length"] = max(global_acceptance_lengths)
+                    
                     # Add policy-specific metrics
                     if hasattr(online_policy, 'epsilon'):
                         # DQN-based policies (discrete/continuous Actor-Critic)
@@ -1275,6 +1409,25 @@ def get_model_answers(
             print(f"Final average reward: {final_stats.get('avg_reward_recent', 0):.4f}")
             print(f"Most used parameters: {final_stats.get('most_used_params', [])}")
             print(f"Policy saved to: {save_path}")
+
+    # Print final acceptance metrics summary
+    if global_acceptance_rates or global_acceptance_lengths:
+        print(f"\n=== Acceptance Metrics Summary ===")
+        if global_acceptance_rates:
+            avg_acceptance_rate = sum(global_acceptance_rates) / len(global_acceptance_rates)
+            std_acceptance_rate = np.std(global_acceptance_rates) if len(global_acceptance_rates) > 1 else 0.0
+            min_acceptance_rate = min(global_acceptance_rates)
+            max_acceptance_rate = max(global_acceptance_rates)
+            print(f"Average acceptance rate: {avg_acceptance_rate:.4f} ± {std_acceptance_rate:.4f}")
+            print(f"Acceptance rate range: {min_acceptance_rate:.4f} - {max_acceptance_rate:.4f}")
+        if global_acceptance_lengths:
+            avg_acceptance_length = sum(global_acceptance_lengths) / len(global_acceptance_lengths)
+            std_acceptance_length = np.std(global_acceptance_lengths) if len(global_acceptance_lengths) > 1 else 0.0
+            min_acceptance_length = min(global_acceptance_lengths)
+            max_acceptance_length = max(global_acceptance_lengths)
+            print(f"Average acceptance length: {avg_acceptance_length:.2f} ± {std_acceptance_length:.2f} tokens")
+            print(f"Acceptance length range: {min_acceptance_length:.2f} - {max_acceptance_length:.2f} tokens")
+        print(f"Total questions with acceptance data: {len(global_acceptance_rates)}")
 
     # Save RL training data if collected
     if args.collect_rl_data and rl_data_entries:
