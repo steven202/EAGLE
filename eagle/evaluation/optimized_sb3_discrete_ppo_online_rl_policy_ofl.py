@@ -1395,6 +1395,11 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         # Use .zip extension for SB3 PPO (OFL version)
         checkpoint_path = os.path.join(self.checkpoint_dir, f"{checkpoint_name}.zip")
         
+        # Prevent duplicate saves with the same checkpoint name
+        if os.path.exists(checkpoint_path):
+            # print(f"⏭️  Checkpoint already exists: {checkpoint_path}")
+            return checkpoint_path
+        
         # Save SB3 model
         self.model.save(checkpoint_path)
         
@@ -1613,15 +1618,20 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
         if not os.path.exists(self.checkpoint_dir):
             return
         
-        checkpoints = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.zip')]
-        if len(checkpoints) <= self.max_checkpoints:
+        # Separate regular checkpoints from validation checkpoints
+        all_files = [f for f in os.listdir(self.checkpoint_dir) if f.endswith('.zip')]
+        regular_checkpoints = [f for f in all_files if f.startswith('checkpoint_step_')]
+        validation_checkpoints = [f for f in all_files if f.startswith('question_') and not f.startswith('checkpoint_step_')]
+        
+        # Only cleanup regular checkpoints, preserve validation checkpoints
+        if len(regular_checkpoints) <= self.max_checkpoints:
             return
         
-        # Sort by modification time
-        checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)), reverse=True)
+        # Sort regular checkpoints by modification time
+        regular_checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)), reverse=True)
         
-        # Remove old checkpoints
-        for checkpoint in checkpoints[self.max_checkpoints:]:
+        # Remove old regular checkpoints (keep validation checkpoints)
+        for checkpoint in regular_checkpoints[self.max_checkpoints:]:
             checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint)
             state_path = checkpoint_path.replace('.zip', '_state.json')
             
@@ -1632,6 +1642,37 @@ class OptimizedSB3DiscretePPOOnlineTreePolicy:
                 print(f"🗑️  Removed old checkpoint: {checkpoint}")
             except Exception as e:
                 print(f"Warning: Could not remove {checkpoint}: {e}")
+        
+        # Log preserved validation checkpoints
+        # if validation_checkpoints:
+        #     print(f"📌 Preserved {len(validation_checkpoints)} validation checkpoints: {validation_checkpoints}")
+    
+    def cleanup_validation_checkpoints(self, max_validation_checkpoints=10):
+        """Optionally cleanup validation checkpoints if too many accumulate"""
+        if not os.path.exists(self.checkpoint_dir):
+            return
+        
+        validation_checkpoints = [f for f in os.listdir(self.checkpoint_dir) 
+                                 if f.endswith('.zip') and f.startswith('question_') and not f.startswith('checkpoint_step_')]
+        
+        if len(validation_checkpoints) <= max_validation_checkpoints:
+            return
+        
+        # Sort validation checkpoints by modification time
+        validation_checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoint_dir, x)), reverse=True)
+        
+        # Remove old validation checkpoints
+        for checkpoint in validation_checkpoints[max_validation_checkpoints:]:
+            checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint)
+            state_path = checkpoint_path.replace('.zip', '_state.json')
+            
+            try:
+                os.remove(checkpoint_path)
+                if os.path.exists(state_path):
+                    os.remove(state_path)
+                print(f"🗑️  Removed old validation checkpoint: {checkpoint}")
+            except Exception as e:
+                print(f"Warning: Could not remove validation checkpoint {checkpoint}: {e}")
     
     def should_save_checkpoint(self):
         """Check if we should save a checkpoint"""
