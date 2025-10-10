@@ -98,144 +98,318 @@ class ProfilingTimer:
         
         return stats, total_time
     
+    def calculate_hierarchical_timing(self, stats, total_time):
+        """Calculate exclusive timing (removing nested component overlaps)"""
+        # Define the hierarchy of timing components
+        hierarchy = {
+            'total_execution': {
+                'single_question_processing': {
+                    'turn_processing': {
+                        'model_generation': {
+                            'eagle_generation_core': {
+                                'eagle_tree_construction': {},
+                                'eagle_drafting_process': {},
+                                'eagle_verification_process': {},
+                                'eagle_tree_update': {},
+                            },
+                            'rl_policy_prediction': {},
+                            'hidden_states_extraction': {},
+                        },
+                        'post_processing': {},
+                        'tokenization': {},
+                        'rl_policy_update': {},
+                    },
+                    'conversation_preparation': {},
+                }
+            }
+        }
+        
+        def calculate_exclusive_time(component_name, children_dict):
+            """Calculate exclusive time for a component (total - sum of children)"""
+            if component_name not in stats:
+                return 0.0, 0.0  # exclusive_time, total_time
+            
+            total_time_comp = stats[component_name]['total_time']
+            children_total = 0.0
+            
+            for child_name, grandchildren in children_dict.items():
+                if child_name in stats:
+                    children_total += stats[child_name]['total_time']
+            
+            exclusive_time = max(0.0, total_time_comp - children_total)
+            return exclusive_time, total_time_comp
+        
+        # Calculate exclusive times for all components
+        exclusive_times = {}
+        
+        def process_hierarchy(hierarchy_dict, level=0):
+            for component, children in hierarchy_dict.items():
+                exclusive_time, total_time_comp = calculate_exclusive_time(component, children)
+                exclusive_times[component] = {
+                    'exclusive_time': exclusive_time,
+                    'total_time': total_time_comp,
+                    'level': level,
+                    'children': list(children.keys()) if children else []
+                }
+                if children:
+                    process_hierarchy(children, level + 1)
+        
+        process_hierarchy(hierarchy)
+        
+        # Add any components not in hierarchy (leaf components)
+        for comp_name in stats:
+            if comp_name not in exclusive_times:
+                exclusive_times[comp_name] = {
+                    'exclusive_time': stats[comp_name]['total_time'],
+                    'total_time': stats[comp_name]['total_time'],
+                    'level': 0,
+                    'children': []
+                }
+        
+        return exclusive_times
+
     def print_report(self):
-        """Print detailed timing report"""
+        """Print detailed timing report with hierarchical exclusive timing"""
         stats, total_time = self.get_stats()
+        exclusive_times = self.calculate_hierarchical_timing(stats, total_time)
         
         print("\n" + "="*80)
         print("PROFILING REPORT - OVERHEAD BREAKDOWN")
         print("="*80)
         print(f"Total execution time: {total_time:.4f}s")
-        print("\nBreakdown by component:")
+        
+        # Print hierarchical breakdown
+        print("\n" + "="*80)
+        print("HIERARCHICAL BREAKDOWN (Exclusive Time Analysis)")
+        print("="*80)
+        print("Shows time spent exclusively in each component (excluding nested calls)")
         print("-" * 80)
-        print(f"{'Component':<40} {'Total(s)':<10} {'Avg(s)':<10} {'Count':<8} {'%':<8}")
+        print(f"{'Component':<45} {'Excl(s)':<8} {'Total(s)':<8} {'Count':<6} {'Excl%':<6} {'Total%':<6}")
         print("-" * 80)
         
-        # Sort by total time (highest first) - show ALL components, even small ones
-        sorted_stats = sorted(stats.items(), key=lambda x: x[1]['total_time'], reverse=True)
+        def print_hierarchical_component(comp_name, exclusive_data, printed=None):
+            if printed is None:
+                printed = set()
+            
+            if comp_name in printed or comp_name not in stats:
+                return
+            
+            printed.add(comp_name)
+            level = exclusive_data.get('level', 0)
+            indent = "  " * level
+            
+            stat = stats[comp_name]
+            exclusive_time = exclusive_data['exclusive_time']
+            total_time_comp = exclusive_data['total_time']
+            
+            exclusive_pct = (exclusive_time / total_time) * 100 if total_time > 0 else 0
+            total_pct = (total_time_comp / total_time) * 100 if total_time > 0 else 0
+            
+            display_name = f"{indent}{comp_name}"
+            
+            print(f"{display_name:<45} {exclusive_time:<8.3f} {total_time_comp:<8.3f} {stat['count']:<6} {exclusive_pct:<6.1f} {total_pct:<6.1f}")
+            
+            # Print children
+            for child in exclusive_data.get('children', []):
+                if child in exclusive_times:
+                    print_hierarchical_component(child, exclusive_times[child], printed)
         
-        for name, stat in sorted_stats:
-            print(f"{name:<40} {stat['total_time']:<10.4f} {stat['avg_time']:<10.4f} {stat['count']:<8} {stat['percentage']:<8.1f}")
+        # Print main hierarchy
+        if 'total_execution' in exclusive_times:
+            print_hierarchical_component('total_execution', exclusive_times['total_execution'])
+        
+        # Print any remaining components not in hierarchy
+        for comp_name, exclusive_data in exclusive_times.items():
+            if comp_name not in {'total_execution'} and exclusive_data.get('level', 0) == 0:
+                print_hierarchical_component(comp_name, exclusive_data)
         
         print("-" * 80)
-        print("\nDetailed Analysis:")
         
-        # Show EAGLE-specific components first
-        eagle_components = [name for name, _ in sorted_stats if 'eagle_' in name.lower()]
+        # Traditional flat breakdown for reference
+        print("\n" + "="*80)
+        print("EXCLUSIVE COMPONENTS BREAKDOWN (container components removed)")
+        print("="*80)
+        print("Only shows leaf components and components with meaningful exclusive time")
+        print("-" * 80)
+        print(f"{'Component':<40} {'Excl(s)':<10} {'Count':<8} {'Excl%':<8}")
+        print("-" * 80)
+        
+        # Filter out container components and show only meaningful exclusive times
+        container_components = {
+            'total_execution', 'single_question_processing', 'turn_processing', 
+            'model_generation', 'eagle_generation_core'
+        }
+        
+        # Create a list of components with meaningful exclusive time
+        meaningful_components = []
+        for comp_name, exclusive_data in exclusive_times.items():
+            if comp_name not in container_components and exclusive_data['exclusive_time'] > 0.001:  # > 1ms
+                meaningful_components.append((comp_name, exclusive_data))
+        
+        # Sort by exclusive time (highest first)
+        meaningful_components.sort(key=lambda x: x[1]['exclusive_time'], reverse=True)
+        
+        for comp_name, exclusive_data in meaningful_components:
+            if comp_name in stats:
+                stat = stats[comp_name]
+                exclusive_time = exclusive_data['exclusive_time']
+                exclusive_pct = (exclusive_time / total_time) * 100 if total_time > 0 else 0
+                print(f"{comp_name:<40} {exclusive_time:<10.4f} {stat['count']:<8} {exclusive_pct:<8.1f}")
+        
+        print("-" * 80)
+        
+        # Summary of exclusive times
+        total_exclusive_meaningful = sum(data['exclusive_time'] for _, data in meaningful_components)
+        meaningful_pct = (total_exclusive_meaningful / total_time) * 100 if total_time > 0 else 0
+        print(f"{'Total meaningful exclusive time':<40} {total_exclusive_meaningful:<10.4f} {'':<8} {meaningful_pct:<8.1f}")
+        
+        # Show container overhead summary
+        container_overhead = sum(exclusive_times.get(comp, {}).get('exclusive_time', 0) for comp in container_components)
+        container_pct = (container_overhead / total_time) * 100 if total_time > 0 else 0
+        print(f"{'Container/organizational overhead':<40} {container_overhead:<10.4f} {'':<8} {container_pct:<8.1f}")
+        
+        print("-" * 80)
+        print("\nDetailed Analysis (Exclusive Time):")
+        
+        # Calculate EAGLE exclusive breakdown 
+        eagle_components = [name for name in stats.keys() if 'eagle_' in name.lower()]
         if eagle_components:
-            print(f"\n🦅 EAGLE Components:")
+            print(f"\n🦅 EAGLE Components (Exclusive Time):")
             for comp in eagle_components:
-                stat = stats[comp]
-                print(f"  • {comp}: {stat['percentage']:.3f}% ({stat['total_time']:.4f}s, {stat['count']} calls)")
+                if comp in exclusive_times:
+                    exclusive_time = exclusive_times[comp]['exclusive_time'] 
+                    total_time_comp = exclusive_times[comp]['total_time']
+                    stat = stats[comp]
+                    exclusive_pct = (exclusive_time / total_time) * 100 if total_time > 0 else 0
+                    total_pct = (total_time_comp / total_time) * 100 if total_time > 0 else 0
+                    print(f"  • {comp}: {exclusive_pct:.3f}% exclusive ({exclusive_time:.4f}s), {total_pct:.3f}% total ({total_time_comp:.4f}s, {stat['count']} calls)")
         
-        # Categorize components for better analysis
+        # Categorize components for better analysis using exclusive times
         categories = {
-            'RL Policy': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['rl_policy', 'policy'])],
-            'EAGLE Tree Construction': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['tree_construction'])],
-            'EAGLE Drafting': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['drafting_process'])],
-            'EAGLE Verification': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['verification_process'])],
-            'EAGLE Tree Update': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['tree_update'])],
-            'EAGLE Core': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['eagle_generation_core'])],
-            'Model Generation': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['model_generation', 'generation_step'])],
-            'Data Processing': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['tokenization', 'post_processing', 'conversation_preparation'])],
-            'Question Processing': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['single_question_processing', 'turn_processing'])]
+            'RL Policy (Exclusive)': [name for name in stats.keys() if any(kw in name.lower() for kw in ['rl_policy', 'policy'])],
+            'EAGLE Tree Construction (Exclusive)': [name for name in stats.keys() if any(kw in name.lower() for kw in ['tree_construction'])],
+            'EAGLE Drafting (Exclusive)': [name for name in stats.keys() if any(kw in name.lower() for kw in ['drafting_process'])],
+            'EAGLE Verification (Exclusive)': [name for name in stats.keys() if any(kw in name.lower() for kw in ['verification_process'])],
+            'EAGLE Tree Update (Exclusive)': [name for name in stats.keys() if any(kw in name.lower() for kw in ['tree_update'])],
+            'Data Processing (Exclusive)': [name for name in stats.keys() if any(kw in name.lower() for kw in ['tokenization', 'post_processing', 'conversation_preparation'])]
         }
         
         for category, components in categories.items():
             if components:
-                category_total = sum(stats[comp]['percentage'] for comp in components)
-                category_time = sum(stats[comp]['total_time'] for comp in components)
-                print(f"\n{category}: {category_total:.1f}% ({category_time:.4f}s)")
+                category_exclusive_total = 0
+                category_total_total = 0
                 for comp in components:
-                    print(f"  • {comp}: {stats[comp]['percentage']:.1f}%")
+                    if comp in exclusive_times:
+                        category_exclusive_total += exclusive_times[comp]['exclusive_time']
+                        category_total_total += exclusive_times[comp]['total_time']
+                    else:
+                        # Fallback to stats if not in exclusive_times
+                        category_total_total += stats[comp]['total_time']
+                        category_exclusive_total += stats[comp]['total_time']
+                
+                category_exclusive_pct = (category_exclusive_total / total_time) * 100 if total_time > 0 else 0
+                category_total_pct = (category_total_total / total_time) * 100 if total_time > 0 else 0
+                
+                print(f"\n{category}: {category_exclusive_pct:.1f}% exclusive ({category_exclusive_total:.4f}s), {category_total_pct:.1f}% total ({category_total_total:.4f}s)")
+                for comp in components:
+                    if comp in exclusive_times:
+                        exclusive_time = exclusive_times[comp]['exclusive_time']
+                        exclusive_pct = (exclusive_time / total_time) * 100 if total_time > 0 else 0
+                        print(f"  • {comp}: {exclusive_pct:.1f}% exclusive")
+                    else:
+                        print(f"  • {comp}: {stats[comp]['percentage']:.1f}% total")
         
-        print("\nKey Insights:")
-        if sorted_stats:
-            top_component = sorted_stats[0]
-            print(f"• Highest overhead: {top_component[0]} ({top_component[1]['percentage']:.1f}%)")
+        print("\n" + "="*80)
+        print("KEY INSIGHTS (Exclusive Time Analysis):")
+        print("="*80)
+        
+        if exclusive_times:
+            # Find component with highest exclusive time
+            max_exclusive_comp = None
+            max_exclusive_time = 0
+            for comp_name, exclusive_data in exclusive_times.items():
+                if exclusive_data['exclusive_time'] > max_exclusive_time:
+                    max_exclusive_time = exclusive_data['exclusive_time']
+                    max_exclusive_comp = comp_name
             
-            # Specific analysis for EAGLE components
-            tree_construction_comps = ['eagle_tree_construction']
-            drafting_comps = ['eagle_drafting_process']
-            verification_comps = ['eagle_verification_process']
-            tree_update_comps = ['eagle_tree_update']
+            if max_exclusive_comp:
+                max_exclusive_pct = (max_exclusive_time / total_time) * 100 if total_time > 0 else 0
+                print(f"• Highest EXCLUSIVE overhead: {max_exclusive_comp} ({max_exclusive_pct:.1f}%)")
             
-            tree_construction_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in tree_construction_comps)
-            drafting_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in drafting_comps)
-            verification_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in verification_comps)
-            tree_update_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in tree_update_comps)
+            # EAGLE exclusive analysis
+            eagle_exclusive_total = 0
+            for comp in ['eagle_tree_construction', 'eagle_drafting_process', 'eagle_verification_process', 'eagle_tree_update']:
+                if comp in exclusive_times:
+                    eagle_exclusive_total += exclusive_times[comp]['exclusive_time']
             
-            if tree_construction_total > 0:
-                print(f"• EAGLE tree construction: {tree_construction_total:.1f}%")
-            if drafting_total > 0:
-                print(f"• EAGLE drafting process: {drafting_total:.1f}%")
-            if verification_total > 0:
-                print(f"• EAGLE verification process: {verification_total:.1f}%")
-            if tree_update_total > 0:
-                print(f"• EAGLE tree update: {tree_update_total:.1f}%")
-                
-            # Analysis for generation steps
-            generation_steps = [name for name in stats.keys() if 'generation_step_' in name]
-            if generation_steps:
-                steps_total = sum(stats[comp]['percentage'] for comp in generation_steps)
-                print(f"• Generation steps ({len(generation_steps)} steps): {steps_total:.1f}%")
-                
-                # Find the most expensive generation step
-                if generation_steps:
-                    most_expensive_step = max(generation_steps, key=lambda x: stats[x]['total_time'])
-                    print(f"• Most expensive step: {most_expensive_step} ({stats[most_expensive_step]['percentage']:.1f}%)")
+            eagle_exclusive_pct = (eagle_exclusive_total / total_time) * 100 if total_time > 0 else 0
+            print(f"• EAGLE algorithm EXCLUSIVE overhead: {eagle_exclusive_pct:.1f}% ({eagle_exclusive_total:.4f}s)")
             
-            # RL policy specific analysis
-            rl_components = [name for name in stats.keys() if 'rl_policy' in name.lower()]
-            if rl_components:
-                rl_total = sum(stats[comp]['percentage'] for comp in rl_components)
-                print(f"• RL Policy total overhead: {rl_total:.1f}%")
-                
-                if 'rl_policy_prediction' in stats:
-                    pred_pct = stats['rl_policy_prediction']['percentage']
-                    pred_count = stats['rl_policy_prediction']['count']
-                    print(f"  - Prediction: {pred_pct:.1f}% ({pred_count} calls)")
-                
-                if 'rl_policy_update' in stats:
-                    update_pct = stats['rl_policy_update']['percentage']
-                    update_count = stats['rl_policy_update']['count']
-                    print(f"  - Training updates: {update_pct:.1f}% ({update_count} calls)")
+            # Breakdown of EAGLE exclusive components
+            for comp in ['eagle_tree_construction', 'eagle_drafting_process', 'eagle_verification_process', 'eagle_tree_update']:
+                if comp in exclusive_times and exclusive_times[comp]['exclusive_time'] > 0:
+                    exclusive_pct = (exclusive_times[comp]['exclusive_time'] / total_time) * 100
+                    comp_display = comp.replace('eagle_', '').replace('_', ' ').title()
+                    print(f"  - {comp_display}: {exclusive_pct:.1f}% exclusive")
+            
+            # RL policy exclusive analysis
+            rl_exclusive_total = 0
+            for comp in ['rl_policy_prediction', 'rl_policy_update', 'hidden_states_extraction']:
+                if comp in exclusive_times:
+                    rl_exclusive_total += exclusive_times[comp]['exclusive_time']
+                elif comp in stats:
+                    rl_exclusive_total += stats[comp]['total_time']
+            
+            rl_exclusive_pct = (rl_exclusive_total / total_time) * 100 if total_time > 0 else 0
+            print(f"• RL Policy EXCLUSIVE overhead: {rl_exclusive_pct:.1f}% ({rl_exclusive_total:.4f}s)")
+            
+            # Container overhead analysis (the container components we removed from main table)
+            container_components = ['total_execution', 'single_question_processing', 'turn_processing', 'model_generation', 'eagle_generation_core']
+            container_overhead = 0
+            for comp in container_components:
+                if comp in exclusive_times:
+                    container_overhead += exclusive_times[comp]['exclusive_time']
+            
+            container_pct = (container_overhead / total_time) * 100 if total_time > 0 else 0
+            print(f"• Container/organizational overhead: {container_pct:.1f}% ({container_overhead:.4f}s)")
+            print("  (This includes timing infrastructure and organizational wrapper functions)")
         
         print(f"\n{'='*80}")
-        print("💡 OPTIMIZATION SUGGESTIONS:")
+        print("💡 OPTIMIZATION SUGGESTIONS (Based on Exclusive Time):")
         
-        # Provide optimization suggestions based on results
-        if sorted_stats:
-            top_overhead = sorted_stats[0]
-            if top_overhead[1]['percentage'] > 30:
-                print(f"• Consider optimizing '{top_overhead[0]}' (>30% overhead)")
+        # Provide optimization suggestions based on exclusive results
+        if exclusive_times:
+            # Find top exclusive overheads (excluding container components)
+            container_components = {'total_execution', 'single_question_processing', 'turn_processing', 'model_generation', 'eagle_generation_core'}
+            top_exclusive = sorted(
+                [(name, data) for name, data in exclusive_times.items() if name not in container_components], 
+                key=lambda x: x[1]['exclusive_time'], reverse=True
+            )[:3]
             
-            # Check for RL overhead
-            rl_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in stats.keys() if 'rl_policy' in comp.lower())
-            if rl_total > 20:
-                print(f"• RL Policy overhead is high ({rl_total:.1f}%) - consider action caching or model compression")
+            for comp_name, exclusive_data in top_exclusive:
+                exclusive_pct = (exclusive_data['exclusive_time'] / total_time) * 100
+                if exclusive_pct > 2:  # Only suggest optimization for significant overheads (>2%)
+                    comp_display = comp_name.replace('_', ' ').title()
+                    print(f"• Optimize '{comp_display}' - {exclusive_pct:.1f}% exclusive overhead")
             
-            # Check for EAGLE component overhead
-            tree_construction_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['eagle_tree_construction'])
-            drafting_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['eagle_drafting_process'])
-            verification_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['eagle_verification_process'])
-            tree_update_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['eagle_tree_update'])
+            # Specific EAGLE suggestions based on exclusive time
+            eagle_suggestions = [
+                ('eagle_drafting_process', 'draft model inference', 5.0),
+                ('eagle_tree_update', 'tree state management', 2.0),
+                ('eagle_tree_construction', 'tree initialization', 1.0),
+                ('eagle_verification_process', 'posterior evaluation', 1.0),
+            ]
             
-            if tree_construction_total > 10:
-                print(f"• EAGLE tree construction overhead is high ({tree_construction_total:.1f}%) - consider optimizing tree initialization")
-            if drafting_total > 20:
-                print(f"• EAGLE drafting overhead is high ({drafting_total:.1f}%) - consider optimizing draft model inference")
-            if verification_total > 20:
-                print(f"• EAGLE verification overhead is high ({verification_total:.1f}%) - consider optimizing posterior evaluation")
-            if tree_update_total > 10:
-                print(f"• EAGLE tree update overhead is high ({tree_update_total:.1f}%) - consider optimizing tree state management")
-            
-            # Overall EAGLE vs other components
-            eagle_total = tree_construction_total + drafting_total + verification_total + tree_update_total
-            if eagle_total > 50:
-                print(f"• EAGLE processes dominate ({eagle_total:.1f}%) - this is expected but could be optimized")
+            for comp, description, threshold in eagle_suggestions:
+                if comp in exclusive_times:
+                    exclusive_pct = (exclusive_times[comp]['exclusive_time'] / total_time) * 100
+                    if exclusive_pct > threshold:
+                        print(f"• EAGLE {description} overhead is high ({exclusive_pct:.1f}% exclusive)")
         
         print(f"{'='*80}")
+        print("\nNOTE: Container components (total_execution, single_question_processing, turn_processing)")
+        print("have been removed from the main table to avoid double-counting.")
+        print("Exclusive time provides accurate view of where time is actually spent.")
 
 
 # Global profiling timer
