@@ -33,12 +33,18 @@ try:
     from ..model.ea_model import EaModel
     from ..model.kv_cache import initialize_past_key_values
     from ..model.utils import *
+    from ..model import utils as eagle_utils
+    # Import specific functions to have references for monkey-patching
+    from ..model.utils import initialize_tree, tree_decoding, evaluate_posterior, update_inference_inputs
     # ONLY SUPPORT OPTIMIZED POLICY FOR SIMPLICITY
     from .optimized_sb3_discrete_ppo_online_rl_policy_ofl import OptimizedSB3DiscretePPOOnlineTreePolicy as OptimizedSB3DiscretePPOOnlineTreePolicyOFL
 except:
     from eagle.model.ea_model import EaModel
     from eagle.model.kv_cache import initialize_past_key_values
     from eagle.model.utils import *
+    from eagle.model import utils as eagle_utils
+    # Import specific functions to have references for monkey-patching
+    from eagle.model.utils import initialize_tree, tree_decoding, evaluate_posterior, update_inference_inputs
     # ONLY SUPPORT OPTIMIZED POLICY FOR SIMPLICITY
     from eagle.evaluation.optimized_sb3_discrete_ppo_online_rl_policy_ofl import OptimizedSB3DiscretePPOOnlineTreePolicy as OptimizedSB3DiscretePPOOnlineTreePolicyOFL
 
@@ -105,7 +111,7 @@ class ProfilingTimer:
         print(f"{'Component':<40} {'Total(s)':<10} {'Avg(s)':<10} {'Count':<8} {'%':<8}")
         print("-" * 80)
         
-        # Sort by total time (highest first)
+        # Sort by total time (highest first) - show ALL components, even small ones
         sorted_stats = sorted(stats.items(), key=lambda x: x[1]['total_time'], reverse=True)
         
         for name, stat in sorted_stats:
@@ -114,13 +120,25 @@ class ProfilingTimer:
         print("-" * 80)
         print("\nDetailed Analysis:")
         
+        # Show EAGLE-specific components first
+        eagle_components = [name for name, _ in sorted_stats if 'eagle_' in name.lower()]
+        if eagle_components:
+            print(f"\n🦅 EAGLE Components:")
+            for comp in eagle_components:
+                stat = stats[comp]
+                print(f"  • {comp}: {stat['percentage']:.3f}% ({stat['total_time']:.4f}s, {stat['count']} calls)")
+        
         # Categorize components for better analysis
         categories = {
             'RL Policy': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['rl_policy', 'policy'])],
-            'EAGLE Core': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['initialize_tree', 'tree_decoding', 'evaluate_posterior', 'update_inference'])],
-            'Model Generation': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['model_generation', 'eagle_generation_core', 'generation_step'])],
+            'EAGLE Tree Construction': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['tree_construction'])],
+            'EAGLE Drafting': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['drafting_process'])],
+            'EAGLE Verification': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['verification_process'])],
+            'EAGLE Tree Update': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['tree_update'])],
+            'EAGLE Core': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['eagle_generation_core'])],
+            'Model Generation': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['model_generation', 'generation_step'])],
             'Data Processing': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['tokenization', 'post_processing', 'conversation_preparation'])],
-            'System Overhead': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['data_loading', 'model_initialization', 'warmup', 'answer_saving'])]
+            'Question Processing': [name for name, _ in sorted_stats if any(kw in name.lower() for kw in ['single_question_processing', 'turn_processing'])]
         }
         
         for category, components in categories.items():
@@ -137,10 +155,24 @@ class ProfilingTimer:
             print(f"• Highest overhead: {top_component[0]} ({top_component[1]['percentage']:.1f}%)")
             
             # Specific analysis for EAGLE components
-            eagle_core_comps = ['initialize_tree', 'tree_decoding', 'evaluate_posterior', 'update_inference_inputs']
-            eagle_core_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in eagle_core_comps)
-            if eagle_core_total > 0:
-                print(f"• EAGLE core functions: {eagle_core_total:.1f}%")
+            tree_construction_comps = ['eagle_tree_construction']
+            drafting_comps = ['eagle_drafting_process']
+            verification_comps = ['eagle_verification_process']
+            tree_update_comps = ['eagle_tree_update']
+            
+            tree_construction_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in tree_construction_comps)
+            drafting_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in drafting_comps)
+            verification_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in verification_comps)
+            tree_update_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in tree_update_comps)
+            
+            if tree_construction_total > 0:
+                print(f"• EAGLE tree construction: {tree_construction_total:.1f}%")
+            if drafting_total > 0:
+                print(f"• EAGLE drafting process: {drafting_total:.1f}%")
+            if verification_total > 0:
+                print(f"• EAGLE verification process: {verification_total:.1f}%")
+            if tree_update_total > 0:
+                print(f"• EAGLE tree update: {tree_update_total:.1f}%")
                 
             # Analysis for generation steps
             generation_steps = [name for name in stats.keys() if 'generation_step_' in name]
@@ -183,10 +215,25 @@ class ProfilingTimer:
             if rl_total > 20:
                 print(f"• RL Policy overhead is high ({rl_total:.1f}%) - consider action caching or model compression")
             
-            # Check for EAGLE core overhead
-            eagle_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['initialize_tree', 'tree_decoding', 'evaluate_posterior', 'update_inference_inputs'])
+            # Check for EAGLE component overhead
+            tree_construction_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['eagle_tree_construction'])
+            drafting_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['eagle_drafting_process'])
+            verification_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['eagle_verification_process'])
+            tree_update_total = sum(stats.get(comp, {}).get('percentage', 0) for comp in ['eagle_tree_update'])
+            
+            if tree_construction_total > 10:
+                print(f"• EAGLE tree construction overhead is high ({tree_construction_total:.1f}%) - consider optimizing tree initialization")
+            if drafting_total > 20:
+                print(f"• EAGLE drafting overhead is high ({drafting_total:.1f}%) - consider optimizing draft model inference")
+            if verification_total > 20:
+                print(f"• EAGLE verification overhead is high ({verification_total:.1f}%) - consider optimizing posterior evaluation")
+            if tree_update_total > 10:
+                print(f"• EAGLE tree update overhead is high ({tree_update_total:.1f}%) - consider optimizing tree state management")
+            
+            # Overall EAGLE vs other components
+            eagle_total = tree_construction_total + drafting_total + verification_total + tree_update_total
             if eagle_total > 50:
-                print(f"• EAGLE core functions dominate ({eagle_total:.1f}%) - this is expected but could be optimized")
+                print(f"• EAGLE processes dominate ({eagle_total:.1f}%) - this is expected but could be optimized")
         
         print(f"{'='*80}")
 
@@ -196,7 +243,7 @@ profiler = ProfilingTimer()
 
 
 def patch_eagle_functions_with_timing(model):
-    """Patch EAGLE internal functions with timing instrumentation"""
+    """Patch EAGLE internal functions with detailed timing instrumentation for drafting and verification"""
     # Import the utils module to patch its functions
     try:
         from ..model import utils as eagle_utils
@@ -211,29 +258,29 @@ def patch_eagle_functions_with_timing(model):
         'update_inference_inputs': eagle_utils.update_inference_inputs,
     }
     
-    # Create timing-wrapped versions
+    # Create timing-wrapped versions with specific names for drafting/verification
     def timed_initialize_tree(*args, **kwargs):
-        profiler.start_timer('initialize_tree')
+        profiler.start_timer('eagle_tree_initialization')
         result = original_functions['initialize_tree'](*args, **kwargs)
-        profiler.end_timer('initialize_tree')
+        profiler.end_timer('eagle_tree_initialization')
         return result
     
     def timed_tree_decoding(*args, **kwargs):
-        profiler.start_timer('tree_decoding')
+        profiler.start_timer('eagle_drafting_process')  # This is the drafting step
         result = original_functions['tree_decoding'](*args, **kwargs)
-        profiler.end_timer('tree_decoding')
+        profiler.end_timer('eagle_drafting_process')
         return result
     
     def timed_evaluate_posterior(*args, **kwargs):
-        profiler.start_timer('evaluate_posterior')
+        profiler.start_timer('eagle_verification_process')  # This is the verification step
         result = original_functions['evaluate_posterior'](*args, **kwargs)
-        profiler.end_timer('evaluate_posterior')
+        profiler.end_timer('eagle_verification_process')
         return result
     
     def timed_update_inference_inputs(*args, **kwargs):
-        profiler.start_timer('update_inference_inputs')
+        profiler.start_timer('eagle_input_update')
         result = original_functions['update_inference_inputs'](*args, **kwargs)
-        profiler.end_timer('update_inference_inputs')
+        profiler.end_timer('eagle_input_update')
         return result
     
     # Patch the functions
@@ -355,9 +402,8 @@ def run_eval(
 ):
     profiler.start_timer('total_execution')
     
-    profiler.start_timer('data_loading')
+    # Load questions (no profiling - one-time setup)
     questions = load_questions(question_file, question_begin, question_end)
-    profiler.end_timer('data_loading')
     
     # Enhanced question handling for online RL training vs inference
     if args.use_online_rl and not args.online_inference_only:
@@ -408,8 +454,7 @@ def get_model_answers(
         temperature,
         args
 ):
-    profiler.start_timer('model_initialization')
-    
+    # Initialize model (no profiling - one-time setup)
     model = EaModel.from_pretrained(
         base_model_path=base_model_path,
         ea_model_path=ea_model_path,
@@ -425,17 +470,13 @@ def get_model_answers(
     tokenizer = model.get_tokenizer()
     max_length_param = 2200 if (args.bench_name == "sum" or "sum" in args.question_file) and args.online_inference_only else 2048
 
-    profiler.end_timer('model_initialization')
-
-    # Initialize RL policy (ONLY OPTIMIZED SB3 DISCRETE PPO OFL)
+    # Initialize RL policy (ONLY OPTIMIZED SB3 DISCRETE PPO OFL) - no profiling, one-time setup
     online_policy = None
     
     if args.use_online_rl:
         print("Initializing Optimized SB3 Discrete PPO Policy (OFL version) for profiling...")
         
-        profiler.start_timer('rl_policy_initialization')
-        
-        # Setup configurations
+        # Setup configurations (no profiling - one-time setup)
         checkpoint_dir = args.checkpoint_dir if hasattr(args, 'checkpoint_dir') and args.checkpoint_dir else "checkpoints"
         multi_gpu_detected = detect_actual_gpu_usage()
         use_wandb = not args.online_inference_only and not args.no_wandb
@@ -512,8 +553,6 @@ def get_model_answers(
         training_seed = getattr(args, 'training_seed', 42)
         online_policy.set_training_seed(training_seed)
         online_policy.set_training_mode(not args.online_inference_only)
-        
-        profiler.end_timer('rl_policy_initialization')
 
     if temperature > 1e-5:
         logits_processor = prepare_logits_processor(temperature=temperature)
@@ -526,8 +565,7 @@ def get_model_answers(
     cuda_visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
     print('CUDA VISIBLE DEVICES:', cuda_visible_devices)
 
-    # Warmup
-    profiler.start_timer('warmup')
+    # Warmup (no profiling - one-time setup)
     question = questions[0]
     for _ in range(3):
         torch.manual_seed(0)
@@ -730,7 +768,6 @@ def get_model_answers(
             end_time = time.time()
             break
     
-    profiler.end_timer('warmup')
     print('Warmup done')
 
     # Process questions with detailed profiling
@@ -832,38 +869,131 @@ def get_model_answers(
                             # This is where the main EAGLE generation happens
                             profiler.start_timer('eagle_generation_core')
                             
-                            # Use eagenerate with correct arguments (following the original file pattern)
-                            if args.use_stepwise_rl and online_policy is not None:
-                                # Step-wise RL mode: pass RL policy to eagenerate
-                                result = model.eagenerate(
-                                    torch.as_tensor(input_ids).cuda(),
-                                    temperature=temperature,
-                                    log=True,
-                                    is_llama3=True,
-                                    total_tokens=current_total_token,
-                                    depth=current_depth,
-                                    tree_top_k=current_top_k,
-                                    rl_policy=online_policy,
-                                    training_mode=not args.online_inference_only,
-                                    max_length=max_length_param,
-                                )
-                                # Handle variable return values from step-wise RL
-                                if len(result) == 5:  # Step-wise RL with log=True
-                                    output_ids, new_token, idx, step_rewards, step_count = result
-                                else:  # Fallback to traditional
-                                    output_ids, new_token, idx = result
-                            else:
-                                # Traditional mode: fixed parameters for entire generation
-                                output_ids, new_token, idx = model.eagenerate(
-                                    torch.as_tensor(input_ids).cuda(),
-                                    temperature=temperature,
-                                    log=True,
-                                    is_llama3=True,
-                                    total_tokens=current_total_token,
-                                    depth=current_depth,
-                                    tree_top_k=current_top_k,
-                                    max_length=max_length_param,
-                                )
+                            # Temporarily monkey-patch the EAGLE functions with more detailed timing
+                            import eagle.model.utils as eagle_utils
+                            # Save references to the original functions (from both module and globals)
+                            original_initialize_tree = eagle_utils.initialize_tree
+                            original_tree_decoding = eagle_utils.tree_decoding
+                            original_evaluate_posterior = eagle_utils.evaluate_posterior
+                            original_update_inference_inputs = eagle_utils.update_inference_inputs
+                            
+                            # Also save from current module's globals
+                            original_global_initialize_tree = globals()['initialize_tree']
+                            original_global_tree_decoding = globals()['tree_decoding']
+                            original_global_evaluate_posterior = globals()['evaluate_posterior']
+                            original_global_update_inference_inputs = globals()['update_inference_inputs']
+                            
+                            # Import and patch in the ea_model module
+                            try:
+                                from ..model import ea_model
+                            except:
+                                from eagle.model import ea_model
+                            
+                            # Save original functions from the ea_model module 
+                            original_ea_initialize_tree = getattr(ea_model, 'initialize_tree', None)
+                            original_ea_tree_decoding = getattr(ea_model, 'tree_decoding', None)
+                            original_ea_evaluate_posterior = getattr(ea_model, 'evaluate_posterior', None)
+                            original_ea_update_inference_inputs = getattr(ea_model, 'update_inference_inputs', None)
+                            
+                            def timed_initialize_tree(*args, **kwargs):
+                                profiler.start_timer('eagle_tree_construction')
+                                result = original_initialize_tree(*args, **kwargs)
+                                profiler.end_timer('eagle_tree_construction')
+                                return result
+                            
+                            def timed_tree_decoding(*args, **kwargs):
+                                profiler.start_timer('eagle_drafting_process')
+                                result = original_tree_decoding(*args, **kwargs)
+                                profiler.end_timer('eagle_drafting_process')
+                                return result
+                            
+                            def timed_evaluate_posterior(*args, **kwargs):
+                                profiler.start_timer('eagle_verification_process')
+                                result = original_evaluate_posterior(*args, **kwargs)
+                                profiler.end_timer('eagle_verification_process')
+                                return result
+                            
+                            def timed_update_inference_inputs(*args, **kwargs):
+                                profiler.start_timer('eagle_tree_update')
+                                result = original_update_inference_inputs(*args, **kwargs)
+                                profiler.end_timer('eagle_tree_update')
+                                return result
+                            
+                            # Apply the monkey patches to multiple places
+                            eagle_utils.initialize_tree = timed_initialize_tree
+                            eagle_utils.tree_decoding = timed_tree_decoding
+                            eagle_utils.evaluate_posterior = timed_evaluate_posterior
+                            eagle_utils.update_inference_inputs = timed_update_inference_inputs
+                            
+                            globals()['initialize_tree'] = timed_initialize_tree
+                            globals()['tree_decoding'] = timed_tree_decoding
+                            globals()['evaluate_posterior'] = timed_evaluate_posterior
+                            globals()['update_inference_inputs'] = timed_update_inference_inputs
+                            
+                            # Patch in ea_model module if functions exist there
+                            if original_ea_initialize_tree:
+                                setattr(ea_model, 'initialize_tree', timed_initialize_tree)
+                            if original_ea_tree_decoding:
+                                setattr(ea_model, 'tree_decoding', timed_tree_decoding)
+                            if original_ea_evaluate_posterior:
+                                setattr(ea_model, 'evaluate_posterior', timed_evaluate_posterior)
+                            if original_ea_update_inference_inputs:
+                                setattr(ea_model, 'update_inference_inputs', timed_update_inference_inputs)
+                            
+                            try:
+                                # Use eagenerate with correct arguments (following the original file pattern)
+                                if args.use_stepwise_rl and online_policy is not None:
+                                    # Step-wise RL mode: pass RL policy to eagenerate
+                                    result = model.eagenerate(
+                                        torch.as_tensor(input_ids).cuda(),
+                                        temperature=temperature,
+                                        log=True,
+                                        is_llama3=True,
+                                        total_tokens=current_total_token,
+                                        depth=current_depth,
+                                        tree_top_k=current_top_k,
+                                        rl_policy=online_policy,
+                                        training_mode=not args.online_inference_only,
+                                        max_length=max_length_param,
+                                    )
+                                    # Handle variable return values from step-wise RL
+                                    if len(result) == 5:  # Step-wise RL with log=True
+                                        output_ids, new_token, idx, step_rewards, step_count = result
+                                    else:  # Fallback to traditional
+                                        output_ids, new_token, idx = result
+                                else:
+                                    # Traditional mode: fixed parameters for entire generation
+                                    output_ids, new_token, idx = model.eagenerate(
+                                        torch.as_tensor(input_ids).cuda(),
+                                        temperature=temperature,
+                                        log=True,
+                                        is_llama3=True,
+                                        total_tokens=current_total_token,
+                                        depth=current_depth,
+                                        tree_top_k=current_top_k,
+                                        max_length=max_length_param,
+                                    )
+                            finally:
+                                # Restore original functions to all places
+                                eagle_utils.initialize_tree = original_initialize_tree
+                                eagle_utils.tree_decoding = original_tree_decoding
+                                eagle_utils.evaluate_posterior = original_evaluate_posterior
+                                eagle_utils.update_inference_inputs = original_update_inference_inputs
+                                
+                                globals()['initialize_tree'] = original_global_initialize_tree
+                                globals()['tree_decoding'] = original_global_tree_decoding
+                                globals()['evaluate_posterior'] = original_global_evaluate_posterior
+                                globals()['update_inference_inputs'] = original_global_update_inference_inputs
+                                
+                                # Restore in ea_model module if they existed there
+                                if original_ea_initialize_tree:
+                                    setattr(ea_model, 'initialize_tree', original_ea_initialize_tree)
+                                if original_ea_tree_decoding:
+                                    setattr(ea_model, 'tree_decoding', original_ea_tree_decoding)
+                                if original_ea_evaluate_posterior:
+                                    setattr(ea_model, 'evaluate_posterior', original_ea_evaluate_posterior)
+                                if original_ea_update_inference_inputs:
+                                    setattr(ea_model, 'update_inference_inputs', original_ea_update_inference_inputs)
                             
                             profiler.end_timer('eagle_generation_core')
                             
@@ -972,36 +1102,28 @@ def get_model_answers(
 
         # Save answers for successfully processed questions
         if choices and not question_failed:
-            profiler.start_timer('answer_saving')
-            
+            # Save answers (no profiling - just I/O)
             os.makedirs(os.path.dirname(answer_file), exist_ok=True)
             with open(answer_file, "a") as fout:
                 for choice in choices:
                     fout.write(json.dumps(choice) + "\n")
-            
-            profiler.end_timer('answer_saving')
 
-    # Final policy save and cleanup
+    # Final policy save and cleanup (no profiling - one-time cleanup)
     if online_policy is not None:
-        profiler.start_timer('final_policy_save')
-        
         if args.online_inference_only:
             print("🔍 Inference-only mode: Policy state preserved")
         else:
             online_policy.save(args.online_policy_save_path)
             print(f"💾 Saved trained policy to {args.online_policy_save_path}")
-        
-        profiler.end_timer('final_policy_save')
 
 
 def reorg_answer_file(answer_file):
     """Sort by question id and de-duplication"""
-    profiler.start_timer('answer_reorganization')
+    # No profiling - one-time cleanup operation
     
     # Check if file exists before trying to reorganize
     if not os.path.exists(answer_file):
         print(f"⚠️  Answer file {answer_file} does not exist, skipping reorganization")
-        profiler.end_timer('answer_reorganization')
         return
     
     answers = {}
@@ -1014,8 +1136,6 @@ def reorg_answer_file(answer_file):
     with open(answer_file, "w") as fout:
         for qid in qids:
             fout.write(answers[qid])
-    
-    profiler.end_timer('answer_reorganization')
 
 
 if __name__ == "__main__":
