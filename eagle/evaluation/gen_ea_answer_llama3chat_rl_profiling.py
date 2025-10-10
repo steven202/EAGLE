@@ -268,6 +268,25 @@ class ProfilingTimer:
         container_pct = (container_overhead / total_time) * 100 if total_time > 0 else 0
         print(f"{'Container/organizational overhead':<40} {container_overhead:<10.4f} {'':<8} {container_pct:<8.1f}")
         
+        # Calculate unaccounted time
+        total_accounted = total_exclusive_meaningful + container_overhead
+        unaccounted_time = total_time - total_accounted
+        unaccounted_pct = (unaccounted_time / total_time) * 100 if total_time > 0 else 0
+        print(f"{'Unaccounted time (model inference, etc.)':<40} {unaccounted_time:<10.4f} {'':<8} {unaccounted_pct:<8.1f}")
+        
+        print("-" * 80)
+        print(f"{'TOTAL TIME':<40} {total_time:<10.4f} {'':<8} {'100.0':<8}")
+        
+        # Analysis of unaccounted time
+        if unaccounted_pct > 50:
+            print(f"\n⚠️  Large unaccounted time ({unaccounted_pct:.1f}%) likely includes:")
+            print("   • Base model & draft model inference")
+            print("   • GPU memory operations & CUDA synchronization") 
+            print("   • EAGLE candidate generation & tree buffer management")
+            print("   • PyTorch autograd & tensor operations")
+            print("   • Python interpreter & system overhead")
+            print("\n💡 Consider adding timing for model forward passes to capture this overhead")
+        
         print("-" * 80)
         print("\nDetailed Analysis (Exclusive Time):")
         
@@ -410,6 +429,15 @@ class ProfilingTimer:
         print("\nNOTE: Container components (total_execution, single_question_processing, turn_processing)")
         print("have been removed from the main table to avoid double-counting.")
         print("Exclusive time provides accurate view of where time is actually spent.")
+        print("\n📊 PERCENTAGE BREAKDOWN EXPLANATION:")
+        print("The exclusive components do NOT add up to 100% because we only time specific")
+        print("overhead components. The remaining time includes:")
+        print("• Model inference (base model + draft model forward passes)")
+        print("• GPU operations (memory transfers, CUDA synchronization)")  
+        print("• EAGLE internals (candidate generation, tree operations)")
+        print("• PyTorch overhead (autograd, tensor operations)")
+        print("• System overhead (Python interpreter, OS scheduling)")
+        print("\nThis breakdown helps identify optimization opportunities in the measured components.")
 
 
 # Global profiling timer

@@ -1,6 +1,6 @@
 # EAGLE RL Profiling Test Commands
 
-## Quick Test (2 questions only)
+## Quick Test (80 questions only)
 ```bash
 conda activate eagle-rl && export PYTHONPATH=/home/guo/EAGLE_RL_latency:$PYTHONPATH && PYTHONUNBUFFERED=1 CUDA_VISIBLE_DEVICES=0 python -m eagle.evaluation.gen_ea_answer_llama3chat_rl_profiling \
     --ea-model-path yuhuili/EAGLE3-LLaMA3.1-Instruct-8B \
@@ -8,7 +8,7 @@ conda activate eagle-rl && export PYTHONPATH=/home/guo/EAGLE_RL_latency:$PYTHONP
     --model-id optimized_max_entropy_ppo_profiling_test \
     --question-file eagle/data/rl_training/question.jsonl \
     --question-begin 0 \
-    --question-end 2 \
+    --question-end 80 \
     --answer-file log/today/profiling_test/test_answers.jsonl \
     --num-choices 1 \
     --num-gpus-per-model 1 \
